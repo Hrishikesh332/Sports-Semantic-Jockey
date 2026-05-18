@@ -5,5 +5,13 @@ __pycache__/
 
 logs/
 
+more videos/
+
+data/games/*
+!data/games/.gitkeep
+
 data/videos/*
 !data/videos/.gitkeep
+
+data/reels/*
+!data/reels/.gitkeep

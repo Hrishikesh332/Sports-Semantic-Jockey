@@ -3,21 +3,29 @@ import json
 
 def highlight_instructions():
     return (
-        "You are a senior sports highlight producer. Use only evidence from the indexed match footage. "
-        "Build accurate timestamped reels, keep scoring coverage complete, and add emotional context only when the footage supports it. "
-        "Return JSON only."
+        "You are a senior sports highlight producer using TwelveLabs Jockey over a knowledge store. "
+        "Use only evidence from the indexed match footage. Build accurate timestamped highlight categories, keep standard scoring coverage complete, "
+        "and add semantic context only when the footage supports it. Return JSON only."
     )
 
 
 def highlight_prompt(match_context, wsc_baseline):
     parts = [
-        "Generate three distinct highlight reels from the same match footage.",
-        "Create exactly these reel ids: scoring_plays, emotional_rollercoaster, fan_experience.",
-        "The scoring_plays reel must include every scoring play in chronological order and preserve score context.",
-        "The emotional_rollercoaster reel must include scoring plays plus celebrations, reactions, momentum swings, disappointment, and tension.",
-        "The fan_experience reel must prioritize fans, crowd noise, stadium atmosphere, bench reactions, broadcast cutaways, and the scoring moments they support.",
-        "Do not invent clips, timestamps, players, scores, or video references.",
-        "If a contextual clip does not have usable evidence, omit it.",
+        "Generate one standard stats baseline and four TwelveLabs-enhanced highlight categories from the same match footage.",
+        "Return exactly these top-level category keys: standard_stats, best_plays, emotional_moments, fan_experience, behind_the_scenes.",
+        "standard_stats: WSC-style baseline using stats-driven scoring or result events only, in chronological order.",
+        "best_plays: stats plus semantic context, including scoring events, immediate reactions, celebrations, and momentum-defining plays.",
+        "emotional_moments: semantic-only clips showing tears, hugs, heartbreak, fist pumps, intense relief, disappointment, tension, or celebration.",
+        "fan_experience: semantic-only clips showing crowd roars, signs, face-painted fans, chants, stadium atmosphere, or fan reactions.",
+        "behind_the_scenes: semantic-only clips showing warmups, coach reactions, bench camaraderie, tunnel walks, huddles, or sideline context.",
+        "For full-match or long-form source videos, cover the complete story arc. Do not cluster enhanced categories only in the opening minutes. When evidence exists, include representative early, middle, and late clips, especially late score swings, final-result moments, fourth-quarter/second-half pressure, and post-result reactions.",
+        "If standard_stats contains events deep into the source video, best_plays should also include later confirmed events with visible reaction, replay, crowd, bench, or momentum context when supported by the footage.",
+        "Every clip must include start_time, end_time, video_reference, clip_type, category, source_type, description, score_context, selection_reason, confidence, and explainability_label.",
+        "For every included clip, confidence must be a calibrated evidence confidence from 0.01 to 1.0 based on how clearly the indexed footage supports that exact timestamp, description, source type, and score context. Never return 0 for an included clip; if confidence cannot be supported, omit the clip.",
+        "Use source_type stats for standard_stats, semantic for semantic-only categories, and stats_semantic only when a clip has both game-event and semantic evidence.",
+        "Use explainability_label values like Stats Event: Goal, Stats Event: Touchdown, Semantic Detection: High-confidence celebration, or Semantic Detection: Crowd roar.",
+        "Do not invent clips, timestamps, players, scores, emotions, unsupported confidence values, or video references.",
+        "If a category does not have usable evidence, return an empty clips array for that category.",
     ]
     if match_context:
         parts.append(f"Match context: {match_context}")

@@ -44,6 +44,8 @@ def upload_asset(file):
             headers=file_headers(),
             files=[
                 ("method", (None, "direct")),
+                ("enable_hls", (None, "true")),
+                ("enable_thumbnail", (None, "true")),
                 ("file", (file.filename, content, file.mimetype or "application/octet-stream")),
             ],
             timeout=UPLOAD_TIMEOUT_SECONDS,

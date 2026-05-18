@@ -78,51 +78,69 @@ SPORTS_HIGHLIGHT_INGESTION_SCHEMA = {
     },
 }
 
+HIGHLIGHT_CLIP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "start_time": {"type": "string"},
+        "end_time": {"type": "string"},
+        "video_reference": {"type": "string"},
+        "clip_type": {"type": "string"},
+        "category": {"type": "string"},
+        "source_type": {"type": "string", "enum": ["stats", "semantic", "stats_semantic"]},
+        "description": {"type": "string"},
+        "score_context": {"type": "string"},
+        "selection_reason": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0.01, "maximum": 1},
+        "explainability_label": {"type": "string"},
+    },
+    "required": [
+        "start_time",
+        "end_time",
+        "video_reference",
+        "clip_type",
+        "category",
+        "source_type",
+        "description",
+        "score_context",
+        "selection_reason",
+        "confidence",
+        "explainability_label",
+    ],
+    "additionalProperties": False,
+}
+
+HIGHLIGHT_CATEGORY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "objective": {"type": "string"},
+        "clips": {
+            "type": "array",
+            "items": HIGHLIGHT_CLIP_SCHEMA,
+        },
+        "assembly_notes": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["title", "objective", "clips", "assembly_notes"],
+    "additionalProperties": False,
+}
+
 HIGHLIGHT_REEL_SCHEMA = {
     "type": "object",
     "properties": {
         "match_summary": {"type": "string"},
-        "reels": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "string"},
-                    "title": {"type": "string"},
-                    "objective": {"type": "string"},
-                    "clips": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "video_reference": {"type": "string"},
-                                "start_time": {"type": "string"},
-                                "end_time": {"type": "string"},
-                                "clip_type": {"type": "string"},
-                                "event_type": {"type": "string"},
-                                "description": {"type": "string"},
-                                "score_context": {"type": "string"},
-                                "emotion": {"type": "string"},
-                                "selection_reason": {"type": "string"},
-                                "priority": {"type": "integer"},
-                            },
-                            "required": [
-                                "video_reference",
-                                "start_time",
-                                "end_time",
-                                "clip_type",
-                                "event_type",
-                                "description",
-                                "selection_reason",
-                                "priority",
-                            ],
-                        },
-                    },
-                    "assembly_notes": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["id", "title", "objective", "clips", "assembly_notes"],
-            },
-        },
+        "standard_stats": HIGHLIGHT_CATEGORY_SCHEMA,
+        "best_plays": HIGHLIGHT_CATEGORY_SCHEMA,
+        "emotional_moments": HIGHLIGHT_CATEGORY_SCHEMA,
+        "fan_experience": HIGHLIGHT_CATEGORY_SCHEMA,
+        "behind_the_scenes": HIGHLIGHT_CATEGORY_SCHEMA,
     },
-    "required": ["match_summary", "reels"],
+    "required": [
+        "match_summary",
+        "standard_stats",
+        "best_plays",
+        "emotional_moments",
+        "fan_experience",
+        "behind_the_scenes",
+    ],
+    "additionalProperties": False,
 }

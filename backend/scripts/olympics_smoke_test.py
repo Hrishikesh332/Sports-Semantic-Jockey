@@ -9,11 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = ROOT / "logs"
 VIDEOS = [ROOT / "data/videos/Olympics 13.mp4", ROOT / "data/videos/Olympics 14.mp4"]
+GAME_TAG = "olympics-smoke"
 sys.path.insert(0, str(ROOT))
 
 from app import app
-from app.core.config import TWELVELABS_MODEL
-from app.domain.highlights import HIGHLIGHT_REEL_SCHEMA, SPORTS_HIGHLIGHT_INGESTION_SCHEMA, highlight_instructions, highlight_prompt
+from app.domain.highlights import SPORTS_HIGHLIGHT_INGESTION_SCHEMA
 
 
 def load_env(path):
@@ -132,35 +132,63 @@ def main():
     if any(item.get("status") != "ready" for item in item_statuses):
         return finish(summary, raw)
 
+    status_code, game, data = call_json(
+        client,
+        "post",
+        "/games",
+        json={
+            "tag": GAME_TAG,
+            "label": "Olympics Smoke Test",
+            "sport": "Olympics",
+            "knowledge_store_id": store_id,
+            "source_videos": [video.name for video in VIDEOS],
+            "video_reference_map": video_reference_map(item_bodies),
+        },
+    )
+    raw["responses"]["register_game"] = data
+    summary.append(["POST /games", status_code, brief(game)])
+    if status_code >= 400:
+        return finish(summary, raw)
+
+    status_code, games, data = call_json(client, "get", "/games")
+    raw["responses"]["list_games"] = data
+    summary.append(["GET /games", status_code, brief(games)])
+    if status_code >= 400:
+        return finish(summary, raw)
+
+    status_code, game, data = call_json(client, "get", f"/games/{GAME_TAG}")
+    raw["responses"]["get_game"] = data
+    summary.append([f"GET /games/{GAME_TAG}", status_code, brief(game)])
+    if status_code >= 400:
+        return finish(summary, raw)
+
+    media_response = client.get(f"/games/{GAME_TAG}/media/{VIDEOS[0].name}", headers={"Range": "bytes=0-1023"})
+    raw["responses"]["game_media"] = {
+        "status_code": media_response.status_code,
+        "content_type": media_response.content_type,
+        "content_length": media_response.content_length,
+    }
+    summary.append(
+        [
+            f"GET /games/{GAME_TAG}/media/{VIDEOS[0].name}",
+            media_response.status_code,
+            {
+                "content_type": media_response.content_type,
+                "content_length": media_response.content_length,
+            },
+        ]
+    )
+    if media_response.status_code >= 400:
+        return finish(summary, raw)
+
     status_code, reels, data = call_json(
         client,
         "post",
-        "/responses",
-        json={
-            "model": TWELVELABS_MODEL,
-            "instructions": highlight_instructions(),
-            "input": [
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": highlight_prompt(
-                        "Olympics sample videos provided by the user for sports highlight generation testing.",
-                        None,
-                    ),
-                }
-            ],
-            "knowledge_store_id": store_id,
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "highlight_reels",
-                    "schema": HIGHLIGHT_REEL_SCHEMA,
-                }
-            },
-        },
+        f"/games/{GAME_TAG}/highlight-reels",
+        json={"match_context": "Olympics sample videos provided by the user for sports highlight generation testing."},
     )
-    raw["responses"]["highlight_reels"] = data
-    summary.append(["POST /responses", status_code, brief_response(reels)])
+    raw["responses"]["game_highlight_reels"] = data
+    summary.append([f"POST /games/{GAME_TAG}/highlight-reels", status_code, brief_highlight_reels(reels)])
     return finish(summary, raw)
 
 
@@ -171,31 +199,31 @@ def brief(body):
     picked = {key: body[key] for key in keys if key in body}
     if "items" in body:
         picked["items_count"] = len(body["items"])
-    if "reels" in body:
-        picked["reels"] = [
-            {"id": reel.get("id"), "clips": len(reel.get("clips", []))}
-            for reel in body["reels"]
-        ]
+    if "games" in body:
+        picked["games_count"] = len(body["games"])
     return picked
 
 
-def brief_response(body):
+def video_reference_map(item_bodies):
+    mapping = {}
+    for item, video in zip(item_bodies, VIDEOS):
+        item_id = item["_id"]
+        mapping[item_id] = video.name
+        if item_id.startswith("ksi_"):
+            mapping[item_id.removeprefix("ksi_")] = video.name
+    return mapping
+
+
+def brief_highlight_reels(body):
     if not isinstance(body, dict):
         return str(body)
-    picked = {key: body[key] for key in ["id", "session_id", "status", "usage", "error"] if key in body}
-    try:
-        for output in body["output"]:
-            if output["type"] == "message":
-                for content in output["content"]:
-                    parsed = json.loads(content["text"])
-                    picked["match_summary"] = parsed.get("match_summary")
-                    picked["reels"] = [
-                        {"id": reel.get("id"), "clips": len(reel.get("clips", []))}
-                        for reel in parsed.get("reels", [])
-                    ]
-                    return picked
-    except (KeyError, TypeError, json.JSONDecodeError):
-        return picked
+    picked = {key: body[key] for key in ["match_summary", "error"] if key in body}
+    categories = ["standard_stats", "best_plays", "emotional_moments", "fan_experience", "behind_the_scenes"]
+    picked["categories"] = [
+        {"id": category, "clips": len(body.get(category, {}).get("clips", []))}
+        for category in categories
+        if category in body
+    ]
     return picked
 
 
