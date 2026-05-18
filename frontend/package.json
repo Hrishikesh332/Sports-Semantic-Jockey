@@ -1,0 +1,27 @@
+{
+  "name": "@twelvelabs/strand",
+  "version": "1.1.0",
+  "description": "TwelveLabs Strand tokens, icons, assets, and Tailwind preset for the Sports Jockey UI",
+  "main": "index.js",
+  "scripts": {
+    "dev": "npm --prefix demo run dev --",
+    "build": "npm --prefix demo run build"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./tailwind-preset": "./tailwind-preset.js",
+    "./tokens/*": "./tokens/*",
+    "./icons/*": "./icons/*",
+    "./assets/*": "./assets/*"
+  },
+  "files": [
+    "index.js",
+    "tailwind-preset.js",
+    "tokens/",
+    "icons/",
+    "assets/"
+  ],
+  "keywords": ["twelvelabs", "strand", "sports-jockey", "tokens", "tailwind"],
+  "license": "UNLICENSED",
+  "private": true
+}
