@@ -1,0 +1,11 @@
+{
+  "installCommand": "npm --prefix demo ci --include=dev",
+  "buildCommand": "npm --prefix demo run build -- --outDir ../dist --emptyOutDir",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

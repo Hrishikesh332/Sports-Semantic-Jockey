@@ -17,6 +17,11 @@ Production command:
 gunicorn wsgi:app --timeout 800
 ```
 
+`gunicorn.conf.py` binds gunicorn to `0.0.0.0:${PORT}` automatically. On Render,
+do not hardcode a different port in the start command; either leave `PORT` unset
+so Render controls it, or make sure any custom `PORT` environment variable
+matches the port Render scans.
+
 Required environment:
 
 ```env

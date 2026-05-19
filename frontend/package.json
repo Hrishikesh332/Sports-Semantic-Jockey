@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "npm --prefix demo run dev --",
     "prebuild": "npm --prefix demo ci --include=dev",
-    "build": "npm --prefix demo run build"
+    "build": "npm --prefix demo run build -- --outDir ../dist --emptyOutDir"
   },
   "exports": {
     ".": "./index.js",
