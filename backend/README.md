@@ -14,13 +14,13 @@ flask --app app run --port 5000
 Production command:
 
 ```bash
-gunicorn wsgi:app --timeout 800
+gunicorn wsgi:app --bind 0.0.0.0:${PORT:-5000} --timeout 800
 ```
 
-`gunicorn.conf.py` binds gunicorn to `0.0.0.0:${PORT}` automatically. On Render,
-do not hardcode a different port in the start command; either leave `PORT` unset
-so Render controls it, or make sure any custom `PORT` environment variable
-matches the port Render scans.
+Render's Python runtime injects a default `GUNICORN_CMD_ARGS` value that binds
+gunicorn to `0.0.0.0:10000`. Keep the explicit `--bind` in the start command so
+the service binds to Render's active `PORT` value instead of the injected
+default.
 
 Required environment:
 
@@ -36,10 +36,11 @@ KEEP_ALIVE_TIMEOUT_SECONDS=15
 ```
 
 `APP_URL` should be the deployed backend URL, for example `https://your-app.example.com`.
-When `APP_URL` is set and the backend is run through `wsgi.py`, APScheduler
-starts a background keep-alive job and pings `${APP_URL}/health` every 9
-minutes. Set `KEEP_ALIVE_URL` only if you need to override the exact URL being
-called.
+On Render, the backend falls back to `RENDER_EXTERNAL_URL` when `APP_URL` is not
+set. When an app URL is available and the backend is run through `wsgi.py`,
+APScheduler starts a background keep-alive job and pings the health endpoint
+every 9 minutes. Set `KEEP_ALIVE_URL` only if you need to override the exact URL
+being called.
 
 The backend loads `backend/.env` first and `backend/.env.local` second, with
 `.env.local` taking precedence. You can keep deployment-specific values such as

@@ -16,7 +16,10 @@ def port():
 
 
 def app_url():
-    return os.environ.get("APP_URL", "").strip().rstrip("/")
+    return (
+        os.environ.get("APP_URL", "").strip().rstrip("/")
+        or os.environ.get("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+    )
 
 
 def keep_alive_enabled():
