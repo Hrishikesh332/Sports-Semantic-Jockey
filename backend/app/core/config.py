@@ -15,6 +15,14 @@ def port():
     return int(os.environ.get("PORT", "5000"))
 
 
+def cors_allowed_origins():
+    raw_origins = os.environ.get(
+        "CORS_ALLOWED_ORIGINS",
+        "https://sports-semantic-jockey.vercel.app,http://localhost:5173,http://127.0.0.1:5173",
+    )
+    return [origin.strip().rstrip("/") for origin in raw_origins.split(",") if origin.strip()]
+
+
 def app_url():
     return (
         os.environ.get("APP_URL", "").strip().rstrip("/")

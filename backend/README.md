@@ -27,6 +27,7 @@ Required environment:
 ```env
 TWELVELABS_API_KEY=
 PORT=5000
+CORS_ALLOWED_ORIGINS=https://sports-semantic-jockey.vercel.app,http://localhost:5173,http://127.0.0.1:5173
 APP_URL=
 KEEP_ALIVE_ENABLED=true
 KEEP_ALIVE_INTERVAL_MINUTES=9
@@ -41,6 +42,9 @@ set. When an app URL is available and the backend is run through `wsgi.py`,
 APScheduler starts a background keep-alive job and pings the health endpoint
 every 9 minutes. Set `KEEP_ALIVE_URL` only if you need to override the exact URL
 being called.
+
+`CORS_ALLOWED_ORIGINS` is a comma-separated allowlist for browser requests. The
+default includes the deployed Vercel app and local Vite dev origins.
 
 The backend loads `backend/.env` first and `backend/.env.local` second, with
 `.env.local` taking precedence. You can keep deployment-specific values such as

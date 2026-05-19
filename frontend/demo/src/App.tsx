@@ -8,7 +8,8 @@ const iconModules = import.meta.glob('../../icons/*.svg', { query: '?raw', impor
 const icons = Object.fromEntries(
   Object.entries(iconModules).map(([path, svg]) => [path.replace(/^.*\/icons\//, '').replace('.svg', ''), svg]),
 )
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+const DEFAULT_API_BASE_URL = import.meta.env.PROD ? 'https://sports-semantic-jockey.onrender.com' : ''
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/$/, '')
 
 type Game = {
   tag: string
