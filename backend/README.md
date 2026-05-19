@@ -36,6 +36,10 @@ starts a background keep-alive job and pings `${APP_URL}/health` every 9
 minutes. Set `KEEP_ALIVE_URL` only if you need to override the exact URL being
 called.
 
+The backend loads `backend/.env` first and `backend/.env.local` second, with
+`.env.local` taking precedence. You can keep deployment-specific values such as
+`APP_URL` in `.env.local`.
+
 ## Structure
 
 ```text

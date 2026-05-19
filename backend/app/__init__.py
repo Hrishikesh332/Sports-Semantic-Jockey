@@ -1,5 +1,10 @@
 from flask import Flask
 
+from app.core.environment import load_environment
+
+
+load_environment()
+
 from app.api import register_blueprints
 from app.core import register_error_handlers
 
