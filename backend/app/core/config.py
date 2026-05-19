@@ -1,3 +1,4 @@
+import json
 import os
 
 
@@ -41,6 +42,26 @@ def keep_alive_interval_minutes():
 
 def keep_alive_timeout_seconds():
     return max(1, int(os.environ.get("KEEP_ALIVE_TIMEOUT_SECONDS", "15")))
+
+
+def highlight_reel_cache_enabled():
+    value = os.environ.get("HIGHLIGHT_REEL_CACHE_ENABLED", "false").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def default_game_registrations():
+    raw_value = os.environ.get("DEFAULT_GAME_REGISTRATIONS_JSON", "").strip()
+    if not raw_value:
+        return []
+    try:
+        registrations = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(registrations, dict):
+        return [registrations]
+    if isinstance(registrations, list):
+        return [game for game in registrations if isinstance(game, dict)]
+    return []
 
 
 def keep_alive_url():

@@ -34,6 +34,8 @@ KEEP_ALIVE_INTERVAL_MINUTES=9
 KEEP_ALIVE_PATH=/health
 KEEP_ALIVE_URL=
 KEEP_ALIVE_TIMEOUT_SECONDS=15
+HIGHLIGHT_REEL_CACHE_ENABLED=false
+DEFAULT_GAME_REGISTRATIONS_JSON=
 ```
 
 `APP_URL` should be the deployed backend URL, for example `https://your-app.example.com`.
@@ -45,6 +47,27 @@ being called.
 
 `CORS_ALLOWED_ORIGINS` is a comma-separated allowlist for browser requests. The
 default includes the deployed Vercel app and local Vite dev origins.
+
+`DEFAULT_GAME_REGISTRATIONS_JSON` can provide one game object or an array of game
+objects when ignored local `data/games/*.json` files are not present in a
+deployed environment. The frontend needs `tag`, `label`, `sport`,
+`knowledge_store_id`, `source_videos`, and `video_asset_ids` for the live
+backend flow. `HIGHLIGHT_REEL_CACHE_ENABLED=false` means
+`/games/<tag>/highlight-reels` calls TwelveLabs Jockey live instead of reading
+or writing generated response logs. Turn it on only for local caching.
+
+Minimal shape:
+
+```json
+{
+  "tag": "sports",
+  "label": "Sports",
+  "sport": "Sports",
+  "knowledge_store_id": "ks_...",
+  "source_videos": ["Match.mp4"],
+  "video_asset_ids": {"Match.mp4": "asset_id"}
+}
+```
 
 The backend loads `backend/.env` first and `backend/.env.local` second, with
 `.env.local` taking precedence. You can keep deployment-specific values such as
@@ -232,15 +255,17 @@ Returns: app-facing registered game object. Debug log fields are retained in the
 
 ### `GET /games`
 
-Lists local analyzed game registrations without debug log fields.
+Lists app-facing game registrations without debug log fields. The checked-in demo
+registration is returned even when ignored local `data/games/*.json` files are
+not present in a deployed environment.
 
 ### `GET /games/<tag>`
 
-Returns one local analyzed game registration without debug log fields.
+Returns one app-facing game registration without debug log fields.
 
 ### `POST /games/<tag>/highlight-reels`
 
-Returns a complete per-source Jockey highlight response. Knowledge-base discovery, source-video metadata, thumbnails, and streaming stay live through backend/TwelveLabs endpoints. Only the generated Jockey reel response is cached: the backend first checks a generated response log for the requested source video, and only calls Jockey live with the tag's registered `knowledge_store_id` when no complete generated log exists. Legacy pinned response logs are still only available for manual debug replay with `use_pinned_log: true`; the frontend does not send that flag.
+Returns a complete per-source Jockey highlight response. Knowledge-base discovery, source-video metadata, search, thumbnails, streaming, and reel generation stay live through backend/TwelveLabs endpoints. Generated response logs are disabled by default; set `HIGHLIGHT_REEL_CACHE_ENABLED=true` only when you intentionally want local generated-response caching. Legacy pinned response logs are still only available for manual debug replay with `use_pinned_log: true`; the frontend does not send that flag.
 
 Body:
 
@@ -255,7 +280,7 @@ Body:
 }
 ```
 
-When the response is generated live for a `video_name`, the backend writes a generated response log with all required sections: `match_summary`, `standard_stats`, `best_plays`, `emotional_moments`, `fan_experience`, and `behind_the_scenes`. Use `force_refresh: true` or `ignore_log_cache: true` only when you intentionally want to bypass the generated log and regenerate.
+When `HIGHLIGHT_REEL_CACHE_ENABLED=true` and the response is generated live for a `video_name`, the backend writes a generated response log with all required sections: `match_summary`, `standard_stats`, `best_plays`, `emotional_moments`, `fan_experience`, and `behind_the_scenes`. Use `force_refresh: true` or `ignore_log_cache: true` only when cache is enabled and you intentionally want to bypass the generated log and regenerate.
 
 Returns the same highlight schema as `POST /highlight-reels`.
 

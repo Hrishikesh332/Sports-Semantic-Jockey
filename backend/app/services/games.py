@@ -6,7 +6,7 @@ from hashlib import sha256
 from copy import deepcopy
 from pathlib import Path
 
-from app.core.config import TWELVELABS_MODEL
+from app.core.config import TWELVELABS_MODEL, default_game_registrations, highlight_reel_cache_enabled
 from app.core.errors import ApiError
 from app.domain.highlights import validate_highlight_confidences
 from app.integrations.twelvelabs import request_json as twelvelabs_request_json
@@ -91,15 +91,26 @@ GAME_DEBUG_FIELDS = {
 
 def list_games():
     GAMES_DIR.mkdir(parents=True, exist_ok=True)
-    games = [public_game(read_json(path)) for path in sorted(GAMES_DIR.glob("*.json"))]
+    games_by_tag = {
+        game["tag"]: deepcopy(game)
+        for game in default_game_registrations()
+        if isinstance(game.get("tag"), str) and game["tag"]
+    }
+    for path in sorted(GAMES_DIR.glob("*.json")):
+        game = read_json(path)
+        games_by_tag[game["tag"]] = game
+    games = [public_game(game) for game in games_by_tag.values()]
     return {"games": games}
 
 
 def get_game(tag):
     path = game_path(tag)
-    if not path.exists():
-        raise ApiError("game not found", 404)
-    return read_json(path)
+    if path.exists():
+        return read_json(path)
+    for game in default_game_registrations():
+        if game.get("tag") == tag:
+            return deepcopy(game)
+    raise ApiError("game not found", 404)
 
 
 def public_game(game):
@@ -173,7 +184,8 @@ def generate_game_highlight_reels(tag, payload=None):
     wsc_baseline = payload.get("wsc_baseline", game.get("wsc_baseline"))
     context_hash = highlight_cache_context_hash(match_context, wsc_baseline)
 
-    if video_name and not should_refresh_reel_log_cache(payload):
+    use_log_cache = highlight_reel_cache_enabled()
+    if video_name and use_log_cache and not should_refresh_reel_log_cache(payload):
         cached_reels = highlight_reels_from_generated_log_cache(game, video_name, context_hash)
         if cached_reels:
             return cached_reels
@@ -183,7 +195,7 @@ def generate_game_highlight_reels(tag, payload=None):
         match_context=match_context,
         wsc_baseline=wsc_baseline,
     )
-    if video_name:
+    if video_name and use_log_cache:
         store_generated_highlight_reels_log_cache(tag, game, video_name, context_hash, reels)
     return reels
 
@@ -489,6 +501,30 @@ def registered_thumbnail_path(tag, video_name):
     return path
 
 
+def registered_thumbnail_path_or_none(tag, video_name):
+    game = get_game(tag)
+    video_name = validate_registered_video_name(game, video_name, status_code=404)
+    path = thumbnail_path(video_name)
+    return path if path.exists() else None
+
+
+def placeholder_thumbnail_svg(tag, video_name):
+    game = get_game(tag)
+    video_name = validate_registered_video_name(game, video_name, status_code=404)
+    title = escape_svg_text(Path(video_name).stem)
+    label = escape_svg_text(game.get("label", tag))
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="{title}">
+  <rect width="1280" height="720" fill="#1D1C1B"/>
+  <rect x="64" y="64" width="1152" height="592" rx="18" fill="#F7F5F2"/>
+  <rect x="96" y="96" width="1088" height="528" rx="12" fill="#FFFFFF" stroke="#D3D1CF"/>
+  <circle cx="178" cy="174" r="36" fill="#00DC82"/>
+  <path d="M170 154v40l32-20-32-20Z" fill="#1D1C1B"/>
+  <text x="96" y="312" fill="#707070" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="3">{label}</text>
+  <text x="96" y="372" fill="#1D1C1B" font-family="Inter, Arial, sans-serif" font-size="48" font-weight="700">{title}</text>
+  <text x="96" y="440" fill="#707070" font-family="Inter, Arial, sans-serif" font-size="26">Live TwelveLabs asset stream</text>
+</svg>"""
+
+
 def twelvelabs_stream_info(tag, video_name):
     game = get_game(tag)
     video_name = validate_registered_video_name(game, video_name, status_code=404)
@@ -707,6 +743,16 @@ def thumbnail_path(video_name):
     if Path(video_name).name != video_name:
         raise ApiError("video_name must be a file name", 400)
     return THUMBNAILS_DIR / f"{video_name}.jpg"
+
+
+def escape_svg_text(value):
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
 
 
 def highlight_log_path(log_name):

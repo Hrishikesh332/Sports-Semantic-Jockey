@@ -1,5 +1,6 @@
-from flask import Blueprint, jsonify, request, send_file, send_from_directory
+from flask import Blueprint, Response, jsonify, request, send_file, send_from_directory
 
+from app.core.errors import ApiError
 from app.core.validation import json_body
 from app.services.games import (
     THUMBNAILS_DIR,
@@ -11,7 +12,8 @@ from app.services.games import (
     list_games,
     public_game,
     register_game,
-    registered_thumbnail_path,
+    placeholder_thumbnail_svg,
+    registered_thumbnail_path_or_none,
     registered_video_path,
     search_game_videos,
     twelvelabs_stream_info,
@@ -80,16 +82,23 @@ def download_game_reel(tag, video_name):
 
 @games_bp.get("/games/<tag>/reel-thumbnail/<video_name>")
 def show_game_reel_thumbnail(tag, video_name):
-    path = generated_reel_thumbnail(
-        tag=tag,
-        video_name=video_name,
-        time=request.args.get("time"),
-        format_name=request.args.get("format", "9x16"),
-    )
-    return send_file(path, mimetype="image/jpeg")
+    try:
+        path = generated_reel_thumbnail(
+            tag=tag,
+            video_name=video_name,
+            time=request.args.get("time"),
+            format_name=request.args.get("format", "9x16"),
+        )
+        return send_file(path, mimetype="image/jpeg")
+    except ApiError as exc:
+        if exc.status_code != 404:
+            raise
+        return Response(placeholder_thumbnail_svg(tag, video_name), mimetype="image/svg+xml")
 
 
 @games_bp.get("/games/<tag>/thumbnail/<video_name>")
 def show_game_thumbnail(tag, video_name):
-    path = registered_thumbnail_path(tag, video_name)
-    return send_from_directory(THUMBNAILS_DIR, path.name)
+    path = registered_thumbnail_path_or_none(tag, video_name)
+    if path:
+        return send_from_directory(THUMBNAILS_DIR, path.name)
+    return Response(placeholder_thumbnail_svg(tag, video_name), mimetype="image/svg+xml")
