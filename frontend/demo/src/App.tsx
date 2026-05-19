@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 import Hls from 'hls.js'
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import logoFull from '../../assets/logo-full.svg?raw'
 
 const iconModules = import.meta.glob('../../icons/*.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
@@ -17,6 +17,7 @@ type Game = {
   knowledge_store_id: string
   source_videos?: string[]
   video_reference_map?: Record<string, string>
+  video_asset_ids?: Record<string, string>
 }
 
 type Clip = {
@@ -54,6 +55,21 @@ type MapCategoryKey = 'standard_stats' | CategoryKey
 type LensKey = 'category' | 'confidence' | 'source_type' | 'video_reference'
 type ViewKey = 'discover' | 'workspace' | 'overview'
 type ReelFormatKey = '9x16' | '16x9' | '1x1' | '4x5'
+type HighlightReelRequestOptions = { silent?: boolean }
+type DiscoverFilterKey = 'all' | 'semantic' | MapCategoryKey
+
+type DiscoverMatch = {
+  id: string
+  label: string
+  text: string
+  detail: string
+  categoryKey?: MapCategoryKey
+  clipIndex?: number
+  startTime?: string
+  endTime?: string
+  confidence?: number
+  sourceType?: Clip['source_type']
+}
 
 type DiscoverItem = {
   id: string
@@ -64,6 +80,23 @@ type DiscoverItem = {
   poster: string
   videoName: string
   knowledgeStoreId: string
+  clipCount: number
+  semanticCount: number
+  matches: DiscoverMatch[]
+  matchHeading: string
+  searchScore: number
+  hasJockeySearch: boolean
+  resultType: 'video' | 'moment' | 'search'
+  categoryKey?: MapCategoryKey
+  startTime?: string
+  endTime?: string
+  confidence?: number
+  sourceType?: Clip['source_type']
+  openTarget?: {
+    categoryKey: MapCategoryKey
+    clipIndex: number
+  }
+  searchMoment?: SearchMoment
 }
 
 type TwelveLabsStreamInfo = {
@@ -73,6 +106,37 @@ type TwelveLabsStreamInfo = {
   asset_status: string
   hls_status: string
   manifest_url: string
+}
+
+type JockeySearchResult = {
+  id: string
+  video_reference: string
+  video_name?: string | null
+  timestamp?: string
+  start_time?: string
+  end_time?: string
+  title?: string
+  description: string
+  relevance: string
+  confidence?: number | null
+  source_asset_id?: string | null
+}
+
+type JockeySearchResponse = {
+  query: string
+  query_interpretation: string
+  total_results: number
+  results: JockeySearchResult[]
+}
+
+type SearchMoment = {
+  videoName: string
+  videoReference: string
+  title: string
+  description: string
+  relevance: string
+  startTime?: string
+  endTime?: string
 }
 
 const categories: Array<{ key: CategoryKey; label: string; icon: string }> = [
@@ -101,6 +165,16 @@ const mapLanes: Array<{ key: MapCategoryKey; label: string; icon: string }> = [
 const lensOptions: Array<{ key: LensKey; label: string; icon: string }> = [
   { key: 'category', label: 'Category', icon: 'grid' },
   { key: 'confidence', label: 'Confidence', icon: 'checkmark' },
+]
+
+const discoverFilters: Array<{ key: DiscoverFilterKey; label: string; icon: string }> = [
+  { key: 'all', label: 'All', icon: 'grid' },
+  { key: 'semantic', label: 'Semantic', icon: 'vision' },
+  { key: 'standard_stats', label: 'Events', icon: 'usage' },
+  { key: 'best_plays', label: 'Plays', icon: 'play-boxed' },
+  { key: 'emotional_moments', label: 'Emotion', icon: 'speech' },
+  { key: 'fan_experience', label: 'Fans', icon: 'members' },
+  { key: 'behind_the_scenes', label: 'BTS', icon: 'indexes' },
 ]
 
 const navItems: Array<{ key: ViewKey; label: string }> = [
@@ -144,11 +218,6 @@ function pathForView(view: ViewKey) {
 }
 
 function navButtonClass(currentView: ViewKey, itemView: ViewKey) {
-  if (currentView === 'discover') {
-    return currentView === itemView
-      ? 'border-white bg-white text-brand-charcoal'
-      : 'border-white/15 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10 hover:text-white'
-  }
   return currentView === itemView
     ? 'border-accent bg-accent-light text-brand-charcoal'
     : 'border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal'
@@ -171,8 +240,10 @@ function App() {
   const [explainOpen, setExplainOpen] = useState(true)
   const [selectedSourceVideoName, setSelectedSourceVideoName] = useState<string | null>(null)
   const [pendingWorkspaceVideoName, setPendingWorkspaceVideoName] = useState<string | null>(null)
+  const [selectedSearchMoment, setSelectedSearchMoment] = useState<SearchMoment | null>(null)
   const [reelFormat, setReelFormat] = useState<ReelFormatKey>('9x16')
   const requestedTags = useRef<Set<string>>(new Set())
+  const suppressNextVideoReset = useRef(false)
   const selectedGame = useMemo(
     () => games.find((game) => game.tag === selectedTag) || null,
     [games, selectedTag],
@@ -190,12 +261,36 @@ function App() {
   const enhancedClip = enhancedCategory?.clips[selectedEnhancedClipIndex] || enhancedCategory?.clips[0]
   const standardClip = scopedReels?.standard_stats.clips[selectedStandardClipIndex] || scopedReels?.standard_stats.clips[0]
   const featuredClip = featuredSignalCategory === 'standard_stats' ? standardClip : enhancedClip
+  const activeSearchMoment = selectedSearchMoment && selectedSearchMoment.videoName === activeVideoName ? selectedSearchMoment : null
   const featuredEyebrow = featuredSignalCategory === 'standard_stats'
     ? 'Event Feed'
     : categories.find((category) => category.key === selectedCategory)?.label || 'Enhanced'
   const featuredTitle = featuredSignalCategory === 'standard_stats' ? 'Event Feed Baseline' : 'Jockey Discovery Cut'
   const hasJockeyAnalysis = scopedReels ? hasHighlightClips(scopedReels) : false
   const isLoadingReels = Boolean(selectedReelsKey && loadingTag === selectedReelsKey)
+  const requestHighlightReels = useCallback((videoName?: string, options: HighlightReelRequestOptions = {}) => {
+    if (!selectedTag) return
+    const cacheKey = reelCacheKey(selectedTag, videoName)
+    if (reelsByTag[cacheKey] || requestedTags.current.has(cacheKey)) return
+    requestedTags.current.add(cacheKey)
+    if (!options.silent) {
+      setLoadingTag(cacheKey)
+      setReelsError('')
+    }
+    fetchJson<HighlightReels>(`/games/${encodeURIComponent(selectedTag)}/highlight-reels`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(videoName ? { video_name: videoName } : {}),
+    })
+      .then((body) => setReelsByTag((current) => ({ ...current, [cacheKey]: body })))
+      .catch((error: Error) => {
+        requestedTags.current.delete(cacheKey)
+        if (!options.silent) setReelsError(error.message)
+      })
+      .finally(() => {
+        if (!options.silent) setLoadingTag((current) => (current === cacheKey ? '' : current))
+      })
+  }, [reelsByTag, selectedTag])
 
   useEffect(() => {
     let active = true
@@ -217,28 +312,19 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!selectedTag || !selectedReelsKey || reelsByTag[selectedReelsKey] || requestedTags.current.has(selectedReelsKey)) return
-    requestedTags.current.add(selectedReelsKey)
-    setLoadingTag(selectedReelsKey)
-    setReelsError('')
-    fetchJson<HighlightReels>(`/games/${encodeURIComponent(selectedTag)}/highlight-reels`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(activeVideoName ? { video_name: activeVideoName } : {}),
-    })
-      .then((body) => setReelsByTag((current) => ({ ...current, [selectedReelsKey]: body })))
-      .catch((error: Error) => {
-        requestedTags.current.delete(selectedReelsKey)
-        setReelsError(error.message)
-      })
-      .finally(() => setLoadingTag(''))
-  }, [selectedTag, selectedReelsKey, activeVideoName, reelsByTag])
+    if (view !== 'workspace') return
+    requestHighlightReels(activeVideoName)
+  }, [activeVideoName, requestHighlightReels, view])
 
   useEffect(() => {
     setReelsError('')
   }, [selectedReelsKey])
 
   useEffect(() => {
+    if (suppressNextVideoReset.current) {
+      suppressNextVideoReset.current = false
+      return
+    }
     setSelectedEnhancedClipIndex(0)
     setSelectedStandardClipIndex(0)
     setFeaturedSignalCategory(selectedCategory)
@@ -254,6 +340,7 @@ function App() {
   }, [selectedGame])
 
   const selectSignal = (categoryKey: MapCategoryKey, index: number) => {
+    setSelectedSearchMoment(null)
     if (categoryKey === 'standard_stats') {
       setSelectedStandardClipIndex(index)
       setFeaturedSignalCategory('standard_stats')
@@ -266,6 +353,7 @@ function App() {
     scrollWorkspaceDetailsIntoView()
   }
   const selectCategoryTab = (categoryKey: CategoryKey) => {
+    setSelectedSearchMoment(null)
     setSelectedCategory(categoryKey)
     setSelectedEnhancedClipIndex(0)
     setFeaturedSignalCategory(categoryKey)
@@ -293,14 +381,28 @@ function App() {
     return true
   }
   const openSourceInWorkspace = (item: DiscoverItem) => {
-    openVideoInWorkspace(item.videoName)
+    openVideoInWorkspace(item.videoName, item.openTarget, item.searchMoment)
   }
-  const openVideoInWorkspace = (videoName: string) => {
+  const openVideoInWorkspace = (videoName: string, target?: DiscoverItem['openTarget'], searchMoment?: SearchMoment) => {
     setSelectedSourceVideoName(videoName)
-    setSelectedEnhancedClipIndex(0)
-    setSelectedStandardClipIndex(0)
-    setFeaturedSignalCategory('best_plays')
-    setPendingWorkspaceVideoName(videoName)
+    setSelectedSearchMoment(searchMoment || null)
+    if (target) {
+      suppressNextVideoReset.current = true
+      if (target.categoryKey === 'standard_stats') {
+        setSelectedStandardClipIndex(target.clipIndex)
+        setFeaturedSignalCategory('standard_stats')
+      } else {
+        setSelectedCategory(target.categoryKey)
+        setSelectedEnhancedClipIndex(target.clipIndex)
+        setFeaturedSignalCategory(target.categoryKey)
+      }
+      setPendingWorkspaceVideoName(null)
+    } else {
+      setSelectedEnhancedClipIndex(0)
+      setSelectedStandardClipIndex(0)
+      setFeaturedSignalCategory(searchMoment ? 'standard_stats' : 'best_plays')
+      setPendingWorkspaceVideoName(videoName)
+    }
     navigate('workspace')
     scrollWorkspaceDetailsIntoView()
   }
@@ -326,7 +428,7 @@ function App() {
         <header
           className={[
             'sticky top-0 z-50 border-b shadow-[0_1px_0_rgba(29,28,27,0.04)]',
-            view === 'discover' ? 'border-white/10 bg-black text-white' : 'border-border bg-surface',
+            'border-border bg-surface',
           ].join(' ')}
         >
           <div
@@ -341,13 +443,13 @@ function App() {
               <span
                 className={[
                   'inline-flex h-9 w-[180px] items-center',
-                  view === 'discover' ? 'text-white' : 'text-brand-charcoal',
+                  'text-brand-charcoal',
                 ].join(' ')}
                 dangerouslySetInnerHTML={{ __html: logoFull }}
               />
-              <div className={['h-7 w-px', view === 'discover' ? 'bg-white/20' : 'bg-border'].join(' ')} />
+              <div className="h-7 w-px bg-border" />
               <div>
-                <h1 className={['text-lg font-semibold', view === 'discover' ? 'text-white' : 'text-text-primary'].join(' ')}>Sports Jockey Intelligence</h1>
+                <h1 className="text-lg font-semibold text-text-primary">Sports Jockey Intelligence</h1>
               </div>
             </div>
             <nav className={['flex items-center gap-2', view === 'overview' ? 'justify-center lg:justify-self-center' : ''].join(' ')}>
@@ -369,7 +471,7 @@ function App() {
               <LiveApiBadge loading={loadingGames} error={Boolean(gamesError)} />
             </div>
             {view !== 'overview' && <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <label className={['text-xs font-semibold uppercase tracking-[0.08em]', view === 'discover' ? 'text-white/45' : 'text-text-tertiary'].join(' ')} htmlFor="game-selector">
+              <label className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary" htmlFor="game-selector">
                 Game
               </label>
               <select
@@ -379,7 +481,7 @@ function App() {
                 disabled={loadingGames || games.length === 0}
                 className={[
                   'h-10 min-w-[260px] rounded-md border px-3 text-sm font-medium outline-none shadow-[0_1px_2px_rgba(29,28,27,0.04)] focus:border-accent disabled:cursor-not-allowed disabled:text-text-tertiary',
-                  view === 'discover' ? 'border-white/15 bg-white/5 text-white' : 'border-border bg-surface text-text-primary',
+                  'border-border bg-surface text-text-primary',
                 ].join(' ')}
               >
                 {games.length === 0 ? (
@@ -401,21 +503,19 @@ function App() {
             game={selectedGame}
             loading={loadingGames}
             error={gamesError || reelsError}
+            reelsByTag={reelsByTag}
             onOpenInWorkspace={openSourceInWorkspace}
           />
         ) : view === 'overview' ? (
-          <OverviewPage onNavigate={navigate} />
+          <OverviewPage
+            onNavigate={navigate}
+            game={selectedGame}
+            reels={scopedReels}
+            loading={loadingGames || isLoadingReels}
+          />
         ) : (
         <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-6 px-6 py-6">
           <section className="flex min-w-0 flex-col gap-6">
-            {selectedGame && (
-              <WorkspaceVideoCarousel
-                game={selectedGame}
-                activeVideoName={activeVideoName}
-                onSelect={openVideoInWorkspace}
-              />
-            )}
-
             <StatusStrip
               loadingGames={loadingGames}
               gamesError={gamesError}
@@ -427,28 +527,21 @@ function App() {
               onOpenDiscover={() => navigate('discover')}
             />
 
-            {selectedGame && (
-              <CategorySelectorPanel
-                className="xl:hidden"
-                reels={scopedReels}
-                selectedCategory={selectedCategory}
-                onSelect={selectCategoryTab}
-              />
-            )}
-
             <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
               <section className="flex min-w-0 flex-col gap-6">
                 <div id="workspace-details" className="scroll-mt-40">
                   <FeaturedClipPanel
-                    title={featuredTitle}
-                    eyebrow={featuredEyebrow}
-                    clip={featuredClip}
+                    title={activeSearchMoment ? activeSearchMoment.title : featuredTitle}
+                    eyebrow={activeSearchMoment ? 'Jockey Search' : featuredEyebrow}
+                    clip={activeSearchMoment ? undefined : featuredClip}
                     game={selectedGame}
                     sourceVideoName={activeVideoName}
                     timelineCategory={featuredSignalCategory === 'standard_stats' ? scopedReels?.standard_stats : enhancedCategory}
                     timelineLabel={featuredEyebrow}
                     selectedTimelineIndex={featuredSignalCategory === 'standard_stats' ? selectedStandardClipIndex : selectedEnhancedClipIndex}
+                    searchMoment={activeSearchMoment}
                     onTimelineSelect={(index) => {
+                      setSelectedSearchMoment(null)
                       if (featuredSignalCategory === 'standard_stats') {
                         setSelectedStandardClipIndex(index)
                         setFeaturedSignalCategory('standard_stats')
@@ -460,6 +553,23 @@ function App() {
                     emptyText={isLoadingReels ? 'Generating reel' : featuredSignalCategory === 'standard_stats' ? 'No event feed clips returned' : 'No enhanced clips returned'}
                   />
                 </div>
+
+                {selectedGame && (
+                  <CategorySelectorPanel
+                    className="xl:hidden"
+                    reels={scopedReels}
+                    selectedCategory={selectedCategory}
+                    onSelect={selectCategoryTab}
+                  />
+                )}
+
+                {selectedGame && (
+                  <WorkspaceVideoCarousel
+                    game={selectedGame}
+                    activeVideoName={activeVideoName}
+                    onSelect={openVideoInWorkspace}
+                  />
+                )}
 
                 {scopedReels && (hasJockeyAnalysis ? <SemanticLiftSummary reels={scopedReels} /> : <JockeyIndexNotice game={selectedGame} />)}
 
@@ -568,7 +678,7 @@ function WorkspaceVideoCarousel({
         <span className="absolute bottom-0 left-0 right-0 p-3">
           <span className="line-clamp-2 text-xs font-semibold leading-4 text-white">{videoName}</span>
           {active && (
-            <span className="mt-2 inline-flex h-6 items-center rounded-full bg-accent px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-charcoal">
+            <span className="mt-2 inline-flex h-6 items-center rounded-sm bg-white px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-charcoal">
               Active
             </span>
           )}
@@ -579,16 +689,6 @@ function WorkspaceVideoCarousel({
 
   return (
     <section className="overflow-hidden rounded-md border border-border bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="flex items-center justify-between gap-4 border-b border-border-light px-5 py-4">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.1em] text-text-tertiary">Video switcher</p>
-          <h2 className="mt-1 truncate text-lg font-semibold text-text-primary">{activeVideoName || game.label}</h2>
-        </div>
-        <div className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-secondary">
-          <StrandIcon name="indexes" className="h-4 w-4 text-accent" />
-          {uniqueVideos.length} videos
-        </div>
-      </div>
       <div className="workspace-video-carousel relative overflow-hidden py-4">
         <div className="workspace-video-carousel-track flex w-max gap-3 px-5">
           <div className="flex shrink-0 gap-3">
@@ -623,141 +723,232 @@ function LiveApiBadge({ loading, error }: { loading: boolean; error: boolean }) 
   )
 }
 
-function OverviewPage({ onNavigate }: { onNavigate: (view: ViewKey) => void }) {
-  const problems = [
+function OverviewPage({
+  onNavigate,
+}: {
+  onNavigate: (view: ViewKey) => void
+  game: Game | null
+  reels?: HighlightReels
+  loading: boolean
+}) {
+  const comparisonRows = [
     {
-      icon: 'speech',
-      title: 'Missed Emotion',
-      body: 'Goals are easy to detect. Tears, pressure, and celebration intensity usually disappear.',
+      label: 'Core job',
+      standard: 'Automated sports highlight creation, personalization, and distribution at real-time scale.',
+      enhanced: 'The same event baseline, plus search and reasoning over the meaning inside the footage.',
     },
     {
-      icon: 'generate',
-      title: 'Rigid Content',
-      body: 'Storylines like The Comeback or Fan Atmosphere still need manual tags.',
+      label: 'Signal depth',
+      standard: 'Sport-trained event indexing: plays, game-state changes, and metadata that move quickly to publish.',
+      enhanced: 'Multimodal semantics: actions, speech, audio, OCR, emotion, crowd, scene context, and timestamped citations.',
     },
     {
-      icon: 'members',
-      title: 'Generic Personalization',
-      body: 'Every fan gets the same recap instead of moments tuned to what they care about.',
+      label: 'Search',
+      standard: 'Best when the moment is already known by feed label, event type, player, or timestamp.',
+      enhanced: 'Best when the editor asks for intent: pressure, rivalry, atmosphere, celebration, setup, or narrative payoff.',
+    },
+    {
+      label: 'Editorial review',
+      standard: 'Fast clipping and format workflows for high-volume publishing.',
+      enhanced: 'Playable evidence with selection rationale, so teams can see why a clip belongs in the story.',
+    },
+    {
+      label: 'Edge',
+      standard: 'Speed, scale, rights-holder workflows, and platform delivery.',
+      enhanced: 'Long-tail discovery, explainability, and richer fan stories beyond the scoreboard event.',
     },
   ]
-  const solutionSteps = [
-    {
-      icon: 'vision',
-      label: 'Understand',
-      body: 'Read plays, emotion, crowd energy, motion, and context.',
-    },
-    {
-      icon: 'search',
-      label: 'Find',
-      body: 'Search by story intent instead of only timestamp or manual labels.',
-    },
-    {
-      icon: 'play-boxed',
-      label: 'Export',
-      body: 'Turn selected moments into tag-wise reels and downloadable formats.',
-    },
+  const jockeyAdds = [
+    { icon: 'search', label: 'Natural-language moment search' },
+    { icon: 'vision', label: 'Visual, speech, audio, and text understanding' },
+    { icon: 'speech', label: 'Emotion and atmosphere retrieval' },
+    { icon: 'document-list', label: 'Grounded clip rationale' },
   ]
 
   return (
-    <div className="flex flex-1 flex-col bg-background">
-      <section className="border-b border-border bg-card">
-        <div className="mx-auto grid max-w-[1120px] gap-10 px-6 py-16 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-end">
-          <div className="max-w-3xl">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">Sports Intelligence</p>
-            <h2 className="mt-5 text-4xl font-semibold leading-tight text-text-primary md:text-5xl">Story-aware sports reels</h2>
-            <p className="mt-5 text-lg leading-8 text-text-secondary">
-              Find the moments that matter in long-form sports footage, then turn them into focused reels with TwelveLabs video understanding.
+    <div className="flex flex-1 bg-background">
+      <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-6 px-6 py-6">
+        <section className="grid gap-5 border-b border-border pb-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-text-tertiary">Overview</p>
+            <h2 className="mt-2 max-w-3xl text-3xl font-semibold leading-tight text-text-primary">
+              WSC Standard vs TwelveLabs Jockey
+            </h2>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-text-secondary">
+              WSC is the speed-and-scale benchmark for automated sports highlights. Jockey keeps that event baseline, then adds multimodal search, semantic context, and clip-level reasoning for the moments the feed does not fully explain.
             </p>
-            <div className="mt-8 flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={() => onNavigate('discover')}
-                className="h-11 rounded-md border border-accent bg-accent px-5 text-sm font-semibold text-brand-charcoal hover:bg-accent-light"
-              >
-                Discover
-              </button>
-              <button
-                type="button"
-                onClick={() => onNavigate('workspace')}
-                className="h-11 rounded-md border border-border bg-surface px-5 text-sm font-semibold text-text-primary hover:border-accent hover:bg-accent-light"
-              >
-                Workspace
-              </button>
+          </div>
+          <div className="flex flex-wrap gap-2 lg:justify-end">
+            <button
+              type="button"
+              onClick={() => onNavigate('discover')}
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-brand-charcoal bg-brand-charcoal px-4 text-sm font-semibold text-white hover:bg-text-primary"
+            >
+              <StrandIcon name="search" className="h-4 w-4" />
+              Discover
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate('workspace')}
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:border-brand-charcoal"
+            >
+              <StrandIcon name="play-boxed" className="h-4 w-4" />
+              Workspace
+            </button>
+          </div>
+        </section>
+
+        <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+          <div className="grid md:grid-cols-2">
+            <div className="border-b border-border-light bg-card p-5 md:border-b-0 md:border-r">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-text-tertiary">Baseline</p>
+                  <h3 className="mt-1 text-base font-semibold text-text-primary">WSC Standard</h3>
+                </div>
+                <StrandIcon name="usage" className="h-5 w-5 text-text-tertiary" />
+              </div>
+              <div className="mt-4 aspect-video rounded-md border border-dashed border-border bg-surface" />
+            </div>
+
+            <div className="bg-card p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-text-tertiary">Enhanced</p>
+                  <h3 className="mt-1 text-base font-semibold text-text-primary">TwelveLabs Jockey</h3>
+                </div>
+                <StrandIcon name="vision" className="h-5 w-5 text-text-tertiary" />
+              </div>
+              <div className="mt-4 aspect-video rounded-md border border-dashed border-border bg-surface" />
             </div>
           </div>
-          <div className="grid gap-3 text-sm font-semibold text-text-secondary">
-            {['Single-video grounded', 'Semantic clip lanes', 'Format-ready reels'].map((item) => (
-              <div key={item} className="flex items-center gap-3 border-b border-border-light pb-3 last:border-b-0 last:pb-0">
-                <StrandIcon name="checkmark" className="h-4 w-4 text-accent" />
-                <span>{item}</span>
+        </section>
+
+        <section className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_360px]">
+          <div className="rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+            <div className="border-b border-border-light bg-card px-5 py-4">
+              <div className="flex items-center gap-2">
+                <StrandIcon name="scalable" className="h-4 w-4 text-accent" />
+                <h3 className="text-base font-semibold text-text-primary">Comparison Matrix</h3>
               </div>
-            ))}
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
+                WSC is strongest at real-time automated production. Jockey is strongest when editors need the why behind a moment, not only the event that triggered it.
+              </p>
+            </div>
+            <div className="divide-y divide-border-light">
+              {comparisonRows.map((row) => (
+                <OverviewComparisonRow key={row.label} label={row.label} standard={row.standard} enhanced={row.enhanced} />
+              ))}
+            </div>
           </div>
-        </div>
-      </section>
 
-      <section className="mx-auto grid w-full max-w-[1120px] gap-10 px-6 py-14 lg:grid-cols-[330px_minmax(0,1fr)]">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-text-tertiary">Problem</p>
-          <h3 className="mt-3 text-2xl font-semibold leading-tight text-text-primary">The story gets lost between events</h3>
-          <p className="mt-3 text-sm leading-6 text-text-secondary">
-            Broadcast highlights know what happened. They rarely understand why the moment matters.
-          </p>
-        </div>
-        <div className="divide-y divide-border rounded-md border border-border bg-card">
-          {problems.map((problem) => (
-            <OverviewRow key={problem.title} icon={problem.icon} title={problem.title} body={problem.body} />
-          ))}
-        </div>
-      </section>
-
-      <section className="mx-auto w-full max-w-[1120px] px-6 pb-16">
-        <div className="grid gap-8 rounded-md border border-brand-charcoal bg-brand-charcoal p-6 text-white shadow-[0_12px_32px_rgba(29,28,27,0.12)] lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:p-8">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">Solution</p>
-            <h3 className="mt-3 text-2xl font-semibold leading-tight">TwelveLabs adds the semantic layer</h3>
-            <p className="mt-3 max-w-md text-sm leading-6 text-white/68">
-              The portal moves from raw playback to meaning: context, emotion, search, and export from the same selected video.
-            </p>
-          </div>
-          <div className="grid gap-3">
-            {solutionSteps.map((solution, index) => (
-              <SolutionStep key={solution.label} icon={solution.icon} title={solution.label} body={solution.body} index={index + 1} />
-            ))}
-          </div>
-        </div>
-      </section>
+          <aside className="rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+            <div className="border-b border-border-light bg-card px-5 py-4">
+              <div className="flex items-center gap-2">
+                <StrandIcon name="generate" className="h-4 w-4 text-accent" />
+                <h3 className="text-base font-semibold text-text-primary">What Jockey Adds</h3>
+              </div>
+            </div>
+            <div className="grid gap-3 p-5">
+              {jockeyAdds.map((item) => (
+                <div key={item.label} className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md border border-border-light bg-card px-3 py-3">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
+                    <StrandIcon name={item.icon} className="h-4 w-4" />
+                  </span>
+                  <span className="text-sm font-semibold leading-5 text-text-primary">{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </aside>
+        </section>
+      </div>
     </div>
   )
 }
 
-function OverviewRow({ icon, title, body }: { icon: string; title: string; body: string }) {
+function OverviewMetric({ icon, label, value }: { icon: string; label: string; value: string }) {
   return (
-    <article className="grid gap-4 p-5 sm:grid-cols-[auto_1fr] sm:items-start">
-      <span className="flex h-10 w-10 items-center justify-center rounded-md border border-accent bg-accent-light text-brand-charcoal">
-        <StrandIcon name={icon} className="h-4 w-4" />
-      </span>
-      <div>
-        <h4 className="text-base font-semibold text-text-primary">{title}</h4>
-        <p className="mt-1 text-sm leading-6 text-text-secondary">{body}</p>
+    <div className="min-w-0 rounded-md border border-border-light bg-surface px-3 py-3">
+      <div className="flex items-center gap-2">
+        <StrandIcon name={icon} className="h-4 w-4 text-accent" />
+        <p className="truncate text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
       </div>
-    </article>
+      <p className="mt-2 truncate text-base font-semibold text-text-primary">{value}</p>
+    </div>
   )
 }
 
-function SolutionStep({ icon, title, body, index }: { icon: string; title: string; body: string; index: number }) {
+function OverviewField({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <article className="grid gap-4 rounded-md border border-white/12 bg-white/[0.055] p-4 sm:grid-cols-[auto_1fr] sm:items-start">
-      <div className="flex items-center gap-3">
-        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-accent text-sm font-semibold text-brand-charcoal">{index}</span>
-        <span className="flex h-9 w-9 items-center justify-center rounded-md border border-white/12 text-accent">
-          <StrandIcon name={icon} className="h-4 w-4" />
-        </span>
+    <div className="border-b border-border-light pb-3 last:border-b-0 last:pb-0">
+      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
+      <p className={['mt-1 break-words text-sm font-semibold text-text-primary', mono ? 'font-mono' : ''].join(' ')}>{value}</p>
+    </div>
+  )
+}
+
+function OverviewCount({ icon, label, value, detail }: { icon: string; label: string; value: number; detail: string }) {
+  return (
+    <div className="min-w-0 border-l border-border pl-3">
+      <div className="flex items-center gap-2">
+        <StrandIcon name={icon} className="h-4 w-4 text-accent" />
+        <p className="truncate text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
       </div>
-      <div>
-        <h4 className="text-base font-semibold text-white">{title}</h4>
-        <p className="mt-1 text-sm leading-6 text-white/[0.68]">{body}</p>
+      <p className="mt-1 text-xl font-semibold leading-none text-text-primary">{value}</p>
+      <p className="mt-1 truncate text-xs text-text-tertiary">{detail}</p>
+    </div>
+  )
+}
+
+function OverviewComparisonSide({ icon, title, label, body }: { icon: string; title: string; label: string; body: string }) {
+  return (
+    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-3 px-5 py-5">
+      <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-text-secondary">
+        <StrandIcon name={icon} className="h-4 w-4" />
+      </span>
+      <div className="min-w-0">
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
+        <h4 className="mt-1 text-base font-semibold text-text-primary">{title}</h4>
+        <p className="mt-2 max-w-xl text-sm leading-6 text-text-secondary">{body}</p>
+      </div>
+    </div>
+  )
+}
+
+function OverviewComparisonRow({ label, standard, enhanced }: { label: string; standard: string; enhanced: string }) {
+  return (
+    <div className="grid gap-3 px-5 py-4 md:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)] md:items-start">
+      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
+      <p className="text-sm leading-6 text-text-secondary">{standard}</p>
+      <p className="text-sm font-medium leading-6 text-text-primary">{enhanced}</p>
+    </div>
+  )
+}
+
+function OverviewLaneRow({ icon, label, count, width }: { icon: string; label: string; count: number; width: number }) {
+  return (
+    <div className="grid min-w-0 grid-cols-[156px_minmax(0,1fr)_44px] items-center gap-3">
+      <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text-secondary">
+        <StrandIcon name={icon} className="h-4 w-4 text-accent" />
+        <span className="truncate">{label}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-sm bg-border-light">
+        <span className="block h-full rounded-sm bg-brand-charcoal" style={{ width: `${width}%` }} />
+      </div>
+      <span className="text-right text-sm font-semibold text-text-primary">{count}</span>
+    </div>
+  )
+}
+
+function OverviewStage({ icon, title, detail }: { icon: string; title: string; detail: string }) {
+  return (
+    <article className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 px-5 py-4">
+      <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-text-secondary">
+        <StrandIcon name={icon} className="h-4 w-4" />
+      </span>
+      <div className="min-w-0">
+        <h4 className="text-sm font-semibold text-text-primary">{title}</h4>
+        <p className="mt-1 text-sm leading-5 text-text-secondary">{detail}</p>
       </div>
     </article>
   )
@@ -767,23 +958,109 @@ function DiscoverPage({
   game,
   loading,
   error,
+  reelsByTag,
   onOpenInWorkspace,
 }: {
   game: Game | null
   loading: boolean
   error: string
+  reelsByTag: Record<string, HighlightReels>
   onOpenInWorkspace: (item: DiscoverItem) => void
 }) {
-  const [selectedItem, setSelectedItem] = useState<DiscoverItem | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [submittedSearchQuery, setSubmittedSearchQuery] = useState('')
+  const [activeFilter, setActiveFilter] = useState<DiscoverFilterKey>('all')
+  const [searchResponse, setSearchResponse] = useState<JockeySearchResponse | null>(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState('')
   const sourceVideos = useMemo(() => game?.source_videos || [], [game])
-  const items = useMemo(() => (game ? knowledgeBaseItems(game, sourceVideos, searchQuery) : []), [game, sourceVideos, searchQuery])
-  const spiralNodes = useMemo(() => discoverySpiralNodes(items), [items])
-  const displayItem = selectedItem && items.some((item) => item.id === selectedItem.id) ? selectedItem : items[0] || null
+  const hasLiveJockeyConnection = Boolean(game?.knowledge_store_id && sourceVideos.length > 0)
+  const reelsByVideo = useMemo(() => {
+    if (!game) return {}
+    return Object.fromEntries(
+      sourceVideos.map((videoName) => [videoName, reelsByTag[reelCacheKey(game.tag, videoName)]]),
+    ) as Record<string, HighlightReels | undefined>
+  }, [game, reelsByTag, sourceVideos])
+  const normalizedQuery = normalizeSearchText(submittedSearchQuery)
+  const trimmedSearchQuery = submittedSearchQuery.trim()
+  const draftSearchQuery = searchQuery.trim()
+  const items = useMemo(() => {
+    if (!game) return []
+    if (normalizedQuery) return searchResponse ? searchResultItems(game, searchResponse) : []
+    return knowledgeBaseItems(game, sourceVideos, '', reelsByVideo, activeFilter)
+  }, [activeFilter, game, normalizedQuery, reelsByVideo, searchResponse, sourceVideos])
+  const resultLabel = normalizedQuery
+    ? searchLoading
+      ? 'Searching'
+      : `${items.length} results`
+    : `${items.length} videos`
+  const searchSummary = normalizedQuery
+    ? searchResponse?.query_interpretation || 'Searching visual, speech, audio, OCR, and semantic moments in the indexed footage.'
+    : 'Search across indexed source videos with natural language, then open a result directly in the workspace.'
+  const jockeyStatus = hasLiveJockeyConnection ? 'Live Jockey search' : 'Source metadata'
+  const submitSearch = useCallback(() => {
+    const nextQuery = searchQuery.trim()
+    setSubmittedSearchQuery(nextQuery)
+    if (!nextQuery) {
+      setSearchResponse(null)
+      setSearchError('')
+      setSearchLoading(false)
+    }
+  }, [searchQuery])
+
+  const updateSearchQuery = useCallback((value: string) => {
+    setSearchQuery(value)
+    if (!value.trim()) {
+      setSubmittedSearchQuery('')
+      setSearchResponse(null)
+      setSearchError('')
+      setSearchLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    setSelectedItem(null)
-  }, [game?.tag, searchQuery])
+    if (!game || !trimmedSearchQuery) {
+      setSearchResponse(null)
+      setSearchError('')
+      setSearchLoading(false)
+      return
+    }
+
+    let active = true
+    const controller = new AbortController()
+    setSearchLoading(true)
+    setSearchError('')
+    const timeout = window.setTimeout(() => {
+      fetchJson<JockeySearchResponse>(`/games/${encodeURIComponent(game.tag)}/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          query: trimmedSearchQuery,
+          limit: 12,
+          filter: activeFilter === 'all' ? undefined : activeFilter,
+        }),
+      })
+        .then((body) => {
+          if (active) setSearchResponse(body)
+        })
+        .catch((fetchError: Error) => {
+          if (active && !controller.signal.aborted) {
+            setSearchResponse(null)
+            setSearchError(fetchError.message)
+          }
+        })
+        .finally(() => {
+          if (active) setSearchLoading(false)
+        })
+    }, 360)
+
+    return () => {
+      active = false
+      window.clearTimeout(timeout)
+      controller.abort()
+    }
+  }, [activeFilter, game, trimmedSearchQuery])
 
   if (error) {
     return (
@@ -805,151 +1082,283 @@ function DiscoverPage({
   }
 
   return (
-    <section className="discovery-page relative flex flex-1 overflow-hidden bg-black px-6 py-6 text-white">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_62%_48%,rgba(255,255,255,0.08),transparent_28%),linear-gradient(180deg,#000_0%,#030303_58%,#000_100%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(0,0,0,0.95)_0%,rgba(0,0,0,0.22)_38%,rgba(0,0,0,0.08)_62%,rgba(0,0,0,0.86)_100%)]" />
-      <div className="relative z-10 min-h-[calc(100vh-112px)] w-full overflow-hidden rounded-none">
-        <div className="absolute left-0 top-0 z-30 w-[min(360px,calc(100vw-48px))]">
-          <div className="flex items-center gap-3">
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/25 bg-white/5 text-white">
-              <StrandIcon name="search" className="h-4 w-4" />
-            </span>
-            <div>
-              <p className="text-lg font-semibold text-white">Sports Knowledge Base</p>
-              <p className="mt-0.5 text-xs font-semibold uppercase tracking-[0.12em] text-white/45">{items.length}/{sourceVideos.length} videos in Discover</p>
+    <section className="flex flex-1 bg-background">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6 px-6 py-8">
+        <div className="grid gap-5 border-b border-border pb-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+          <div className="min-w-0">
+            <div className="inline-flex h-8 items-center rounded-full bg-accent-light px-4 text-xs font-semibold uppercase tracking-[0.18em] text-brand-charcoal">
+              Search
             </div>
+            <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-tight text-text-primary lg:text-5xl">
+              {normalizedQuery ? submittedSearchQuery : `${game.label} Knowledge Base`}
+            </h2>
+            <p className="mt-3 max-w-3xl text-base leading-7 text-text-secondary">{searchSummary}</p>
           </div>
+          <p className="hidden text-xs font-semibold uppercase tracking-[0.28em] text-text-tertiary lg:block">
+            Jockey · Search Results
+          </p>
         </div>
 
-        <div className="discovery-stage absolute inset-0" data-selected={displayItem ? 'true' : 'false'}>
-          <div className="discovery-spiral-field absolute left-1/2 top-1/2 h-[1px] w-[1px]">
-            {spiralNodes.map((node) => {
-              const active = displayItem?.id === node.item.id && node.primary
-              return (
-                <button
-                  key={node.id}
-                  type="button"
-                  tabIndex={node.primary ? 0 : -1}
-                  onClick={() => setSelectedItem(node.item)}
-                  className="discovery-card group absolute overflow-hidden border border-white/10 bg-white/5 text-left shadow-[0_24px_70px_rgba(0,0,0,0.45)]"
-                  style={node.style}
-                  data-active={active ? 'true' : 'false'}
-                  data-primary={node.primary ? 'true' : 'false'}
-                  aria-label={`Inspect ${node.item.videoName}`}
-                >
-                  <VideoThumb poster={node.item.poster} title={node.item.title} />
-                  <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/82 to-transparent px-3 pb-2 pt-10 text-[11px] font-semibold text-white/88 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-                    {node.item.videoName}
-                  </span>
-                </button>
-              )
-            })}
+        <DiscoverSearchPanel
+          value={searchQuery}
+          onChange={updateSearchQuery}
+          onSubmit={submitSearch}
+          activeFilter={activeFilter}
+          onFilterChange={setActiveFilter}
+          resultLabel={resultLabel}
+          jockeyStatus={jockeyStatus}
+          searchLoading={searchLoading}
+          canSearch={Boolean(draftSearchQuery) && !searchLoading}
+        />
+
+        <section className="min-w-0">
+          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="inline-flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.18em] text-text-tertiary">
+              <StrandIcon name={searchLoading ? 'spinner' : 'search'} className={['h-4 w-4', searchLoading ? 'animate-spin' : ''].join(' ')} />
+              {resultLabel} · click to open
+            </div>
+            <div className="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-border bg-card px-3 text-xs font-semibold text-text-secondary">
+              <StrandIcon name="checkmark" className="h-4 w-4 text-accent" />
+              {jockeyStatus}
+            </div>
           </div>
-          {items.length === 0 && (
-            <div className="absolute left-1/2 top-1/2 w-[min(360px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 rounded-md border border-white/15 bg-white/10 p-5 text-center text-sm font-medium leading-6 text-white/70 shadow-[0_12px_32px_rgba(0,0,0,0.4)]">
-              No registered game videos match this search.
+
+          {searchError && (
+            <div className="mb-4">
+              <Notice tone="error" icon="warning" text={searchError} />
             </div>
           )}
-        </div>
 
-        {displayItem && (
-          <div className="absolute bottom-20 right-0 z-30 w-[390px] max-w-[calc(100vw-48px)]">
-            <DiscoverPopover item={displayItem} onOpenInWorkspace={onOpenInWorkspace} />
-          </div>
-        )}
-        <DiscoverSearchBar value={searchQuery} onChange={setSearchQuery} resultCount={items.length} />
+          {searchLoading && items.length === 0 ? (
+            <div className="flex min-h-[320px] items-center justify-center rounded-md border border-border bg-card p-8 text-center">
+              <div className="max-w-sm">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
+                  <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
+                </div>
+                <h3 className="mt-4 text-base font-semibold text-text-primary">Searching indexed video</h3>
+                <p className="mt-2 text-sm leading-6 text-text-secondary">Jockey is matching the query against visual, audio, speech, OCR, and semantic evidence.</p>
+              </div>
+            </div>
+          ) : items.length > 0 ? (
+            <div className="grid auto-rows-fr gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {items.map((item) => (
+                <DiscoverResultCard key={item.id} item={item} onOpenInWorkspace={onOpenInWorkspace} />
+              ))}
+            </div>
+          ) : (
+            <DiscoverEmptyState searchQuery={searchQuery} />
+          )}
+        </section>
       </div>
     </section>
   )
 }
 
-function DiscoverPopover({
-  item,
-  onOpenInWorkspace,
+function DiscoverSearchPanel({
+  value,
+  onChange,
+  onSubmit,
+  activeFilter,
+  onFilterChange,
+  resultLabel,
+  jockeyStatus,
+  searchLoading,
+  canSearch,
 }: {
-  item: DiscoverItem
-  onOpenInWorkspace: (item: DiscoverItem) => void
+  value: string
+  onChange: (value: string) => void
+  onSubmit: () => void
+  activeFilter: DiscoverFilterKey
+  onFilterChange: (value: DiscoverFilterKey) => void
+  resultLabel: string
+  jockeyStatus: string
+  searchLoading: boolean
+  canSearch: boolean
 }) {
   return (
-    <article className="w-full overflow-hidden rounded-md border border-white/12 bg-[#1B1B1B]/95 text-white shadow-[0_28px_80px_rgba(0,0,0,0.58)] backdrop-blur-md">
-      <div className="aspect-video bg-black">
-        <VideoThumb poster={item.poster} title={item.title} />
+    <div className="grid gap-4 rounded-md border border-border bg-card p-4 shadow-[0_8px_24px_rgba(29,28,27,0.045)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+      <label htmlFor="discover-search" className="sr-only">
+        Search indexed videos
+      </label>
+      <div className="flex min-h-12 min-w-0 items-center gap-3 rounded-md border border-border bg-surface pl-4 pr-2 focus-within:border-brand-charcoal">
+        <StrandIcon name={searchLoading ? 'spinner' : 'search'} className={['h-4 w-4 text-text-tertiary', searchLoading ? 'animate-spin' : ''].join(' ')} />
+        <input
+          id="discover-search"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') onSubmit()
+          }}
+          className="min-w-0 flex-1 bg-transparent text-base font-medium text-text-primary outline-none placeholder:text-text-tertiary"
+          placeholder="Find goals, crowd reactions, pressure, celebrations..."
+        />
+        {value && (
+          <button
+            type="button"
+            onClick={() => onChange('')}
+            className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-text-secondary hover:border-accent hover:text-brand-charcoal"
+            aria-label="Clear search"
+            title="Clear search"
+          >
+            <StrandIcon name="close" className="h-3.5 w-3.5" />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={!canSearch}
+          className={[
+            'inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold',
+            canSearch
+              ? 'border-brand-charcoal bg-brand-charcoal text-white hover:bg-text-primary'
+              : 'cursor-not-allowed border-border bg-card text-text-tertiary',
+          ].join(' ')}
+        >
+          <StrandIcon name="search" className="h-4 w-4" />
+          Search
+        </button>
       </div>
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.1em] text-white/42">{item.label}</p>
-            <h3 className="mt-2 text-base font-semibold leading-5 text-white">{item.title}</h3>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
+
+      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+        {discoverFilters.map((filter) => {
+          const active = activeFilter === filter.key
+          return (
             <button
+              key={filter.key}
               type="button"
-              onClick={() => onOpenInWorkspace(item)}
-              className="rounded-md border border-white bg-white p-2 text-brand-charcoal hover:bg-white/85"
-              aria-label="Open source video in workspace"
-              title="Open in workspace"
+              onClick={() => onFilterChange(filter.key)}
+              className={[
+                'inline-flex h-10 items-center gap-2 rounded-md border px-3 text-xs font-semibold uppercase tracking-[0.08em]',
+                active
+                  ? 'border-brand-charcoal bg-brand-charcoal text-white'
+                  : 'border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
+              ].join(' ')}
+              aria-pressed={active}
+              title={`Filter by ${filter.label}`}
             >
-              <StrandIcon name="arrow-box-right" className="h-4 w-4" />
+              <StrandIcon name={filter.icon} className="h-4 w-4" />
+              <span>{filter.label}</span>
             </button>
+          )
+        })}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border-light pt-3 text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary lg:col-span-2">
+        <span>{resultLabel}</span>
+        <span>{jockeyStatus}</span>
+      </div>
+    </div>
+  )
+}
+
+function DiscoverMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-card px-3 py-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-text-tertiary">{label}</p>
+      <p className="mt-1 text-xl font-semibold leading-none text-text-primary">{value}</p>
+    </div>
+  )
+}
+
+function DiscoverResultCard({ item, onOpenInWorkspace }: { item: DiscoverItem; onOpenInWorkspace: (item: DiscoverItem) => void }) {
+  const category = item.categoryKey ? mapLanes.find((lane) => lane.key === item.categoryKey) : null
+  const isMomentResult = item.resultType === 'moment' || item.resultType === 'search'
+  const canOpen = Boolean(item.videoName)
+  const actionLabel = isMomentResult ? `Open moment in ${item.videoName}` : `Open details for ${item.videoName}`
+  return (
+    <article className="group flex min-w-0 flex-col overflow-hidden rounded-md border-2 border-brand-charcoal/75 bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+      <button
+        type="button"
+        onClick={() => onOpenInWorkspace(item)}
+        disabled={!canOpen}
+        className="relative m-3 aspect-video overflow-hidden rounded-md bg-brand-charcoal text-left disabled:cursor-not-allowed"
+        aria-label={actionLabel}
+        title={actionLabel}
+      >
+        <VideoThumb poster={item.poster} title={item.title} />
+        <span className="absolute inset-0 bg-gradient-to-t from-black/76 via-black/8 to-transparent opacity-90" />
+        {item.startTime && (
+          <span className="absolute bottom-3 left-3 rounded-md bg-brand-charcoal px-2 py-1 font-mono text-xs font-semibold text-white">
+            {item.startTime}
+          </span>
+        )}
+        <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
+          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-brand-charcoal shadow-[0_8px_20px_rgba(0,0,0,0.18)]">
+            <StrandIcon name={isMomentResult ? 'play' : 'arrow-diagonal'} className="h-4 w-4" />
+          </span>
+        </span>
+      </button>
+      <div className="flex flex-1 flex-col px-5 pb-5 pt-1 text-center">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-tertiary">{item.label}</p>
+            <h4 className="mt-2 line-clamp-2 text-lg font-semibold leading-6 text-text-primary">{item.title}</h4>
+            {item.subtitle && <p className="mt-2 line-clamp-2 text-sm leading-5 text-text-secondary">{item.subtitle}</p>}
           </div>
         </div>
-        <p className="mt-2 text-sm text-white/55">{item.subtitle}</p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <DarkPill>{item.videoName}</DarkPill>
-          <DarkPill>Game video</DarkPill>
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          {category && <DiscoverBadge icon={category.icon}>{category.label}</DiscoverBadge>}
+          {item.sourceType && <DiscoverBadge icon="vision">{sourceLabel(item.sourceType)}</DiscoverBadge>}
+          {item.resultType === 'search' && <DiscoverBadge icon="search">Jockey</DiscoverBadge>}
         </div>
-        <div className="mt-5 space-y-4">
-          <MetaBlock label="Sports Knowledge Base" value={item.knowledgeStoreId} />
-          <MetaBlock label="TwelveLabs Stream Endpoint" value={item.media} />
-        </div>
+        <DiscoverMatchList heading={item.matchHeading} matches={item.matches} />
       </div>
     </article>
   )
 }
 
-function DiscoverSearchBar({
-  value,
-  onChange,
-  resultCount,
-}: {
-  value: string
-  onChange: (value: string) => void
-  resultCount: number
-}) {
+function DiscoverMatchList({ heading, matches }: { heading: string; matches: DiscoverMatch[] }) {
+  if (matches.length === 0) return null
   return (
-    <div className="fixed bottom-6 left-6 z-40 w-[min(560px,calc(100vw-48px))]">
-      <div className="flex items-center gap-3 rounded-full border border-white/12 bg-white/10 p-2 shadow-[0_18px_46px_rgba(0,0,0,0.38)] backdrop-blur-md">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-brand-charcoal">
-          <StrandIcon name="search" className="h-4 w-4" />
-        </div>
-        <input
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className="h-10 min-w-0 flex-1 bg-transparent text-sm font-medium text-white outline-none placeholder:text-white/35"
-          placeholder="Search videos in this sports knowledge base"
-        />
-        <span className="hidden rounded-full bg-white/10 px-3 py-2 text-xs font-semibold text-white/62 sm:inline-flex">
-          {resultCount} videos
-        </span>
+    <div className="mt-4 border-t border-border-light pt-4">
+      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-text-tertiary">{heading}</p>
+      <div className="mt-3 flex flex-col gap-3">
+        {matches.map((match) => (
+          <div key={match.id} className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
+              <span className="truncate">{match.label}</span>
+              {match.startTime && <span className="shrink-0">{match.startTime}</span>}
+            </div>
+            <p className="mt-1 line-clamp-2 text-sm font-semibold leading-5 text-text-primary">{match.text}</p>
+            <p className="mt-1 line-clamp-2 text-xs leading-5 text-text-secondary">{match.detail}</p>
+          </div>
+        ))}
       </div>
     </div>
   )
 }
 
-function DarkPill({ children }: { children: string }) {
-  return <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-white/75">{children}</span>
+function DiscoverBadge({ icon, children }: { icon: string; children: string }) {
+  return (
+    <span className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border-light bg-surface px-2 text-xs font-semibold text-text-secondary">
+      <StrandIcon name={icon} className="h-3.5 w-3.5 text-accent" />
+      <span className="truncate">{children}</span>
+    </span>
+  )
 }
 
-function MetaBlock({ label, value }: { label: string; value: string }) {
+function DiscoverEmptyState({ searchQuery }: { searchQuery: string }) {
   return (
-    <div>
-      <p className="text-xs font-semibold uppercase tracking-[0.1em] text-white/38">{label}</p>
-      <p className="mt-1 text-sm leading-5 text-white/62">{value}</p>
+    <div className="flex min-h-[320px] items-center justify-center rounded-md border border-dashed border-border bg-card p-8 text-center">
+      <div className="max-w-sm">
+        <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
+          <StrandIcon name="search" className="h-4 w-4" />
+        </div>
+        <h3 className="mt-4 text-base font-semibold text-text-primary">No matches</h3>
+        <p className="mt-2 text-sm leading-6 text-text-secondary">{searchQuery ? `"${searchQuery}" did not match any indexed moment.` : 'No source videos are available.'}</p>
+      </div>
     </div>
   )
 }
 
 function VideoThumb({ poster, title }: { poster: string; title: string }) {
+  if (!poster) {
+    return (
+      <div className="flex h-full w-full items-center justify-center px-5 text-center">
+        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-white/70">{title}</span>
+      </div>
+    )
+  }
   return (
     <img
       alt=""
@@ -963,10 +1372,12 @@ function VideoThumb({ poster, title }: { poster: string; title: string }) {
 function TwelveLabsVideoPlayer({
   streamInfoUrl,
   startSeconds,
+  posterUrl,
   onDuration,
 }: {
   streamInfoUrl: string
   startSeconds: number
+  posterUrl?: string
   onDuration: (duration: number) => void
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -1049,7 +1460,7 @@ function TwelveLabsVideoPlayer({
 
   return (
     <div className="relative h-full w-full">
-      <video ref={videoRef} className="h-full w-full object-contain accent-accent" controls playsInline preload="metadata" />
+      <video ref={videoRef} className="h-full w-full object-contain accent-accent" controls playsInline preload="metadata" poster={posterUrl} />
       {status !== 'ready' && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-brand-charcoal/82 px-6 text-center">
           <p className="max-w-md text-sm font-semibold text-white/92">{message}</p>
@@ -1173,7 +1584,7 @@ function CategorySelectorPanel({
               className={[
                 'grid min-h-[48px] grid-cols-[auto_1fr_auto] items-center gap-3 rounded-md border px-3 text-left text-sm font-semibold transition-colors',
                 active
-                  ? 'border-accent bg-accent-light text-brand-charcoal'
+                  ? 'border-brand-charcoal bg-card text-text-primary ring-2 ring-brand-charcoal/10'
                   : 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
               ].join(' ')}
             >
@@ -1425,6 +1836,7 @@ function FeaturedClipPanel({
   timelineCategory,
   timelineLabel,
   selectedTimelineIndex,
+  searchMoment,
   onTimelineSelect,
   emptyText,
 }: {
@@ -1436,6 +1848,7 @@ function FeaturedClipPanel({
   timelineCategory?: HighlightCategory
   timelineLabel: string
   selectedTimelineIndex: number
+  searchMoment?: SearchMoment | null
   onTimelineSelect: (index: number) => void
   emptyText: string
 }) {
@@ -1443,23 +1856,41 @@ function FeaturedClipPanel({
   const effectiveClip = sourceVideoName && sourceVideoName !== clipVideoName ? undefined : clip
   const streamInfoUrl = game && sourceVideoName ? streamInfoForVideoName(game, sourceVideoName) : game && effectiveClip ? streamInfoForClip(game, effectiveClip) : null
   const [videoDurationSeconds, setVideoDurationSeconds] = useState(0)
-  const clipStartSeconds = effectiveClip ? secondsFromTime(effectiveClip.start_time) : 0
+  const searchStartSeconds = searchMoment?.startTime ? secondsFromTime(searchMoment.startTime) : 0
+  const clipStartSeconds = effectiveClip ? secondsFromTime(effectiveClip.start_time) : searchStartSeconds
+  const clipRangeLabel = effectiveClip
+    ? `${effectiveClip.start_time} - ${effectiveClip.end_time}`
+    : searchMoment?.startTime
+      ? `${searchMoment.startTime}${searchMoment.endTime ? ` - ${searchMoment.endTime}` : ''}`
+      : 'Full source'
+  const sourceName = sourceVideoName || searchMoment?.videoName || (effectiveClip && game ? videoNameForClip(game, effectiveClip) : undefined)
+  const posterUrl = game && sourceName && effectiveClip
+    ? reelThumbnailUrl(game, sourceName, effectiveClip, '16x9')
+    : game && sourceName
+      ? thumbnailForVideoName(game, sourceName)
+      : undefined
 
   useEffect(() => {
     setVideoDurationSeconds(0)
-  }, [streamInfoUrl, effectiveClip?.start_time, effectiveClip?.end_time])
+  }, [streamInfoUrl, effectiveClip?.start_time, effectiveClip?.end_time, searchMoment?.startTime, searchMoment?.endTime])
 
   return (
     <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.06)]">
-      <div className="flex items-start justify-between gap-4 border-b border-border-light bg-card px-4 py-3.5">
-        <div>
+      <div className="grid gap-4 border-b border-border-light bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+        <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{eyebrow}</p>
-          <h2 className="mt-1 text-base font-semibold text-text-primary">{title}</h2>
+          <h2 className="mt-1 text-lg font-semibold text-text-primary">{title}</h2>
+          {sourceName && <p className="mt-2 truncate text-sm text-text-secondary">{sourceName}</p>}
         </div>
-        {effectiveClip && <Confidence value={effectiveClip.confidence} />}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex h-8 items-center gap-2 rounded-sm border border-border bg-surface px-2.5 font-mono text-xs font-semibold text-text-secondary">
+            {clipRangeLabel}
+          </span>
+          {effectiveClip && <Confidence value={effectiveClip.confidence} />}
+        </div>
       </div>
       {streamInfoUrl || effectiveClip ? (
-        <div className="grid lg:grid-cols-[minmax(0,1.45fr)_360px]">
+        <div className="grid lg:grid-cols-[minmax(0,1.55fr)_380px]">
           <div className="min-w-0 border-b border-border-light lg:border-b-0 lg:border-r">
             <div className="flex aspect-video items-center justify-center bg-brand-charcoal text-white">
               {streamInfoUrl ? (
@@ -1467,6 +1898,7 @@ function FeaturedClipPanel({
                   key={`${streamInfoUrl}-${effectiveClip?.start_time || 'source'}-${effectiveClip?.end_time || 'full'}`}
                   streamInfoUrl={streamInfoUrl}
                   startSeconds={clipStartSeconds}
+                  posterUrl={posterUrl}
                   onDuration={setVideoDurationSeconds}
                 />
               ) : (
@@ -1489,21 +1921,35 @@ function FeaturedClipPanel({
           </div>
 
           <div className="flex min-w-0 flex-col gap-4 p-4">
-            {effectiveClip ? (
+            {searchMoment ? (
               <>
                 <div className="grid grid-cols-2 gap-3">
-                  <Detail label="Start" value={effectiveClip.start_time} />
-                  <Detail label="End" value={effectiveClip.end_time} />
-                  <Detail label="Type" value={effectiveClip.clip_type} />
-                  <Detail label="Source" value={sourceLabel(effectiveClip.source_type)} />
+                  <Detail label="Timecode" value={clipRangeLabel} />
+                  <Detail label="Video" value={sourceName || searchMoment.videoName} />
+                  <Detail label="Source" value="Jockey search" />
+                  <Detail label="Reference" value={searchMoment.videoReference} />
                 </div>
                 <div className="rounded-md border border-border-light bg-card p-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Selected Moment</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Grounded Match</p>
+                  <p className="mt-2 text-sm font-semibold leading-5 text-text-primary">{searchMoment.description}</p>
+                  <p className="mt-2 text-sm leading-5 text-text-secondary">{searchMoment.relevance}</p>
+                </div>
+              </>
+            ) : effectiveClip ? (
+              <>
+                <div className="grid grid-cols-2 gap-3">
+                  <Detail label="Timecode" value={clipRangeLabel} />
+                  <Detail label="Source" value={sourceLabel(effectiveClip.source_type)} />
+                  <Detail label="Clip type" value={effectiveClip.clip_type} />
+                  <Detail label="Reference" value={effectiveClip.video_reference} />
+                </div>
+                <div className="rounded-md border border-border-light bg-card p-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Grounded Citation</p>
                   <p className="mt-2 text-sm font-semibold leading-5 text-text-primary">{effectiveClip.description}</p>
                   {effectiveClip.score_context && <p className="mt-2 text-sm leading-5 text-text-secondary">{effectiveClip.score_context}</p>}
                 </div>
                 <div className="rounded-md border border-border-light bg-surface p-3">
-                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Why Jockey Picked It</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Selection Signal</p>
                   <p className="mt-2 text-sm font-semibold leading-5 text-text-primary">{effectiveClip.explainability_label}</p>
                   <p className="mt-2 text-sm leading-5 text-text-secondary">{effectiveClip.selection_reason}</p>
                   {!hasUsableConfidence(effectiveClip.confidence) && (
@@ -1514,13 +1960,13 @@ function FeaturedClipPanel({
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-3">
-                  <Detail label="Video" value={sourceVideoName || 'Source video'} />
+                  <Detail label="Video" value={sourceName || 'Source video'} />
                   <Detail label="Sport" value={game?.sport || 'Sports'} />
                 </div>
                 <div className="rounded-md border border-border-light bg-card p-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Source Video</p>
-                  <p className="mt-2 text-sm font-semibold leading-5 text-text-primary">{sourceVideoName}</p>
-                  <p className="mt-2 text-sm leading-5 text-text-secondary">Full registered game footage loaded directly from the live sports API.</p>
+                  <p className="mt-2 text-sm font-semibold leading-5 text-text-primary">{sourceName}</p>
+                  <p className="mt-2 text-sm leading-5 text-text-secondary">Full registered game footage is available while clip-level citations are resolving for this source.</p>
                 </div>
               </>
             )}
@@ -1943,7 +2389,7 @@ function Detail({ label, value }: { label: string; value: string }) {
 
 function Confidence({ value }: { value: number }) {
   return (
-    <span className="shrink-0 rounded-sm bg-accent-light px-2 py-1 text-xs font-semibold text-brand-charcoal">
+    <span className="shrink-0 rounded-sm border border-border bg-card px-2 py-1 font-mono text-xs font-semibold text-text-primary">
       {confidenceLabel(value)}
     </span>
   )
@@ -2138,9 +2584,7 @@ function isSelectedSignal(
 }
 
 function streamInfoForClip(game: Game, clip: Clip) {
-  const mapped = game.video_reference_map?.[clip.video_reference]
-  const direct = game.source_videos?.includes(clip.video_reference) ? clip.video_reference : undefined
-  const videoName = mapped || direct
+  const videoName = videoNameForReference(game, clip.video_reference)
   return videoName ? streamInfoForVideoName(game, videoName) : null
 }
 
@@ -2169,83 +2613,379 @@ function clipSelectionForVideo(game: Game, reels: HighlightReels, videoName: str
 }
 
 function videoNameForClip(game: Game, clip: Clip) {
-  return game.video_reference_map?.[clip.video_reference] || (game.source_videos?.includes(clip.video_reference) ? clip.video_reference : undefined)
+  return videoNameForReference(game, clip.video_reference)
+}
+
+function videoNameForReference(game: Game, reference: string) {
+  if (!reference) return undefined
+  const sourceVideos = game.source_videos || []
+  const mapped = game.video_reference_map?.[reference]
+  if (mapped) return mapped
+  if (sourceVideos.includes(reference)) return reference
+
+  const assetMatch = Object.entries(game.video_asset_ids || {}).find(([, assetId]) => assetId === reference)?.[0]
+  if (assetMatch) return assetMatch
+
+  const basename = reference.split('/').pop() || reference
+  if (sourceVideos.includes(basename)) return basename
+  const normalizedReference = normalizeSearchText(reference)
+  return sourceVideos.find((videoName) => {
+    const normalizedVideo = normalizeSearchText(videoName)
+    const stem = normalizeSearchText(videoName.replace(/\.[^.]+$/, ''))
+    return normalizedReference === normalizedVideo || normalizedReference.includes(normalizedVideo) || normalizedReference.includes(stem) || normalizedVideo.includes(normalizedReference)
+  })
 }
 
 function gameOptionLabel(game: Game) {
   return game.label === game.sport ? game.label : `${game.label} · ${game.sport}`
 }
 
-function discoverySpiralNodes(items: DiscoverItem[]) {
-  if (items.length === 0) return []
-  const visualCount = Math.max(24, items.length * 7)
-  const primaryStart = Math.floor((visualCount - items.length) / 2)
-  return Array.from({ length: visualCount }, (_, index) => {
-    const item = items[index % items.length]
-    const slot = discoveryNodeSlot(index, visualCount)
-    const primary = index >= primaryStart && index < primaryStart + items.length
-    const style = {
-      '--x': `${Math.round(slot.x)}px`,
-      '--y': `${Math.round(slot.y)}px`,
-      '--z': `${Math.round(slot.z)}px`,
-      '--rotate-y': `${slot.rotateY.toFixed(2)}deg`,
-      '--rotate-z': `${slot.rotateZ.toFixed(2)}deg`,
-      '--scale': slot.scale.toFixed(3),
-      '--opacity': slot.opacity.toFixed(3),
-      '--card-width': `${Math.round(slot.width)}px`,
-      '--card-ratio': slot.ratio.toFixed(3),
-      '--blur': `${slot.blur}px`,
-      '--motion-delay': `${(-index * 0.32).toFixed(2)}s`,
-      zIndex: Math.round(100 + slot.z),
-    } as CSSProperties
-    return {
-      id: `${item.id}-${index}`,
-      item,
-      primary,
-      style,
-    }
-  })
+function searchResultItems(game: Game, response: JockeySearchResponse): DiscoverItem[] {
+  return response.results
+    .map((result, index) => discoverItemFromSearchResult(game, result, index))
+    .filter((item): item is DiscoverItem => Boolean(item))
 }
 
-function discoveryNodeSlot(index: number, count: number) {
-  const t = count === 1 ? 0.5 : index / (count - 1)
-  const angle = -0.64 * Math.PI + t * 6.45 * Math.PI
-  const front = (Math.sin(angle) + 1) / 2
-  const radius = 420 + Math.sin(t * Math.PI * 2.2) * 95
-  const edgeFade = Math.abs(t - 0.5)
-  const aspectCycle = [0.56, 0.62, 0.5, 0.68, 0.44, 0.58]
+function discoverItemFromSearchResult(game: Game, result: JockeySearchResult, index: number): DiscoverItem | null {
+  const videoName = result.video_name || videoNameForReference(game, result.video_reference)
+  if (!videoName) return null
+  const startTime = result.start_time || result.timestamp
+  const endTime = result.end_time
+  const title = result.title || result.description
+  const subtitle = `${videoName}${startTime ? ` · ${startTime}${endTime ? `-${endTime}` : ''}` : ''}`
+  const searchMoment: SearchMoment = {
+    videoName,
+    videoReference: result.video_reference,
+    title,
+    description: result.description,
+    relevance: result.relevance,
+    startTime,
+    endTime,
+  }
   return {
-    x: Math.cos(angle) * radius + Math.sin(t * Math.PI * 5.2) * 88,
-    y: (t - 0.5) * 1460 + Math.sin(angle) * 115,
-    z: Math.sin(angle) * 390 - edgeFade * 150,
-    scale: 0.58 + front * 0.5,
-    opacity: clamp(0.16 + front * 0.76 - edgeFade * 0.16, 0.12, 0.94),
-    width: 150 + front * 180 + (index % 5 === 0 ? 34 : 0),
-    rotateY: clamp(-Math.cos(angle) * 56, -62, 62),
-    rotateZ: Math.sin(angle * 0.42) * 5 + (index % 3 - 1) * 1.5,
-    ratio: aspectCycle[index % aspectCycle.length],
-    blur: front < 0.16 ? 1.2 : front < 0.28 ? 0.45 : 0,
+    id: `${game.tag}-${result.id || `search-${index}`}`,
+    label: 'Jockey Result',
+    title,
+    subtitle,
+    media: streamInfoForVideoName(game, videoName),
+    poster: thumbnailForVideoName(game, videoName),
+    videoName,
+    knowledgeStoreId: game.knowledge_store_id,
+    clipCount: 1,
+    semanticCount: 1,
+    matches: [{
+      id: `${result.id || index}-match`,
+      label: 'Matched Evidence',
+      text: result.description,
+      detail: result.relevance,
+      startTime,
+      endTime,
+    }],
+    matchHeading: 'Why it matched',
+    searchScore: responseScore(result, index),
+    hasJockeySearch: true,
+    resultType: 'search',
+    startTime,
+    endTime,
+    searchMoment,
   }
 }
 
-function knowledgeBaseItems(game: Game, sourceVideos: string[], searchQuery: string) {
-  const normalized = searchQuery.trim().toLowerCase()
+function responseScore(result: JockeySearchResult, index: number) {
+  return typeof result.confidence === 'number' && Number.isFinite(result.confidence)
+    ? result.confidence
+    : 1 / (index + 1)
+}
+
+function knowledgeBaseItems(
+  game: Game,
+  sourceVideos: string[],
+  searchQuery: string,
+  reelsByVideo: Record<string, HighlightReels | undefined>,
+  activeFilter: DiscoverFilterKey,
+) {
+  const normalized = normalizeSearchText(searchQuery)
+  const tokens = searchTokens(normalized)
   const uniqueSourceVideos = Array.from(new Set(sourceVideos))
+  if (!normalized) {
+    return uniqueSourceVideos.map((videoName, index) =>
+      discoverItemFromVideo({
+        game,
+        videoName,
+        sourceIndex: index,
+        clipEntries: [],
+        noteEntries: [],
+        clipCount: 0,
+        semanticCount: 0,
+        normalized,
+        baseMatches: false,
+      }),
+    )
+  }
   return uniqueSourceVideos
-    .filter((videoName) => {
-      const searchable = [videoName, game.label, game.sport, game.knowledge_store_id].join(' ').toLowerCase()
-      return !normalized || searchable.includes(normalized)
+    .flatMap((videoName, index) => {
+      const reels = reelsByVideo[videoName]
+      const clipEntries = discoverClipEntries(game, videoName, reels).filter((entry) => matchesDiscoverFilter(entry, activeFilter))
+      const scoredClipEntries = clipEntries.map((entry) => ({
+        ...entry,
+        searchScore: queryScore(entry.searchText, normalized, tokens),
+      }))
+      const noteEntries = discoverAssemblyNotes(game, videoName, reels, activeFilter)
+      const noteMatches = normalized
+        ? noteEntries.filter((entry) => textMatchesQuery(entry.searchText, normalized, tokens))
+        : []
+      const baseText = normalizeSearchText([videoName, game.label, game.sport, game.knowledge_store_id].join(' '))
+      const baseMatches = textMatchesQuery(baseText, normalized, tokens)
+      const sortedClipEntries = [...scoredClipEntries].sort((left, right) => {
+        if (normalized) return right.searchScore - left.searchScore || right.clip.confidence - left.clip.confidence
+        return right.clip.confidence - left.clip.confidence
+      })
+      const semanticCount = clipEntries.filter((entry) => entry.clip.source_type !== 'stats').length
+
+      if (normalized) {
+        const clipItems = sortedClipEntries
+          .filter((entry) => textMatchesQuery(entry.searchText, normalized, tokens))
+          .map((entry) =>
+            discoverItemFromClip({
+              game,
+              videoName,
+              sourceIndex: index,
+              entry,
+              clipCount: clipEntries.length,
+              semanticCount,
+            }),
+          )
+        const videoItem = baseMatches || (noteMatches.length > 0 && clipItems.length === 0)
+          ? [discoverItemFromVideo({
+            game,
+            videoName,
+            sourceIndex: index,
+            clipEntries: sortedClipEntries,
+            noteEntries: noteMatches,
+            clipCount: clipEntries.length,
+            semanticCount,
+            normalized,
+            baseMatches,
+          })]
+          : []
+        return [...videoItem, ...clipItems]
+      }
+
+      return []
     })
-    .map((videoName, index) => ({
-      id: `${game.tag}-${videoName}-${index}`,
-      label: 'Sports Knowledge Base Video',
-      title: videoName,
-      subtitle: `${game.label} · ${game.sport}`,
-      media: streamInfoForVideoName(game, videoName),
-      poster: thumbnailForVideoName(game, videoName),
-      videoName,
-      knowledgeStoreId: game.knowledge_store_id,
-    }))
+    .sort((left, right) => {
+      if (!normalized) return 0
+      return right.searchScore - left.searchScore || left.title.localeCompare(right.title)
+    })
+}
+
+function discoverItemFromVideo({
+  game,
+  videoName,
+  sourceIndex,
+  clipEntries,
+  noteEntries,
+  clipCount,
+  semanticCount,
+  normalized,
+  baseMatches,
+}: {
+  game: Game
+  videoName: string
+  sourceIndex: number
+  clipEntries: Array<ReturnType<typeof discoverClipEntries>[number] & { searchScore?: number }>
+  noteEntries: ReturnType<typeof discoverAssemblyNotes>
+  clipCount: number
+  semanticCount: number
+  normalized: string
+  baseMatches: boolean
+}): DiscoverItem {
+  const baseMatch: DiscoverMatch[] = normalized && baseMatches
+    ? [{
+      id: `${videoName}-source-match`,
+      label: 'Source Video',
+      text: videoName,
+      detail: `${game.label} · ${game.sport}`,
+    }]
+    : []
+  const clipMatches = clipEntries.slice(0, baseMatch.length ? 2 : 3).map((entry) => discoverMatchFromClip(entry))
+  const noteMatches = noteEntries.slice(0, Math.max(0, 3 - baseMatch.length - clipMatches.length)).map((note, index) => ({
+    id: `${videoName}-note-${index}`,
+    label: 'Assembly Note',
+    text: note.text,
+    detail: `${game.label} · ${game.sport}`,
+  }))
+  const topClip = clipEntries[0]
+  return {
+    id: `${game.tag}-${videoName}-${sourceIndex}`,
+    label: 'Source Video',
+    title: videoName,
+    subtitle: '',
+    media: streamInfoForVideoName(game, videoName),
+    poster: thumbnailForVideoName(game, videoName),
+    videoName,
+    knowledgeStoreId: game.knowledge_store_id,
+    clipCount,
+    semanticCount,
+    matches: [...baseMatch, ...clipMatches, ...noteMatches],
+    matchHeading: normalized ? 'Matched Evidence' : 'Top Signals',
+    searchScore: (baseMatches ? 8 : 0) + clipEntries.reduce((total, entry) => total + (entry.searchScore || 0), 0) + noteEntries.length,
+    hasJockeySearch: clipCount > 0,
+    resultType: 'video',
+    categoryKey: topClip?.lane.key,
+    startTime: topClip?.clip.start_time,
+    endTime: topClip?.clip.end_time,
+    confidence: topClip?.clip.confidence,
+    sourceType: topClip?.clip.source_type,
+    openTarget: topClip ? {
+      categoryKey: topClip.lane.key,
+      clipIndex: topClip.index,
+    } : undefined,
+  }
+}
+
+function discoverItemFromClip({
+  game,
+  videoName,
+  sourceIndex,
+  entry,
+  clipCount,
+  semanticCount,
+}: {
+  game: Game
+  videoName: string
+  sourceIndex: number
+  entry: ReturnType<typeof discoverClipEntries>[number] & { searchScore?: number }
+  clipCount: number
+  semanticCount: number
+}): DiscoverItem {
+  const match = discoverMatchFromClip(entry)
+  return {
+    id: `${game.tag}-${videoName}-${entry.lane.key}-${entry.index}-${sourceIndex}`,
+    label: `${entry.lane.label} Moment`,
+    title: entry.clip.description,
+    subtitle: `${videoName} · ${entry.clip.start_time}-${entry.clip.end_time}`,
+    media: streamInfoForVideoName(game, videoName),
+    poster: thumbnailForVideoName(game, videoName),
+    videoName,
+    knowledgeStoreId: game.knowledge_store_id,
+    clipCount,
+    semanticCount,
+    matches: [match],
+    matchHeading: 'Best Evidence',
+    searchScore: (entry.searchScore || 0) + entry.clip.confidence * 2,
+    hasJockeySearch: true,
+    resultType: 'moment',
+    categoryKey: entry.lane.key,
+    startTime: entry.clip.start_time,
+    endTime: entry.clip.end_time,
+    confidence: entry.clip.confidence,
+    sourceType: entry.clip.source_type,
+    openTarget: {
+      categoryKey: entry.lane.key,
+      clipIndex: entry.index,
+    },
+  }
+}
+
+function discoverClipEntries(game: Game, videoName: string, reels?: HighlightReels) {
+  if (!reels) return []
+  return mapLanes.flatMap((lane) =>
+    reels[lane.key].clips
+      .map((clip, index) => ({
+        lane,
+        clip,
+        index,
+        searchText: normalizeSearchText([
+          lane.label,
+          clip.category,
+          clip.clip_type,
+          sourceLabel(clip.source_type),
+          clip.description,
+          clip.score_context,
+          clip.selection_reason,
+          clip.explainability_label,
+          clip.start_time,
+          clip.end_time,
+          clip.video_reference,
+        ].join(' ')),
+      }))
+      .filter((entry) => videoNameForClip(game, entry.clip) === videoName),
+  )
+}
+
+function discoverAssemblyNotes(game: Game, videoName: string, reels: HighlightReels | undefined, activeFilter: DiscoverFilterKey) {
+  if (!reels) return []
+  return mapLanes.flatMap((lane) =>
+    matchesLaneFilter(lane.key, activeFilter)
+      ? reels[lane.key].assembly_notes.map((note) => ({
+        text: note,
+        searchText: normalizeSearchText([lane.label, note, game.label, game.sport, videoName].join(' ')),
+      }))
+      : [],
+  )
+}
+
+function discoverMatchFromClip(entry: ReturnType<typeof discoverClipEntries>[number]): DiscoverMatch {
+  const detailParts = [
+    entry.clip.score_context,
+    entry.clip.selection_reason,
+  ].filter(Boolean)
+  return {
+    id: `${entry.lane.key}-${entry.index}-${entry.clip.start_time}`,
+    label: `${entry.lane.label} · ${sourceLabel(entry.clip.source_type)}`,
+    text: entry.clip.description,
+    detail: detailParts.join(' · ') || entry.clip.explainability_label,
+    categoryKey: entry.lane.key,
+    clipIndex: entry.index,
+    startTime: entry.clip.start_time,
+    endTime: entry.clip.end_time,
+    confidence: entry.clip.confidence,
+    sourceType: entry.clip.source_type,
+  }
+}
+
+function matchesDiscoverFilter(entry: ReturnType<typeof discoverClipEntries>[number], activeFilter: DiscoverFilterKey) {
+  if (activeFilter === 'all') return true
+  if (activeFilter === 'semantic') return entry.clip.source_type !== 'stats'
+  return entry.lane.key === activeFilter
+}
+
+function matchesLaneFilter(laneKey: MapCategoryKey, activeFilter: DiscoverFilterKey) {
+  if (activeFilter === 'all' || activeFilter === 'semantic') return true
+  return laneKey === activeFilter
+}
+
+function discoverStats(sourceVideos: string[], reelsByVideo: Record<string, HighlightReels | undefined>) {
+  const uniqueVideos = uniqueVideoNames(sourceVideos)
+  const entries = uniqueVideos.flatMap((videoName) => {
+    const reels = reelsByVideo[videoName]
+    if (!reels) return []
+    return mapLanes.flatMap((lane) => reels[lane.key].clips)
+  })
+  return {
+    videoCount: uniqueVideos.length,
+    clipCount: entries.length,
+    semanticCount: entries.filter((clip) => clip.source_type !== 'stats').length,
+  }
+}
+
+function normalizeSearchText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function searchTokens(normalizedQuery: string) {
+  return normalizedQuery.split(' ').filter((token) => token.length > 0)
+}
+
+function textMatchesQuery(text: string, normalizedQuery: string, tokens: string[]) {
+  if (!normalizedQuery) return true
+  return text.includes(normalizedQuery) || tokens.every((token) => text.includes(token))
+}
+
+function queryScore(text: string, normalizedQuery: string, tokens: string[]) {
+  if (!normalizedQuery) return 0
+  return (text.includes(normalizedQuery) ? 8 : 0) + tokens.reduce((total, token) => total + (text.includes(token) ? 1 : 0), 0)
 }
 
 function shortId(value: string) {

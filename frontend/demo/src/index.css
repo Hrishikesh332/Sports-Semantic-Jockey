@@ -25,107 +25,6 @@ body {
   height: 100%;
 }
 
-.discovery-stage {
-  perspective: 1850px;
-  perspective-origin: 55% 48%;
-}
-
-.discovery-stage::before,
-.discovery-stage::after {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  content: '';
-}
-
-.discovery-stage::before {
-  background:
-    radial-gradient(ellipse at 52% 48%, rgba(255, 255, 255, 0.06) 0%, transparent 27%, rgba(0, 0, 0, 0.54) 68%, rgba(0, 0, 0, 0.96) 100%),
-    radial-gradient(ellipse at 64% 55%, rgba(0, 220, 130, 0.08), transparent 34%),
-    radial-gradient(ellipse at 34% 32%, rgba(255, 255, 255, 0.08), transparent 30%);
-}
-
-.discovery-stage::after {
-  background:
-    radial-gradient(ellipse at 50% 48%, transparent 0%, transparent 44%, rgba(0, 0, 0, 0.5) 72%, rgba(0, 0, 0, 0.96) 100%),
-    linear-gradient(180deg, rgba(0, 0, 0, 0.78), transparent 17%, transparent 70%, rgba(0, 0, 0, 0.94)),
-    linear-gradient(90deg, rgba(0, 0, 0, 0.66), transparent 30%, transparent 72%, rgba(0, 0, 0, 0.82));
-}
-
-.discovery-spiral-field {
-  animation: discovery-spiral-move 34s ease-in-out infinite;
-  transform: translate3d(-7vw, -2vh, 0) rotateX(4deg) rotateY(-15deg) scale(1.06);
-  transform-style: preserve-3d;
-  will-change: transform;
-}
-
-.discovery-card {
-  left: 0;
-  top: 0;
-  width: var(--card-width);
-  height: calc(var(--card-width) * var(--card-ratio, 0.58));
-  border-radius: 13px;
-  opacity: var(--opacity);
-  transform:
-    translate(-50%, -50%)
-    translate3d(var(--x), var(--y), var(--z))
-    rotateY(var(--rotate-y))
-    rotateZ(var(--rotate-z))
-    scale(var(--scale));
-  transform-style: preserve-3d;
-  backface-visibility: hidden;
-  filter: blur(var(--blur));
-  animation: discovery-card-drift 8s ease-in-out infinite;
-  animation-delay: var(--motion-delay);
-  outline: none;
-  will-change: transform, opacity, filter, box-shadow;
-}
-
-.discovery-card img {
-  filter: saturate(0.98) contrast(0.98) brightness(0.76);
-  transform: scale(1.015);
-  transition: filter 0.24s ease, transform 0.24s ease;
-}
-
-.discovery-card::after {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(90deg, rgba(0, 0, 0, 0.26), transparent 38%, rgba(0, 0, 0, 0.2)),
-    linear-gradient(180deg, rgba(0, 0, 0, 0.08), transparent 38%, rgba(0, 0, 0, 0.28));
-  content: '';
-}
-
-.discovery-card[data-active='true'] {
-  border-color: rgba(255, 255, 255, 0.72);
-  opacity: 1;
-  box-shadow: 0 0 0 1px rgba(0, 220, 130, 0.22), 0 26px 70px rgba(0, 0, 0, 0.56);
-}
-
-.discovery-card[data-primary='false'] {
-  border-color: rgba(255, 255, 255, 0.07);
-  box-shadow: 0 18px 58px rgba(0, 0, 0, 0.48);
-}
-
-.discovery-card video {
-  filter: saturate(1.05) brightness(0.72);
-}
-
-.discovery-card:hover {
-  border-color: rgba(255, 255, 255, 0.72);
-  opacity: 1;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 26px 70px rgba(0, 0, 0, 0.58);
-}
-
-.discovery-card:hover img,
-.discovery-card[data-active='true'] img,
-.discovery-card:hover video,
-.discovery-card[data-active='true'] video {
-  filter: saturate(1.04) brightness(0.98);
-  transform: scale(1.035);
-}
-
 .workspace-video-carousel::before,
 .workspace-video-carousel::after {
   position: absolute;
@@ -164,17 +63,6 @@ body {
   animation-play-state: paused;
 }
 
-@media (max-width: 900px) {
-  .discovery-stage {
-    perspective: 980px;
-  }
-
-  .discovery-spiral-field {
-    animation-name: discovery-spiral-move-mobile;
-    transform: translate3d(-4vw, 4vh, 0) rotateX(2deg) rotateY(-7deg) scale(0.66);
-  }
-}
-
 @keyframes workspace-carousel-slide {
   0% {
     transform: translateX(-50%);
@@ -182,38 +70,5 @@ body {
 
   100% {
     transform: translateX(0);
-  }
-}
-
-@keyframes discovery-spiral-move {
-  0%,
-  100% {
-    transform: translate3d(-9vw, -5vh, 0) rotateX(5deg) rotateY(-16deg) rotateZ(-0.8deg) scale(1.06);
-  }
-
-  50% {
-    transform: translate3d(7vw, 5vh, 180px) rotateX(2deg) rotateY(13deg) rotateZ(0.8deg) scale(1.03);
-  }
-}
-
-@keyframes discovery-spiral-move-mobile {
-  0%,
-  100% {
-    transform: translate3d(-12vw, 4vh, 0) rotateX(2deg) rotateY(-10deg) scale(0.58);
-  }
-
-  50% {
-    transform: translate3d(2vw, 0, 90px) rotateX(3deg) rotateY(9deg) scale(0.58);
-  }
-}
-
-@keyframes discovery-card-drift {
-  0%,
-  100% {
-    margin-top: 0;
-  }
-
-  50% {
-    margin-top: -10px;
   }
 }

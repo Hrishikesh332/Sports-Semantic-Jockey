@@ -1,10 +1,12 @@
 import json
 import re
 import subprocess
+from datetime import datetime, timezone
 from hashlib import sha256
 from copy import deepcopy
 from pathlib import Path
 
+from app.core.config import TWELVELABS_MODEL
 from app.core.errors import ApiError
 from app.domain.highlights import validate_highlight_confidences
 from app.integrations.twelvelabs import request_json as twelvelabs_request_json
@@ -41,11 +43,55 @@ HIGHLIGHT_CATEGORY_KEYS = [
     "fan_experience",
     "behind_the_scenes",
 ]
+GENERATED_REEL_LOGS_FIELD = "jockey_reel_response_logs"
+GENERATED_REEL_LOG_TYPE = "sports_jockey_generated_highlight_reels"
+GENERATED_REEL_LOG_SCHEMA_VERSION = 1
+JOCKEY_SEARCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query_interpretation": {"type": "string"},
+        "total_results": {"type": "integer"},
+        "results": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "video_reference": {"type": "string"},
+                    "timestamp": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "relevance": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["video_reference", "timestamp", "description", "relevance"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["query_interpretation", "total_results", "results"],
+    "additionalProperties": False,
+}
+JOCKEY_SEARCH_FILTER_PROMPTS = {
+    "semantic": "Prioritize semantic or visual/auditory evidence: emotion, crowd atmosphere, reactions, scenes, OCR, speech, and contextual meaning.",
+    "standard_stats": "Prioritize scoreboard, scoring, game-state, official event, and stats-style moments.",
+    "best_plays": "Prioritize decisive plays, goals, attacks, saves, transitions, momentum swings, and clear game-action peaks.",
+    "emotional_moments": "Prioritize player emotion, celebration, frustration, relief, heartbreak, hugs, fist pumps, tears, and tense reactions.",
+    "fan_experience": "Prioritize crowd roars, signs, chants, fans, stadium atmosphere, mascots, and broadcast audience reaction.",
+    "behind_the_scenes": "Prioritize warmups, benches, coaches, huddles, tunnels, sidelines, and contextual non-play moments.",
+}
+GAME_DEBUG_FIELDS = {
+    "highlight_response_log",
+    "highlight_response_logs",
+    "jockey_metadata_cache",
+    GENERATED_REEL_LOGS_FIELD,
+}
 
 
 def list_games():
     GAMES_DIR.mkdir(parents=True, exist_ok=True)
-    games = [read_json(path) for path in sorted(GAMES_DIR.glob("*.json"))]
+    games = [public_game(read_json(path)) for path in sorted(GAMES_DIR.glob("*.json"))]
     return {"games": games}
 
 
@@ -56,11 +102,17 @@ def get_game(tag):
     return read_json(path)
 
 
+def public_game(game):
+    return {key: value for key, value in game.items() if key not in GAME_DEBUG_FIELDS}
+
+
 def register_game(payload):
     tag = required_payload_string(payload, "tag")
     if not TAG_PATTERN.match(tag):
         raise ApiError("tag must be lowercase letters, numbers, and hyphens", 400)
 
+    path = game_path(tag)
+    existing_game = read_json(path) if path.exists() else {}
     source_videos = validate_source_videos(payload.get("source_videos", []))
     game = {
         "tag": tag,
@@ -74,6 +126,10 @@ def register_game(payload):
     if video_reference_map:
         game["video_reference_map"] = video_reference_map
 
+    video_asset_ids = validate_video_asset_ids(payload.get("video_asset_ids", {}), source_videos)
+    if video_asset_ids:
+        game["video_asset_ids"] = video_asset_ids
+
     if "wsc_baseline" in payload:
         game["wsc_baseline"] = payload["wsc_baseline"]
     if "highlight_response_log" in payload:
@@ -81,9 +137,11 @@ def register_game(payload):
     highlight_response_logs = validate_highlight_response_logs(payload.get("highlight_response_logs", {}), source_videos)
     if highlight_response_logs:
         game["highlight_response_logs"] = highlight_response_logs
+    if isinstance(existing_game.get(GENERATED_REEL_LOGS_FIELD), dict):
+        game[GENERATED_REEL_LOGS_FIELD] = existing_game[GENERATED_REEL_LOGS_FIELD]
 
     GAMES_DIR.mkdir(parents=True, exist_ok=True)
-    game_path(tag).write_text(json.dumps(game, indent=2, ensure_ascii=False))
+    path.write_text(json.dumps(game, indent=2, ensure_ascii=False))
     return game
 
 
@@ -91,27 +149,326 @@ def generate_game_highlight_reels(tag, payload=None):
     game = get_game(tag)
     payload = payload or {}
     requested_video = payload.get("video_name") or payload.get("source_video")
+    video_name = None
     if requested_video:
         video_name = validate_registered_video_name(game, requested_video)
-        video_log = game.get("highlight_response_logs", {}).get(video_name)
-        if video_log:
-            return highlight_reels_from_log(video_log)
-        if game.get("highlight_response_log"):
-            reels = highlight_reels_from_log(game["highlight_response_log"])
-            return filter_highlight_reels_for_video(game, reels, video_name)
-    elif game.get("highlight_response_logs"):
-        first_video = next(iter(game["highlight_response_logs"]))
-        return highlight_reels_from_log(game["highlight_response_logs"][first_video])
-    elif game.get("highlight_response_log"):
-        return highlight_reels_from_log(game["highlight_response_log"])
 
-    match_context = payload.get("match_context") or scoped_match_context(game, requested_video)
+    if payload.get("use_pinned_log"):
+        if video_name:
+            video_log = game.get("highlight_response_logs", {}).get(video_name)
+            if video_log:
+                return highlight_reels_from_log(video_log)
+            if game.get("highlight_response_log"):
+                reels = highlight_reels_from_log(game["highlight_response_log"])
+                return filter_highlight_reels_for_video(game, reels, video_name)
+        elif game.get("highlight_response_logs"):
+            first_video = next(iter(game["highlight_response_logs"]))
+            return highlight_reels_from_log(game["highlight_response_logs"][first_video])
+        elif game.get("highlight_response_log"):
+            return highlight_reels_from_log(game["highlight_response_log"])
+
+        raise ApiError("pinned highlight response log is not configured for this request", 404)
+
+    match_context = payload.get("match_context") or scoped_match_context(game, video_name)
     wsc_baseline = payload.get("wsc_baseline", game.get("wsc_baseline"))
-    return generate_highlight_reels(
+    context_hash = highlight_cache_context_hash(match_context, wsc_baseline)
+
+    if video_name and not should_refresh_reel_log_cache(payload):
+        cached_reels = highlight_reels_from_generated_log_cache(game, video_name, context_hash)
+        if cached_reels:
+            return cached_reels
+
+    reels = generate_highlight_reels(
         knowledge_store_id=game["knowledge_store_id"],
         match_context=match_context,
         wsc_baseline=wsc_baseline,
     )
+    if video_name:
+        store_generated_highlight_reels_log_cache(tag, game, video_name, context_hash, reels)
+    return reels
+
+
+def search_game_videos(tag, payload=None):
+    game = get_game(tag)
+    payload = payload or {}
+    query = required_payload_string(payload, "query")
+    limit = optional_payload_int(payload.get("limit"), "limit", default=12, minimum=1, maximum=24)
+    requested_video = payload.get("video_name") or payload.get("source_video")
+    video_name = validate_registered_video_name(game, requested_video) if requested_video else None
+    filter_key = optional_payload_string(payload.get("filter"), "filter") if payload.get("filter") else None
+    if filter_key == "all":
+        filter_key = None
+    if filter_key and filter_key not in JOCKEY_SEARCH_FILTER_PROMPTS:
+        raise ApiError("filter is not supported", 400)
+
+    result = twelvelabs_request_json(
+        "post",
+        "/responses",
+        {
+            "model": TWELVELABS_MODEL,
+            "instructions": jockey_search_instructions(),
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": jockey_search_prompt(game, query, limit, filter_key, video_name),
+                }
+            ],
+            "knowledge_store_id": game["knowledge_store_id"],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "search_results",
+                    "schema": JOCKEY_SEARCH_SCHEMA,
+                }
+            },
+        },
+    )
+    search = parse_jockey_response_json(result, "TwelveLabs Jockey search response")
+    return normalize_jockey_search(game, query, search, limit)
+
+
+def jockey_search_instructions():
+    return (
+        "You are a precise multimodal video search agent for sports footage. "
+        "Use only the indexed knowledge store evidence. Return JSON only. "
+        "Every result must be grounded in a visible, audible, spoken, OCR, semantic, or game-event moment from the videos. "
+        "Do not invent timestamps, clips, filenames, scores, players, or relevance."
+    )
+
+
+def jockey_search_prompt(game, query, limit, filter_key=None, video_name=None):
+    parts = [
+        f"Search this sports knowledge store for: {query}",
+        f"Return up to {limit} ranked results.",
+        "Each result must include the best available video_reference, timestamp, start_time, end_time, title, description, relevance, and confidence.",
+        "Use timestamp/start_time/end_time as timecodes like M:SS or H:MM:SS. If the end time is not explicit, choose a short useful end time after the start.",
+        "Use concise titles suitable for a search result card.",
+        f"Game context: {game['label']} ({game['sport']}).",
+        "Registered source videos: " + "; ".join(game.get("source_videos", [])),
+    ]
+    if video_name:
+        parts.append(f"Search only this registered source video: {video_name}.")
+    if filter_key:
+        parts.append(JOCKEY_SEARCH_FILTER_PROMPTS[filter_key])
+    parts.append("If no grounded matches exist, return total_results 0 and an empty results array.")
+    return "\n".join(parts)
+
+
+def parse_jockey_response_json(result, source_label):
+    for output in result.get("output", []):
+        if output.get("type") != "message":
+            continue
+        for content in output.get("content", []):
+            text = content.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ApiError(f"{source_label} text was not valid JSON", 502) from exc
+    raise ApiError(f"{source_label} did not include message text", 502)
+
+
+def normalize_jockey_search(game, query, search, limit):
+    if not isinstance(search, dict):
+        raise ApiError("TwelveLabs Jockey search response was not an object", 502)
+    raw_results = search.get("results", [])
+    if not isinstance(raw_results, list):
+        raise ApiError("TwelveLabs Jockey search response results was not an array", 502)
+
+    results = []
+    for index, raw_result in enumerate(raw_results[:limit]):
+        if not isinstance(raw_result, dict):
+            continue
+        normalized = normalize_jockey_search_result(game, raw_result, index)
+        if normalized:
+            results.append(normalized)
+
+    return {
+        "query": query,
+        "query_interpretation": clean_optional_string(search.get("query_interpretation")) or query,
+        "total_results": len(results),
+        "results": results,
+    }
+
+
+def normalize_jockey_search_result(game, raw_result, index):
+    reference = clean_optional_string(raw_result.get("video_reference"))
+    description = clean_optional_string(raw_result.get("description"))
+    relevance = clean_optional_string(raw_result.get("relevance"))
+    if not reference or not description or not relevance:
+        return None
+
+    start_time = clean_optional_string(raw_result.get("start_time"))
+    end_time = clean_optional_string(raw_result.get("end_time"))
+    timestamp = clean_optional_string(raw_result.get("timestamp"))
+    range_start, range_end = split_time_range(timestamp)
+    start_time = start_time or range_start or timestamp
+    end_time = end_time or range_end or default_end_time(start_time)
+    title = clean_optional_string(raw_result.get("title")) or description[:80]
+    video_name = video_name_for_reference(game, reference)
+    confidence = raw_result.get("confidence")
+    if not isinstance(confidence, (int, float)):
+        confidence = None
+
+    return {
+        "id": f"search-{index}-{sha256(json.dumps(raw_result, sort_keys=True, default=str).encode()).hexdigest()[:12]}",
+        "video_reference": reference,
+        "video_name": video_name,
+        "timestamp": timestamp or start_time,
+        "start_time": start_time,
+        "end_time": end_time,
+        "title": title,
+        "description": description,
+        "relevance": relevance,
+        "confidence": confidence,
+        "source_asset_id": asset_id_for_video_name(game, video_name) if video_name else None,
+    }
+
+
+def split_time_range(value):
+    if not isinstance(value, str) or not value.strip():
+        return None, None
+    parts = re.split(r"\s*(?:-|–|—|to)\s*", value.strip(), maxsplit=1)
+    if len(parts) != 2:
+        return value.strip(), None
+    return clean_optional_string(parts[0]), clean_optional_string(parts[1])
+
+
+def default_end_time(start_time):
+    seconds = seconds_from_timecode(start_time)
+    if seconds is None:
+        return start_time
+    return timecode_from_seconds(seconds + 12)
+
+
+def seconds_from_timecode(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parts = value.strip().split(":")
+    if not 1 <= len(parts) <= 3:
+        return None
+    total = 0
+    for part in parts:
+        try:
+            number = int(float(part))
+        except ValueError:
+            return None
+        total = total * 60 + number
+    return total
+
+
+def timecode_from_seconds(total_seconds):
+    total_seconds = max(0, int(round(total_seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def should_refresh_reel_log_cache(payload):
+    return any(
+        bool(payload.get(key))
+        for key in ("refresh", "force", "force_refresh", "force_regenerate", "ignore_log_cache")
+    )
+
+
+def highlight_reels_from_generated_log_cache(game, video_name, context_hash):
+    log_cache = game.get(GENERATED_REEL_LOGS_FIELD, {})
+    if not isinstance(log_cache, dict):
+        return None
+    log_name = log_cache.get(video_name)
+    if not log_name:
+        return None
+    return generated_highlight_reels_from_log(log_name, video_name, context_hash)
+
+
+def generated_highlight_reels_from_log(log_name, video_name, context_hash):
+    path = highlight_log_path(log_name)
+    if not path.exists():
+        return None
+    data = read_json(path)
+    if data.get("type") != GENERATED_REEL_LOG_TYPE:
+        return None
+    if data.get("schema_version") != GENERATED_REEL_LOG_SCHEMA_VERSION:
+        return None
+    if data.get("model") != TWELVELABS_MODEL:
+        return None
+    if data.get("video_name") != video_name:
+        return None
+    if data.get("context_hash") != context_hash:
+        return None
+
+    reels = data.get("reels")
+    if not is_complete_highlight_reels(reels):
+        return None
+    try:
+        validate_highlight_confidences(reels, f"generated highlight response log {path.name}")
+    except ApiError:
+        return None
+    return reels
+
+
+def store_generated_highlight_reels_log_cache(tag, game, video_name, context_hash, reels):
+    if not is_complete_highlight_reels(reels):
+        return
+    log_name = write_generated_highlight_reels_log(tag, video_name, context_hash, reels)
+    path = game_path(tag)
+    current_game = read_json(path) if path.exists() else deepcopy(game)
+    log_cache = current_game.setdefault(GENERATED_REEL_LOGS_FIELD, {})
+    if not isinstance(log_cache, dict):
+        log_cache = {}
+        current_game[GENERATED_REEL_LOGS_FIELD] = log_cache
+    log_cache[video_name] = log_name
+    GAMES_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(current_game, indent=2, ensure_ascii=False))
+
+
+def write_generated_highlight_reels_log(tag, video_name, context_hash, reels):
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    generated_at = timestamp()
+    source_slug = slugify_filename(Path(video_name).stem)
+    log_name = f"{generated_at}_{tag}_{source_slug}_generated_highlight_reels.json"
+    body = {
+        "type": GENERATED_REEL_LOG_TYPE,
+        "schema_version": GENERATED_REEL_LOG_SCHEMA_VERSION,
+        "generated_at": generated_at,
+        "tag": tag,
+        "video_name": video_name,
+        "model": TWELVELABS_MODEL,
+        "context_hash": context_hash,
+        "reels": reels,
+    }
+    (LOGS_DIR / log_name).write_text(json.dumps(body, indent=2, ensure_ascii=False))
+    return log_name
+
+
+def is_complete_highlight_reels(reels):
+    if not isinstance(reels, dict) or not HIGHLIGHT_RESPONSE_KEYS.issubset(reels.keys()):
+        return False
+    if not isinstance(reels.get("match_summary"), str) or not reels["match_summary"].strip():
+        return False
+    for category in HIGHLIGHT_CATEGORY_KEYS:
+        body = reels.get(category)
+        if not isinstance(body, dict):
+            return False
+        if not isinstance(body.get("clips"), list):
+            return False
+        if not isinstance(body.get("assembly_notes"), list):
+            return False
+    return True
+
+
+def highlight_cache_context_hash(match_context, wsc_baseline):
+    body = json.dumps(
+        {"match_context": match_context, "wsc_baseline": wsc_baseline},
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    return sha256(body.encode()).hexdigest()
 
 
 def registered_video_path(tag, video_name):
@@ -332,6 +689,10 @@ def slugify_filename(value):
     return slug[:80] or "reel"
 
 
+def timestamp():
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+
 def game_path(tag):
     return GAMES_DIR / f"{tag}.json"
 
@@ -435,10 +796,50 @@ def clip_video_name(game, clip):
     if not isinstance(clip, dict):
         return None
     reference = clip.get("video_reference")
-    if not isinstance(reference, str):
+    return video_name_for_reference(game, reference)
+
+
+def video_name_for_reference(game, reference):
+    if not isinstance(reference, str) or not reference.strip():
         return None
+    reference = reference.strip()
     source_videos = set(game.get("source_videos", []))
-    return game.get("video_reference_map", {}).get(reference) or (reference if reference in source_videos else None)
+    reference_map = game.get("video_reference_map", {})
+    if isinstance(reference_map, dict) and reference in reference_map:
+        return reference_map[reference]
+    if reference in source_videos:
+        return reference
+
+    asset_map = game.get("video_asset_ids", {})
+    if isinstance(asset_map, dict):
+        for video_name, asset_id in asset_map.items():
+            if asset_id == reference:
+                return video_name
+
+    basename = Path(reference).name
+    if basename in source_videos:
+        return basename
+
+    normalized_reference = reference.lower()
+    for video_name in source_videos:
+        normalized_video = video_name.lower()
+        if normalized_reference == normalized_video:
+            return video_name
+        if normalized_video in normalized_reference or normalized_reference in normalized_video:
+            return video_name
+        if Path(video_name).stem.lower() in normalized_reference:
+            return video_name
+    return None
+
+
+def asset_id_for_video_name(game, video_name):
+    if not video_name:
+        return None
+    video_asset_ids = game.get("video_asset_ids", {})
+    if not isinstance(video_asset_ids, dict):
+        return None
+    asset_id = video_asset_ids.get(video_name)
+    return asset_id if isinstance(asset_id, str) and asset_id.strip() else None
 
 
 def validate_registered_video_name(game, video_name, status_code=400):
@@ -498,11 +899,60 @@ def validate_video_reference_map(video_reference_map, source_videos):
     return validated
 
 
+def validate_video_asset_ids(video_asset_ids, source_videos):
+    if video_asset_ids is None:
+        return {}
+    if not isinstance(video_asset_ids, dict):
+        raise ApiError("video_asset_ids must be an object", 400)
+
+    source_video_set = set(source_videos)
+    validated = {}
+    for video_name, asset_id in video_asset_ids.items():
+        if not isinstance(video_name, str) or not video_name.strip():
+            raise ApiError("video_asset_ids keys must be source video names", 400)
+        clean_video_name = video_name.strip()
+        if clean_video_name not in source_video_set:
+            raise ApiError(f"video_asset_ids key is not a registered source video: {clean_video_name}", 400)
+        if not isinstance(asset_id, str) or not asset_id.strip():
+            raise ApiError("video_asset_ids values must be non-empty strings", 400)
+        validated[clean_video_name] = asset_id.strip()
+    return validated
+
+
 def required_payload_string(payload, key):
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ApiError(f"{key} is required", 400)
     return value.strip()
+
+
+def optional_payload_string(value, key):
+    if not isinstance(value, str) or not value.strip():
+        raise ApiError(f"{key} must be a non-empty string", 400)
+    return value.strip()
+
+
+def optional_payload_int(value, key, default, minimum=None, maximum=None):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ApiError(f"{key} must be an integer", 400)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ApiError(f"{key} must be an integer", 400)
+    if minimum is not None and parsed < minimum:
+        raise ApiError(f"{key} must be at least {minimum}", 400)
+    if maximum is not None and parsed > maximum:
+        raise ApiError(f"{key} must be at most {maximum}", 400)
+    return parsed
+
+
+def clean_optional_string(value):
+    if not isinstance(value, str):
+        return None
+    clean_value = value.strip()
+    return clean_value or None
 
 
 def read_json(path):

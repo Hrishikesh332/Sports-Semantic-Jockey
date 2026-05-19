@@ -9,9 +9,11 @@ from app.services.games import (
     generate_game_highlight_reels,
     get_game,
     list_games,
+    public_game,
     register_game,
     registered_thumbnail_path,
     registered_video_path,
+    search_game_videos,
     twelvelabs_stream_info,
 )
 
@@ -27,18 +29,24 @@ def index_games():
 @games_bp.post("/games")
 def create_game():
     game = register_game(json_body())
-    return jsonify(game), 201
+    return jsonify(public_game(game)), 201
 
 
 @games_bp.get("/games/<tag>")
 def show_game(tag):
-    return jsonify(get_game(tag))
+    return jsonify(public_game(get_game(tag)))
 
 
 @games_bp.post("/games/<tag>/highlight-reels")
 def create_game_highlight_reels(tag):
     reels = generate_game_highlight_reels(tag, json_body())
     return jsonify(reels)
+
+
+@games_bp.post("/games/<tag>/search")
+def search_game(tag):
+    results = search_game_videos(tag, json_body())
+    return jsonify(results)
 
 
 @games_bp.get("/games/<tag>/media/<video_name>")

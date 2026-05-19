@@ -11,12 +11,30 @@ cp .env.example .env
 flask --app app run --port 5000
 ```
 
+Production command:
+
+```bash
+gunicorn wsgi:app --timeout 800
+```
+
 Required environment:
 
 ```env
 TWELVELABS_API_KEY=
 PORT=5000
+APP_URL=
+KEEP_ALIVE_ENABLED=true
+KEEP_ALIVE_INTERVAL_MINUTES=9
+KEEP_ALIVE_PATH=/health
+KEEP_ALIVE_URL=
+KEEP_ALIVE_TIMEOUT_SECONDS=15
 ```
+
+`APP_URL` should be the deployed backend URL, for example `https://your-app.example.com`.
+When `APP_URL` is set and the backend is run through `wsgi.py`, APScheduler
+starts a background keep-alive job and pings `${APP_URL}/health` every 9
+minutes. Set `KEEP_ALIVE_URL` only if you need to override the exact URL being
+called.
 
 ## Structure
 
@@ -36,9 +54,19 @@ wsgi.py                local entrypoint
 
 ## Endpoints
 
+### `GET /health`
+
+Lightweight health check used by the keep-alive scheduler.
+
+Returns:
+
+```json
+{"status": "ok"}
+```
+
 ### `POST /assets`
 
-Uploads a local file to TwelveLabs using direct upload.
+Uploads a local file to TwelveLabs. Small files use direct upload; large files use TwelveLabs multipart upload.
 
 Content type: `multipart/form-data`
 
@@ -82,6 +110,32 @@ Body:
 ```
 
 Returns: TwelveLabs knowledge store item object.
+
+### `POST /ingestions`
+
+Runs the backend-owned ingestion workflow end to end: link local source videos for playback, create or reuse a TwelveLabs knowledge store, upload source assets for HLS playback, upload/index the configured knowledge-store videos, poll until items are ready, register the local game, and optionally generate per-video debug highlight response logs.
+
+Body:
+
+```json
+{
+  "tag": "sports",
+  "label": "Sports",
+  "sport": "Sports",
+  "source_videos": [
+    {"path": "data/videos/match.mp4"}
+  ],
+  "index_videos": [
+    {"path": "data/videos/match.mp4", "source_name": "match.mp4", "offset_seconds": 0}
+  ],
+  "state_file": "sports_ingest_state.json",
+  "generate_highlights": true
+}
+```
+
+`index_videos` is optional. Provide it when a source video must be indexed as multiple parts; `source_name` maps each indexed part back to the playable source video, and `offset_seconds` shifts returned clip timestamps back onto the full source timeline.
+
+Returns the app-facing registered game, source `video_asset_ids`, item statuses, and explicit debug highlight response logs when generated.
 
 ### `GET /knowledge-stores/<store_id>/items/<item_id>`
 
@@ -151,38 +205,62 @@ Body:
   "sport": "Soccer",
   "knowledge_store_id": "store_id",
   "source_videos": ["match.mp4"],
+  "video_asset_ids": {"match.mp4": "asset_id"},
   "video_reference_map": {"jockey_video_reference": "match.mp4"},
-  "highlight_response_log": "stored_response_log.json",
+  "highlight_response_log": "optional_debug_response_log.json",
   "wsc_baseline": {}
 }
 ```
 
 Required: `tag`, `label`, `sport`, `knowledge_store_id`
 
-Returns: registered game object.
+Returns: app-facing registered game object. Debug log fields are retained in the local registry for manual diagnostics, but they are not exposed through `/games` responses.
 
 ### `GET /games`
 
-Lists local analyzed game registrations.
+Lists local analyzed game registrations without debug log fields.
 
 ### `GET /games/<tag>`
 
-Returns one local analyzed game registration.
+Returns one local analyzed game registration without debug log fields.
 
 ### `POST /games/<tag>/highlight-reels`
 
-Calls Jockey live using the tag's registered `knowledge_store_id`, unless the game has `highlight_response_log`, in which case it returns that stored real response log.
+Returns a complete per-source Jockey highlight response. Knowledge-base discovery, source-video metadata, thumbnails, and streaming stay live through backend/TwelveLabs endpoints. Only the generated Jockey reel response is cached: the backend first checks a generated response log for the requested source video, and only calls Jockey live with the tag's registered `knowledge_store_id` when no complete generated log exists. Legacy pinned response logs are still only available for manual debug replay with `use_pinned_log: true`; the frontend does not send that flag.
 
 Body:
 
 ```json
 {
+  "video_name": "Optional registered source video name",
   "match_context": "Optional match context",
-  "wsc_baseline": {}
+  "wsc_baseline": {},
+  "use_pinned_log": false,
+  "force_refresh": false,
+  "ignore_log_cache": false
 }
 ```
 
+When the response is generated live for a `video_name`, the backend writes a generated response log with all required sections: `match_summary`, `standard_stats`, `best_plays`, `emotional_moments`, `fan_experience`, and `behind_the_scenes`. Use `force_refresh: true` or `ignore_log_cache: true` only when you intentionally want to bypass the generated log and regenerate.
+
 Returns the same highlight schema as `POST /highlight-reels`.
+
+### `POST /games/<tag>/search`
+
+Runs live TwelveLabs Jockey natural-language video search for the registered game's `knowledge_store_id`. This follows the Jockey search recipe: the backend calls `/v1.3/responses` with `model: "jockey1.0"` and a structured JSON schema for search results, then maps returned video references back to registered source videos.
+
+Body:
+
+```json
+{
+  "query": "goal celebration",
+  "limit": 12,
+  "filter": "semantic",
+  "video_name": "Optional registered source video name"
+}
+```
+
+`filter` is optional and may be `all`, `semantic`, `standard_stats`, `best_plays`, `emotional_moments`, `fan_experience`, or `behind_the_scenes`. Search responses are not read from or written to generated reel logs.
 
 ### `GET /games/<tag>/media/<video_name>`
 

@@ -13,3 +13,35 @@ def twelvelabs_api_key():
 
 def port():
     return int(os.environ.get("PORT", "5000"))
+
+
+def app_url():
+    return os.environ.get("APP_URL", "").strip().rstrip("/")
+
+
+def keep_alive_enabled():
+    value = os.environ.get("KEEP_ALIVE_ENABLED", "true").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def keep_alive_interval_minutes():
+    return max(1, int(os.environ.get("KEEP_ALIVE_INTERVAL_MINUTES", "9")))
+
+
+def keep_alive_timeout_seconds():
+    return max(1, int(os.environ.get("KEEP_ALIVE_TIMEOUT_SECONDS", "15")))
+
+
+def keep_alive_url():
+    explicit_url = os.environ.get("KEEP_ALIVE_URL", "").strip()
+    if explicit_url:
+        return explicit_url
+
+    base_url = app_url()
+    if not base_url:
+        return None
+
+    path = os.environ.get("KEEP_ALIVE_PATH", "/health").strip()
+    if not path:
+        return base_url
+    return f"{base_url}/{path.lstrip('/')}"
