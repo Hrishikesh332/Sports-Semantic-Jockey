@@ -7,7 +7,6 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LOG_DIR = ROOT / "logs"
 VIDEOS = [ROOT / "data/videos/Olympics 13.mp4", ROOT / "data/videos/Olympics 14.mp4"]
 GAME_TAG = "olympics-smoke"
 sys.path.insert(0, str(ROOT))
@@ -23,13 +22,6 @@ def load_env(path):
             continue
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip("'").strip('"'))
-
-
-def write_log(name, data):
-    LOG_DIR.mkdir(exist_ok=True)
-    path = LOG_DIR / f"{timestamp()}_{name}.json"
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    return str(path)
 
 
 def timestamp():
@@ -228,8 +220,7 @@ def brief_highlight_reels(body):
 
 
 def finish(summary, raw):
-    log_path = write_log("olympics_smoke_test", raw)
-    print(json.dumps({"summary": summary, "log_path": log_path}, indent=2, ensure_ascii=False))
+    print(json.dumps({"summary": summary}, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

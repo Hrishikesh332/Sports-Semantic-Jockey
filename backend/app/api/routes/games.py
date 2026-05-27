@@ -1,13 +1,14 @@
 from flask import Blueprint, Response, jsonify, request, send_file, send_from_directory
 
 from app.core.errors import ApiError
-from app.core.validation import json_body
+from app.core.validation import json_body, uploaded_file
 from app.services.games import (
     THUMBNAILS_DIR,
     VIDEOS_DIR,
     generated_reel_clip,
     generated_reel_thumbnail,
     generate_game_highlight_reels,
+    create_jockey_chat_response,
     get_game,
     list_games,
     public_game,
@@ -17,6 +18,7 @@ from app.services.games import (
     registered_video_path,
     search_game_videos,
     twelvelabs_stream_info,
+    upload_game_video,
 )
 
 
@@ -49,6 +51,18 @@ def create_game_highlight_reels(tag):
 def search_game(tag):
     results = search_game_videos(tag, json_body())
     return jsonify(results)
+
+
+@games_bp.post("/games/<tag>/upload")
+def upload_game_media(tag):
+    result = upload_game_video(tag, uploaded_file())
+    return jsonify(result), 202
+
+
+@games_bp.post("/games/<tag>/jockey-chat")
+def jockey_chat(tag):
+    result = create_jockey_chat_response(tag, json_body())
+    return jsonify(result)
 
 
 @games_bp.get("/games/<tag>/media/<video_name>")

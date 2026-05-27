@@ -16,6 +16,8 @@ CHUNK_UPLOAD_TIMEOUT_SECONDS = int(os.environ.get("TWELVELABS_CHUNK_UPLOAD_TIMEO
 MULTIPART_STATUS_ATTEMPTS = int(os.environ.get("TWELVELABS_MULTIPART_STATUS_ATTEMPTS", "60"))
 MULTIPART_STATUS_INTERVAL_SECONDS = int(os.environ.get("TWELVELABS_MULTIPART_STATUS_INTERVAL_SECONDS", "10"))
 PRESIGNED_URL_BATCH_SIZE = int(os.environ.get("TWELVELABS_PRESIGNED_URL_BATCH_SIZE", "50"))
+ANALYZE_RETRY_ATTEMPTS = max(1, int(os.environ.get("TWELVELABS_ANALYZE_RETRY_ATTEMPTS", "2")))
+ANALYZE_RETRY_INTERVAL_SECONDS = float(os.environ.get("TWELVELABS_ANALYZE_RETRY_INTERVAL_SECONDS", "5"))
 
 
 def json_headers():
@@ -33,12 +35,43 @@ def file_headers():
 
 
 def request_json(method, path, payload=None):
+    attempts = ANALYZE_RETRY_ATTEMPTS if path == "/analyze" else 1
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.request(
+                method,
+                f"{TWELVELABS_BASE_URL}{path}",
+                headers=json_headers(),
+                json=payload,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            return parse_response(response)
+        except requests.RequestException as exc:
+            if attempt < attempts:
+                time.sleep(ANALYZE_RETRY_INTERVAL_SECONDS)
+                continue
+            raise ApiError(str(exc), 502) from exc
+
+    raise ApiError("TwelveLabs request failed", 502)
+
+
+def request_form(method, path, fields):
+    form_fields = []
+    for key, value in fields:
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                form_fields.append((key, (None, str(item))))
+        else:
+            form_fields.append((key, (None, str(value))))
+
     try:
         response = requests.request(
             method,
             f"{TWELVELABS_BASE_URL}{path}",
-            headers=json_headers(),
-            json=payload,
+            headers=file_headers(),
+            files=form_fields,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
@@ -310,6 +343,8 @@ def parse_response(response):
     try:
         data = response.json()
     except ValueError as exc:
+        if response.status_code < 400 and response.text.strip():
+            return {"text": response.text}
         raise ApiError(response.text, response.status_code if response.status_code >= 400 else 502) from exc
 
     if response.status_code >= 400:

@@ -4,12 +4,17 @@ import os
 
 TWELVELABS_BASE_URL = "https://api.twelvelabs.io/v1.3"
 TWELVELABS_MODEL = "jockey1.0"
+TWELVELABS_PEGASUS_MODEL = os.environ.get("TWELVELABS_PEGASUS_MODEL", "pegasus1.5")
 REQUEST_TIMEOUT_SECONDS = int(os.environ.get("TWELVELABS_REQUEST_TIMEOUT_SECONDS", "900"))
 UPLOAD_TIMEOUT_SECONDS = 900
 
 
 def twelvelabs_api_key():
     return os.environ.get("TWELVELABS_API_KEY")
+
+
+def twelvelabs_index_id():
+    return os.environ.get("INDEX_ID")
 
 
 def port():
@@ -42,11 +47,6 @@ def keep_alive_interval_minutes():
 
 def keep_alive_timeout_seconds():
     return max(1, int(os.environ.get("KEEP_ALIVE_TIMEOUT_SECONDS", "15")))
-
-
-def highlight_reel_cache_enabled():
-    value = os.environ.get("HIGHLIGHT_REEL_CACHE_ENABLED", "false").strip().lower()
-    return value in {"1", "true", "yes", "on"}
 
 
 def default_game_registrations():

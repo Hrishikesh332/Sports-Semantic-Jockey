@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 import Hls from 'hls.js'
+import type { CSSProperties, DragEvent, MouseEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import logoFull from '../../assets/logo-full.svg?raw'
 
@@ -16,9 +17,11 @@ type Game = {
   label: string
   sport: string
   knowledge_store_id: string
+  marengo_index_id?: string
   source_videos?: string[]
   video_reference_map?: Record<string, string>
   video_asset_ids?: Record<string, string>
+  marengo_video_ids?: Record<string, string>
 }
 
 type Clip = {
@@ -33,6 +36,12 @@ type Clip = {
   selection_reason: string
   confidence: number
   explainability_label: string
+  evidence_summary?: string
+  visual_evidence?: string[]
+  audio_evidence?: string[]
+  transcript_evidence?: string[]
+  timeline_rationale?: string
+  editorial_use?: string
 }
 
 type HighlightCategory = {
@@ -49,15 +58,36 @@ type HighlightReels = {
   emotional_moments: HighlightCategory
   fan_experience: HighlightCategory
   behind_the_scenes: HighlightCategory
+  _pegasus_metadata?: PegasusResponseMetadata
 }
 
 type CategoryKey = 'best_plays' | 'emotional_moments' | 'fan_experience' | 'behind_the_scenes'
 type MapCategoryKey = 'standard_stats' | CategoryKey
+type AssemblyModeKey = 'wsc_baseline' | 'twelvelabs_enhanced' | 'hyper_personalized'
 type LensKey = 'category' | 'confidence' | 'source_type' | 'video_reference'
-type ViewKey = 'discover' | 'workspace' | 'overview'
+type ViewKey = 'discover' | 'workspace' | 'jockey' | 'overview'
 type ReelFormatKey = '9x16' | '16x9' | '1x1' | '4x5'
 type HighlightReelRequestOptions = { silent?: boolean }
-type DiscoverFilterKey = 'all' | 'semantic' | MapCategoryKey
+
+type PegasusResponseMetadata = {
+  source?: string
+  from_user_metadata?: boolean
+  storage?: string
+  provider?: string
+  model?: string
+  index_id?: string
+  indexed_asset_id?: string
+  asset_id?: string
+  source_video_name?: string
+  generated_at?: string
+  context_hash?: string
+  metadata_fields?: string[]
+  reels_metadata_field?: string
+  detailed_response_metadata_field?: string
+  reels_response_chars?: number
+  detailed_response_chars?: number
+  clip_counts?: Partial<Record<MapCategoryKey, number>>
+}
 
 type DiscoverMatch = {
   id: string
@@ -86,7 +116,7 @@ type DiscoverItem = {
   matches: DiscoverMatch[]
   matchHeading: string
   searchScore: number
-  hasJockeySearch: boolean
+  hasMarengoSearch: boolean
   resultType: 'video' | 'moment' | 'search'
   categoryKey?: MapCategoryKey
   startTime?: string
@@ -109,8 +139,12 @@ type TwelveLabsStreamInfo = {
   manifest_url: string
 }
 
-type JockeySearchResult = {
+const streamInfoCache = new Map<string, TwelveLabsStreamInfo>()
+const streamInfoRequests = new Map<string, Promise<TwelveLabsStreamInfo>>()
+
+type MarengoSearchResult = {
   id: string
+  provider?: 'marengo'
   video_reference: string
   video_name?: string | null
   timestamp?: string
@@ -120,14 +154,37 @@ type JockeySearchResult = {
   description: string
   relevance: string
   confidence?: number | null
+  rank?: number | null
+  thumbnail_url?: string | null
   source_asset_id?: string | null
 }
 
-type JockeySearchResponse = {
+type MarengoSearchGroupBy = 'clip'
+
+type MarengoSearchResponse = {
+  provider?: 'marengo'
+  model?: string
   query: string
   query_interpretation: string
   total_results: number
-  results: JockeySearchResult[]
+  search_options?: string[]
+  group_by?: MarengoSearchGroupBy
+  results: MarengoSearchResult[]
+}
+
+type UploadGameVideoResponse = {
+  status: 'indexing' | 'ready'
+  video_name: string
+  asset_id: string
+  message?: string
+  game: Game
+}
+
+type UploadPreviewItem = {
+  id: string
+  file: File
+  url: string
+  durationSeconds?: number
 }
 
 type SearchMoment = {
@@ -138,13 +195,91 @@ type SearchMoment = {
   relevance: string
   startTime?: string
   endTime?: string
+  sourceLabel?: string
+}
+
+type SegmentRange = {
+  startSeconds: number
+  endSeconds?: number
+  startLabel: string
+  endLabel?: string
+}
+
+type JockeyManifestClip = {
+  id: string
+  video_name?: string | null
+  video_reference: string
+  start_time: string
+  end_time: string
+  moment_type: string
+  emotional_intensity: string
+  jockey_rationale: string
+  highlight_potential: number
+  source_asset_id?: string | null
+}
+
+type JockeyChatRequest = {
+  message: string
+  session_id?: string
+  include_reel?: boolean
+  video_name?: string
+  limit?: number
+}
+
+type JockeyChatResponse = {
+  session_id?: string | null
+  message: string
+  narrative_summary: string
+  clips: JockeyManifestClip[]
+}
+
+type JockeyChatExchange = {
+  id: string
+  prompt: string
+  skillKey?: string
+  response?: JockeyChatResponse
+  error?: string
+  showReel: boolean
 }
 
 const categories: Array<{ key: CategoryKey; label: string; icon: string }> = [
-  { key: 'best_plays', label: 'Best Plays', icon: 'play-boxed' },
-  { key: 'emotional_moments', label: 'Emotional Moments', icon: 'speech' },
+  { key: 'best_plays', label: 'Best Plays', icon: 'trophy' },
+  { key: 'emotional_moments', label: 'Emotional Moments', icon: 'flame' },
   { key: 'fan_experience', label: 'Fan Experience', icon: 'members' },
   { key: 'behind_the_scenes', label: 'Behind the Scenes', icon: 'indexes' },
+]
+
+const assemblyModes: Array<{ key: AssemblyModeKey; label: string; detail: string; icon: string }> = [
+  { key: 'wsc_baseline', label: 'Stats Baseline', detail: 'Event-feed baseline', icon: 'usage' },
+  { key: 'twelvelabs_enhanced', label: 'TwelveLabs Enhanced', detail: 'Stats plus Pegasus semantic lift', icon: 'vision' },
+  { key: 'hyper_personalized', label: 'Hyper-Personalized', detail: 'One lane, social-first', icon: 'filter' },
+]
+
+const jockeyProducerSkills: Array<{ key: string; label: string; icon: string; color: string; tint: string; prompt: string }> = [
+  {
+    key: 'best_plays',
+    label: 'Best Plays reel',
+    icon: 'trophy',
+    color: '#00DC82',
+    tint: 'rgba(0,220,130,0.12)',
+    prompt: 'Find the top 10 highest-importance scoring events and the 5 seconds of player reaction following each. Return timestamps ranked by stats importance.',
+  },
+  {
+    key: 'emotional_moments',
+    label: 'Emotional Moments reel',
+    icon: 'flame',
+    color: '#FABA17',
+    tint: 'rgba(250,186,23,0.14)',
+    prompt: 'Identify every moment where a player\'s emotional response is at peak intensity - tears, fist pumps, screaming. Ignore neutral reactions. Return with highlight_potential scores.',
+  },
+  {
+    key: 'fan_experience',
+    label: 'Fan Experience reel',
+    icon: 'members',
+    color: '#6CD5FD',
+    tint: 'rgba(108,213,253,0.16)',
+    prompt: 'Find all moments of peak crowd energy - sustained roaring, standing ovations, visible fan reactions in the stands. Rank by duration and intensity.',
+  },
 ]
 
 const reelFormats: Array<{ key: ReelFormatKey; label: string; detail: string; aspect: string }> = [
@@ -157,35 +292,40 @@ const reelFormats: Array<{ key: ReelFormatKey; label: string; detail: string; as
 const REEL_PADDING_SECONDS = 5
 const mapLanes: Array<{ key: MapCategoryKey; label: string; icon: string }> = [
   { key: 'standard_stats', label: 'Event Feed', icon: 'usage' },
-  { key: 'best_plays', label: 'Best Plays', icon: 'play-boxed' },
-  { key: 'emotional_moments', label: 'Emotion', icon: 'speech' },
+  { key: 'best_plays', label: 'Best Plays', icon: 'trophy' },
+  { key: 'emotional_moments', label: 'Emotion', icon: 'flame' },
   { key: 'fan_experience', label: 'Fans', icon: 'members' },
   { key: 'behind_the_scenes', label: 'BTS', icon: 'indexes' },
 ]
 
 const lensOptions: Array<{ key: LensKey; label: string; icon: string }> = [
   { key: 'category', label: 'Category', icon: 'grid' },
-  { key: 'confidence', label: 'Confidence', icon: 'checkmark' },
 ]
 
-const discoverFilters: Array<{ key: DiscoverFilterKey; label: string; icon: string }> = [
-  { key: 'all', label: 'All', icon: 'grid' },
-  { key: 'semantic', label: 'Semantic', icon: 'vision' },
-  { key: 'standard_stats', label: 'Events', icon: 'usage' },
-  { key: 'best_plays', label: 'Plays', icon: 'play-boxed' },
-  { key: 'emotional_moments', label: 'Emotion', icon: 'speech' },
-  { key: 'fan_experience', label: 'Fans', icon: 'members' },
-  { key: 'behind_the_scenes', label: 'BTS', icon: 'indexes' },
+const marengoSearchPresets = [
+  'goal celebration teammates',
+  'fan going wild in the stands',
+  'goalkeeper diving save',
+  'coach sideline reaction',
 ]
 
-const navItems: Array<{ key: ViewKey; label: string }> = [
-  { key: 'discover', label: 'Discover' },
-  { key: 'workspace', label: 'Workspace' },
-  { key: 'overview', label: 'Overview' },
+const navItems: Array<{ key: ViewKey; label: string; icon: string }> = [
+  { key: 'discover', label: 'Discover', icon: 'search-v2' },
+  { key: 'workspace', label: 'Workspace', icon: 'canvas' },
+  { key: 'jockey', label: 'Jockey', icon: 'speech' },
+  { key: 'overview', label: 'Overview', icon: 'document-list' },
 ]
+
+const uploadRequirementLabels = [
+  'Duration 4sec-4hr',
+  'Resolution 360p-4k',
+  'Ratio 1:1-1:2.4',
+  'File size ≤4GB per video',
+]
+const JOCKEY_CHAT_CACHE_PREFIX = 'sports-jockey:jockey-chat:'
 
 const signalColors: Record<MapCategoryKey, { bg: string; border: string; text: string; track: string }> = {
-  standard_stats: { bg: '#1D1C1B', border: '#1D1C1B', text: '#FFFFFF', track: '#D3D1CF' },
+  standard_stats: { bg: '#E8E7E5', border: '#B8B6B3', text: '#4F4F4F', track: '#E8E7E5' },
   best_plays: { bg: '#00DC82', border: '#00B86E', text: '#1D1C1B', track: '#E8F5E9' },
   emotional_moments: { bg: '#FABA17', border: '#7D5D0C', text: '#7D5D0C', track: '#FDE3A2' },
   fan_experience: { bg: '#6CD5FD', border: '#366B7F', text: '#366B7F', track: '#C4EEFE' },
@@ -193,7 +333,7 @@ const signalColors: Record<MapCategoryKey, { bg: string; border: string; text: s
 }
 
 const sourceColors: Record<Clip['source_type'], { bg: string; border: string; text: string; track: string }> = {
-  stats: { bg: '#1D1C1B', border: '#1D1C1B', text: '#FFFFFF', track: '#D3D1CF' },
+  stats: { bg: '#E8E7E5', border: '#B8B6B3', text: '#4F4F4F', track: '#E8E7E5' },
   semantic: { bg: '#6CD5FD', border: '#366B7F', text: '#366B7F', track: '#C4EEFE' },
   stats_semantic: { bg: '#00DC82', border: '#00B86E', text: '#1D1C1B', track: '#E8F5E9' },
 }
@@ -208,12 +348,14 @@ const referencePalette = [
 
 function viewFromPath(pathname: string): ViewKey {
   if (pathname.includes('discover')) return 'discover'
+  if (pathname.includes('jockey')) return 'jockey'
   if (pathname.includes('overview')) return 'overview'
   return 'workspace'
 }
 
 function pathForView(view: ViewKey) {
   if (view === 'discover') return '/discover'
+  if (view === 'jockey') return '/jockey'
   if (view === 'overview') return '/overview'
   return '/'
 }
@@ -225,6 +367,8 @@ function navButtonClass(currentView: ViewKey, itemView: ViewKey) {
 }
 
 function App() {
+  const headerRef = useRef<HTMLElement | null>(null)
+  const [headerHeight, setHeaderHeight] = useState(76)
   const [games, setGames] = useState<Game[]>([])
   const [selectedTag, setSelectedTag] = useState('')
   const [view, setView] = useState<ViewKey>(() => viewFromPath(window.location.pathname))
@@ -233,25 +377,31 @@ function App() {
   const [selectedStandardClipIndex, setSelectedStandardClipIndex] = useState(0)
   const [featuredSignalCategory, setFeaturedSignalCategory] = useState<MapCategoryKey>('best_plays')
   const [metadataLens, setMetadataLens] = useState<LensKey>('category')
+  const [assemblyMode, setAssemblyMode] = useState<AssemblyModeKey>('twelvelabs_enhanced')
   const [reelsByTag, setReelsByTag] = useState<Record<string, HighlightReels>>({})
   const [gamesError, setGamesError] = useState('')
   const [reelsError, setReelsError] = useState('')
   const [loadingGames, setLoadingGames] = useState(true)
   const [loadingTag, setLoadingTag] = useState('')
-  const [explainOpen, setExplainOpen] = useState(true)
   const [selectedSourceVideoName, setSelectedSourceVideoName] = useState<string | null>(null)
   const [pendingWorkspaceVideoName, setPendingWorkspaceVideoName] = useState<string | null>(null)
   const [selectedSearchMoment, setSelectedSearchMoment] = useState<SearchMoment | null>(null)
   const [reelFormat, setReelFormat] = useState<ReelFormatKey>('9x16')
+  const [uploadModalOpen, setUploadModalOpen] = useState(false)
+  const [uploadNotice, setUploadNotice] = useState('')
   const requestedTags = useRef<Set<string>>(new Set())
   const suppressNextVideoReset = useRef(false)
   const selectedGame = useMemo(
     () => games.find((game) => game.tag === selectedTag) || null,
     [games, selectedTag],
   )
-  const activeVideoName = selectedGame?.source_videos?.includes(selectedSourceVideoName || '')
+  const workspaceVideoNames = useMemo(
+    () => (selectedGame ? workspaceMappedVideoNames(selectedGame) : []),
+    [selectedGame],
+  )
+  const activeVideoName = workspaceVideoNames.includes(selectedSourceVideoName || '')
     ? selectedSourceVideoName || undefined
-    : selectedGame?.source_videos?.[0]
+    : workspaceVideoNames[0]
   const selectedReelsKey = selectedTag ? reelCacheKey(selectedTag, activeVideoName) : ''
   const reels = selectedReelsKey ? reelsByTag[selectedReelsKey] : undefined
   const scopedReels = useMemo(
@@ -266,8 +416,8 @@ function App() {
   const featuredEyebrow = featuredSignalCategory === 'standard_stats'
     ? 'Event Feed'
     : categories.find((category) => category.key === selectedCategory)?.label || 'Enhanced'
-  const featuredTitle = featuredSignalCategory === 'standard_stats' ? 'Event Feed Baseline' : 'Jockey Discovery Cut'
-  const hasJockeyAnalysis = scopedReels ? hasHighlightClips(scopedReels) : false
+  const featuredTitle = featuredSignalCategory === 'standard_stats' ? 'Event Feed Baseline' : 'Pegasus Discovery Cut'
+  const hasHighlightAnalysis = scopedReels ? hasHighlightClips(scopedReels) : false
   const isLoadingReels = Boolean(selectedReelsKey && loadingTag === selectedReelsKey)
   const requestHighlightReels = useCallback((videoName?: string, options: HighlightReelRequestOptions = {}) => {
     if (!selectedTag) return
@@ -313,7 +463,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (view !== 'workspace') return
+    if (view !== 'workspace' || !activeVideoName) return
     requestHighlightReels(activeVideoName)
   }, [activeVideoName, requestHighlightReels, view])
 
@@ -336,9 +486,14 @@ function App() {
       setSelectedSourceVideoName(null)
       return
     }
-    const sourceVideos = selectedGame.source_videos || []
-    setSelectedSourceVideoName((current) => (current && sourceVideos.includes(current) ? current : sourceVideos[0] || null))
-  }, [selectedGame])
+    setSelectedSourceVideoName((current) => (current && workspaceVideoNames.includes(current) ? current : workspaceVideoNames[0] || null))
+  }, [selectedGame, workspaceVideoNames])
+
+  useEffect(() => {
+    if (!uploadNotice) return
+    const timeout = window.setTimeout(() => setUploadNotice(''), 8000)
+    return () => window.clearTimeout(timeout)
+  }, [uploadNotice])
 
   const selectSignal = (categoryKey: MapCategoryKey, index: number) => {
     setSelectedSearchMoment(null)
@@ -387,6 +542,7 @@ function App() {
   const openVideoInWorkspace = (videoName: string, target?: DiscoverItem['openTarget'], searchMoment?: SearchMoment) => {
     setSelectedSourceVideoName(videoName)
     setSelectedSearchMoment(searchMoment || null)
+    if (searchMoment) setAssemblyMode('twelvelabs_enhanced')
     if (target) {
       suppressNextVideoReset.current = true
       if (target.categoryKey === 'standard_stats') {
@@ -423,10 +579,46 @@ function App() {
     scrollWorkspaceDetailsIntoView()
   }, [pendingWorkspaceVideoName, selectedGame, scopedReels, activeVideoName])
 
+  const updateRegisteredGame = (updatedGame: Game, preferredVideoName?: string) => {
+    setGames((current) => {
+      const exists = current.some((game) => game.tag === updatedGame.tag)
+      return exists
+        ? current.map((game) => (game.tag === updatedGame.tag ? updatedGame : game))
+        : [...current, updatedGame]
+    })
+    setSelectedTag((current) => current || updatedGame.tag)
+    if (preferredVideoName && workspaceMappedVideoNames(updatedGame).includes(preferredVideoName)) {
+      setSelectedSourceVideoName(preferredVideoName)
+    }
+  }
+
+  useEffect(() => {
+    const header = headerRef.current
+    if (!header) return
+
+    const updateHeaderHeight = () => {
+      setHeaderHeight(Math.ceil(header.getBoundingClientRect().height))
+    }
+    updateHeaderHeight()
+
+    const observer = new ResizeObserver(updateHeaderHeight)
+    observer.observe(header)
+    window.addEventListener('resize', updateHeaderHeight)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateHeaderHeight)
+    }
+  }, [])
+
+  const stickyOffsetStyle = {
+    '--sj-header-height': `${headerHeight}px`,
+  } as CSSProperties
+
   return (
-    <main className="min-h-screen bg-background text-text-primary">
+    <main className="min-h-screen bg-background text-text-primary" style={stickyOffsetStyle}>
       <div className="flex min-h-screen flex-col">
         <header
+          ref={headerRef}
           className={[
             'sticky top-0 z-50 border-b shadow-[0_1px_0_rgba(29,28,27,0.04)]',
             'border-border bg-surface',
@@ -434,13 +626,10 @@ function App() {
         >
           <div
             className={[
-              'mx-auto w-full max-w-[1440px] gap-4 px-6 py-6',
-              view === 'overview'
-                ? 'grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] lg:items-center'
-                : 'flex flex-col lg:flex-row lg:items-center lg:justify-between',
+              'mx-auto flex w-full max-w-[1440px] flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between',
             ].join(' ')}
           >
-            <div className={['flex items-center gap-4', view === 'overview' ? 'lg:justify-self-start' : ''].join(' ')}>
+            <div className="flex items-center gap-4">
               <span
                 className={[
                   'inline-flex h-9 w-[180px] items-center',
@@ -453,59 +642,76 @@ function App() {
                 <h1 className="text-lg font-semibold text-text-primary">Sports Jockey Intelligence</h1>
               </div>
             </div>
-            <nav className={['flex items-center gap-2', view === 'overview' ? 'justify-center lg:justify-self-center' : ''].join(' ')}>
-              {navItems.map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => navigate(item.key)}
-                  className={[
-                    'h-9 rounded-md border px-4 text-sm font-semibold transition-colors',
-                    navButtonClass(view, item.key),
-                  ].join(' ')}
-                >
-                  {item.label}
-                </button>
-              ))}
+            <nav className="flex w-full items-center gap-2 lg:w-auto lg:flex-1">
+              <div className="flex min-w-0 flex-1 flex-wrap items-center justify-start gap-1.5">
+                {navItems.map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => navigate(item.key)}
+                    className={[
+                      'inline-flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md border px-2 text-xs font-semibold transition-colors sm:px-2.5 sm:text-sm',
+                      navButtonClass(view, item.key),
+                    ].join(' ')}
+                  >
+                    <StrandIcon name={item.icon} className="h-3.5 w-3.5 shrink-0" />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="hidden shrink-0 sm:block">
+                <LiveApiBadge loading={loadingGames} error={Boolean(gamesError)} />
+              </div>
+              <button
+                type="button"
+                onClick={() => setUploadModalOpen(true)}
+                disabled={!selectedGame || loadingGames}
+                className={[
+                  'ml-auto inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition-colors sm:px-3 sm:text-sm',
+                  selectedGame && !loadingGames
+                    ? 'border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal'
+                    : 'cursor-not-allowed border-border bg-card text-text-tertiary',
+                ].join(' ')}
+                aria-haspopup="dialog"
+                title="Add Video"
+              >
+                <StrandIcon name="plus" className="h-4 w-4" />
+                <span>Add Video</span>
+              </button>
             </nav>
-            <div className={view === 'overview' ? 'lg:justify-self-end' : ''}>
+            <div className="sm:hidden">
               <LiveApiBadge loading={loadingGames} error={Boolean(gamesError)} />
             </div>
-            {view !== 'overview' && <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <label className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary" htmlFor="game-selector">
-                Game
-              </label>
-              <select
-                id="game-selector"
-                value={selectedTag}
-                onChange={(event) => setSelectedTag(event.target.value)}
-                disabled={loadingGames || games.length === 0}
-                className={[
-                  'h-10 min-w-[260px] rounded-md border px-3 text-sm font-medium outline-none shadow-[0_1px_2px_rgba(29,28,27,0.04)] focus:border-accent disabled:cursor-not-allowed disabled:text-text-tertiary',
-                  'border-border bg-surface text-text-primary',
-                ].join(' ')}
-              >
-                {games.length === 0 ? (
-                  <option value="">No analyzed games</option>
-                ) : (
-                  games.map((game) => (
-                    <option key={game.tag} value={game.tag}>
-                      {gameOptionLabel(game)}
-                    </option>
-                  ))
-                )}
-              </select>
-            </div>}
           </div>
         </header>
 
+        <UploadVideosModal
+          open={uploadModalOpen}
+          game={selectedGame}
+          onClose={() => setUploadModalOpen(false)}
+          onGameUpdated={updateRegisteredGame}
+          onUploadQueued={setUploadNotice}
+        />
+
+        {uploadNotice && (
+          <div className="fixed bottom-5 right-5 z-[120] w-[min(420px,calc(100vw-32px))]">
+            <Notice tone="neutral" icon="checkmark" text={uploadNotice} />
+          </div>
+        )}
+
         {view === 'discover' ? (
-          <DiscoverPage
+        <DiscoverPage
+          game={selectedGame}
+          loading={loadingGames}
+          error={gamesError}
+          onOpenInWorkspace={openSourceInWorkspace}
+        />
+        ) : view === 'jockey' ? (
+          <JockeyPage
             game={selectedGame}
             loading={loadingGames}
-            error={gamesError || reelsError}
-            reelsByTag={reelsByTag}
-            onOpenInWorkspace={openSourceInWorkspace}
+            error={gamesError}
+            onOpenInWorkspace={(videoName, searchMoment) => openVideoInWorkspace(videoName, undefined, searchMoment)}
           />
         ) : view === 'overview' ? (
           <OverviewPage
@@ -515,138 +721,1286 @@ function App() {
             loading={loadingGames || isLoadingReels}
           />
         ) : (
-        <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-6 px-6 py-6">
-          <section className="flex min-w-0 flex-col gap-6">
-            <StatusStrip
-              loadingGames={loadingGames}
-              gamesError={gamesError}
-              reelsError={reelsError}
-              isLoadingReels={isLoadingReels}
-              selectedGame={selectedGame}
-              reels={scopedReels}
-              activeVideoName={activeVideoName}
-              onOpenDiscover={() => navigate('discover')}
-            />
-
-            <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-              <section className="flex min-w-0 flex-col gap-6">
-                <div id="workspace-details" className="scroll-mt-40">
-                  <FeaturedClipPanel
-                    title={activeSearchMoment ? activeSearchMoment.title : featuredTitle}
-                    eyebrow={activeSearchMoment ? 'Jockey Search' : featuredEyebrow}
-                    clip={activeSearchMoment ? undefined : featuredClip}
-                    game={selectedGame}
-                    sourceVideoName={activeVideoName}
-                    timelineCategory={featuredSignalCategory === 'standard_stats' ? scopedReels?.standard_stats : enhancedCategory}
-                    timelineLabel={featuredEyebrow}
-                    selectedTimelineIndex={featuredSignalCategory === 'standard_stats' ? selectedStandardClipIndex : selectedEnhancedClipIndex}
-                    searchMoment={activeSearchMoment}
-                    onTimelineSelect={(index) => {
-                      setSelectedSearchMoment(null)
-                      if (featuredSignalCategory === 'standard_stats') {
-                        setSelectedStandardClipIndex(index)
-                        setFeaturedSignalCategory('standard_stats')
-                        return
-                      }
-                      setSelectedEnhancedClipIndex(index)
-                      setFeaturedSignalCategory(selectedCategory)
-                    }}
-                    emptyText={isLoadingReels ? 'Generating reel' : featuredSignalCategory === 'standard_stats' ? 'No event feed clips returned' : 'No enhanced clips returned'}
-                  />
-                </div>
-
-                {selectedGame && (
-                  <CategorySelectorPanel
-                    className="xl:hidden"
-                    reels={scopedReels}
-                    selectedCategory={selectedCategory}
-                    onSelect={selectCategoryTab}
-                  />
-                )}
-
-                {selectedGame && (
-                  <WorkspaceVideoCarousel
-                    game={selectedGame}
-                    activeVideoName={activeVideoName}
-                    onSelect={openVideoInWorkspace}
-                  />
-                )}
-
-                {scopedReels && (hasJockeyAnalysis ? <SemanticLiftSummary reels={scopedReels} /> : <JockeyIndexNotice game={selectedGame} />)}
-
-                {scopedReels && hasJockeyAnalysis && (
-                  <SignalMap
-                    reels={scopedReels}
-                    lens={metadataLens}
-                    onLensChange={setMetadataLens}
-                    selectedCategory={selectedCategory}
-                    selectedEnhancedIndex={selectedEnhancedClipIndex}
-                    selectedStandardIndex={selectedStandardClipIndex}
-                    onSelect={selectSignal}
-                  />
-                )}
-
-                {enhancedCategory && hasJockeyAnalysis && (
-                  <ClipRail
-                    category={enhancedCategory}
-                    selectedIndex={selectedEnhancedClipIndex}
-                    onSelect={(index) => {
-                      setSelectedEnhancedClipIndex(index)
-                      setFeaturedSignalCategory(selectedCategory)
-                      scrollWorkspaceDetailsIntoView()
-                    }}
-                  />
-                )}
-
-                {selectedGame && activeVideoName && enhancedCategory && hasJockeyAnalysis && (
-                  <ReelBuilder
-                    game={selectedGame}
-                    videoName={activeVideoName}
-                    categoryKey={selectedCategory}
-                    category={enhancedCategory}
-                    format={reelFormat}
-                    onCategoryChange={selectCategoryTab}
-                    onFormatChange={setReelFormat}
-                  />
-                )}
-              </section>
-
-              <aside className="flex min-w-0 flex-col gap-6 xl:sticky xl:top-[128px] xl:self-start">
-                {selectedGame && (
-                  <CategorySelectorPanel
-                    className="hidden xl:block"
-                    reels={scopedReels}
-                    selectedCategory={selectedCategory}
-                    onSelect={selectCategoryTab}
-                  />
-                )}
-                <ExplainabilityPanel
-                  open={explainOpen}
-                  onToggle={() => setExplainOpen((value) => !value)}
-                  standardClip={standardClip}
-                  enhancedClip={enhancedClip}
-                  category={enhancedCategory}
-                />
-              </aside>
-            </div>
-          </section>
-        </div>
+          <ProducerCockpit
+            loadingGames={loadingGames}
+            gamesError={gamesError}
+            reelsError={reelsError}
+            isLoadingReels={isLoadingReels}
+            selectedGame={selectedGame}
+            workspaceVideoNames={workspaceVideoNames}
+            reels={scopedReels}
+            hasHighlightAnalysis={hasHighlightAnalysis}
+            activeVideoName={activeVideoName}
+            selectedCategory={selectedCategory}
+            selectedEnhancedClipIndex={selectedEnhancedClipIndex}
+            selectedStandardClipIndex={selectedStandardClipIndex}
+            selectedSearchMoment={activeSearchMoment}
+            assemblyMode={assemblyMode}
+            metadataLens={metadataLens}
+            reelFormat={reelFormat}
+            onOpenDiscover={() => navigate('discover')}
+            onSourceVideoSelect={openVideoInWorkspace}
+            onCategoryChange={selectCategoryTab}
+            onAssemblyModeChange={setAssemblyMode}
+            onMetadataLensChange={setMetadataLens}
+            onReelFormatChange={setReelFormat}
+            onSelectSignal={selectSignal}
+            onSelectStandardClip={(index) => {
+              setSelectedSearchMoment(null)
+              setSelectedStandardClipIndex(index)
+              setFeaturedSignalCategory('standard_stats')
+              scrollWorkspaceDetailsIntoView()
+            }}
+            onSelectEnhancedClip={(index) => {
+              setSelectedSearchMoment(null)
+              setSelectedEnhancedClipIndex(index)
+              setFeaturedSignalCategory(selectedCategory)
+              scrollWorkspaceDetailsIntoView()
+            }}
+          />
         )}
       </div>
     </main>
   )
 }
 
+function JockeyPage({
+  game,
+  loading,
+  error,
+  onOpenInWorkspace,
+}: {
+  game: Game | null
+  loading: boolean
+  error: string
+  onOpenInWorkspace: (videoName: string, searchMoment: SearchMoment) => void
+}) {
+  if (loading) {
+    return (
+      <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-6 px-6 py-6">
+        <Notice tone="neutral" icon="spinner" text="Loading Jockey" />
+      </div>
+    )
+  }
+  if (error) {
+    return (
+      <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-6 px-6 py-6">
+        <Notice tone="error" icon="warning" text={error} />
+      </div>
+    )
+  }
+  if (!game) {
+    return (
+      <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-6 px-6 py-6">
+        <Notice tone="neutral" icon="info" text="No analyzed game selected" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-auto flex w-full max-w-[1440px] flex-1 px-6 py-6">
+      <ProducerChatPanel
+        game={game}
+        onOpenInWorkspace={onOpenInWorkspace}
+      />
+    </div>
+  )
+}
+
+function ProducerCockpit({
+  loadingGames,
+  gamesError,
+  reelsError,
+  isLoadingReels,
+  selectedGame,
+  workspaceVideoNames,
+  reels,
+  hasHighlightAnalysis,
+  activeVideoName,
+  selectedCategory,
+  selectedEnhancedClipIndex,
+  selectedStandardClipIndex,
+  selectedSearchMoment,
+  assemblyMode,
+  metadataLens,
+  reelFormat,
+  onOpenDiscover,
+  onSourceVideoSelect,
+  onCategoryChange,
+  onAssemblyModeChange,
+  onMetadataLensChange,
+  onReelFormatChange,
+  onSelectSignal,
+  onSelectStandardClip,
+  onSelectEnhancedClip,
+}: {
+  loadingGames: boolean
+  gamesError: string
+  reelsError: string
+  isLoadingReels: boolean
+  selectedGame: Game | null
+  workspaceVideoNames: string[]
+  reels?: HighlightReels
+  hasHighlightAnalysis: boolean
+  activeVideoName?: string
+  selectedCategory: CategoryKey
+  selectedEnhancedClipIndex: number
+  selectedStandardClipIndex: number
+  selectedSearchMoment: SearchMoment | null
+  assemblyMode: AssemblyModeKey
+  metadataLens: LensKey
+  reelFormat: ReelFormatKey
+  onOpenDiscover: () => void
+  onSourceVideoSelect: (videoName: string) => void
+  onCategoryChange: (category: CategoryKey) => void
+  onAssemblyModeChange: (mode: AssemblyModeKey) => void
+  onMetadataLensChange: (lens: LensKey) => void
+  onReelFormatChange: (format: ReelFormatKey) => void
+  onSelectSignal: (categoryKey: MapCategoryKey, index: number) => void
+  onSelectStandardClip: (index: number) => void
+  onSelectEnhancedClip: (index: number) => void
+}) {
+  const enhancedCategory = reels?.[selectedCategory]
+  const standardClip = reels?.standard_stats.clips[selectedStandardClipIndex] || reels?.standard_stats.clips[0]
+  const enhancedClip = enhancedCategory?.clips[selectedEnhancedClipIndex] || enhancedCategory?.clips[0]
+  const showProductionTools = Boolean(selectedGame && reels && hasHighlightAnalysis)
+  const showExplainabilityRail = Boolean(reels && hasHighlightAnalysis)
+  const [explainRailCollapsed, setExplainRailCollapsed] = useState(false)
+
+  const handleAssemblyModeChange = (mode: AssemblyModeKey) => {
+    onAssemblyModeChange(mode)
+  }
+  const handleCategoryChange = (category: CategoryKey) => {
+    onCategoryChange(category)
+    if (assemblyMode === 'wsc_baseline') onAssemblyModeChange('hyper_personalized')
+  }
+
+  return (
+    <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-6 px-6 py-6">
+      <StatusStrip
+        loadingGames={loadingGames}
+        gamesError={gamesError}
+        reelsError={reelsError}
+        isLoadingReels={isLoadingReels}
+        selectedGame={selectedGame}
+        reels={reels}
+        activeVideoName={activeVideoName}
+        onOpenDiscover={onOpenDiscover}
+      />
+
+      {reels && <AnalysisSummaryPanel reels={reels} />}
+
+      <WorkspaceModeBar
+        mode={assemblyMode}
+        onModeChange={handleAssemblyModeChange}
+      />
+
+      {reels && hasHighlightAnalysis && (
+        <WorkspaceLaneBar
+          reels={reels}
+          selectedCategory={selectedCategory}
+          onSelect={handleCategoryChange}
+        />
+      )}
+
+      {reels && !hasHighlightAnalysis && <PegasusIndexNotice game={selectedGame} />}
+
+      <div
+        className={[
+          'grid min-w-0 gap-6 xl:items-start',
+          showExplainabilityRail
+            ? explainRailCollapsed
+              ? 'xl:grid-cols-[minmax(0,1fr)_56px]'
+              : 'xl:grid-cols-[minmax(0,1fr)_380px]'
+            : '',
+        ].join(' ')}
+      >
+        <section className="flex min-w-0 flex-col gap-6">
+          <div id="workspace-details" className="scroll-mt-40">
+            <SplitComparisonStage
+              game={selectedGame}
+              reels={reels}
+              activeVideoName={activeVideoName}
+              assemblyMode={assemblyMode}
+              selectedCategory={selectedCategory}
+              standardClip={standardClip}
+              enhancedClip={enhancedClip}
+              searchMoment={selectedSearchMoment}
+              standardIndex={selectedStandardClipIndex}
+              enhancedIndex={selectedEnhancedClipIndex}
+              onStandardSelect={onSelectStandardClip}
+              onEnhancedSelect={onSelectEnhancedClip}
+              emptyText={isLoadingReels ? 'Generating PRD highlight lanes' : 'No clips returned for this source'}
+            />
+          </div>
+
+          {selectedGame && (
+            <WorkspaceVideoCarousel
+              game={selectedGame}
+              videoNames={workspaceVideoNames}
+              activeVideoName={activeVideoName}
+              onSelect={onSourceVideoSelect}
+            />
+          )}
+
+          {showProductionTools && selectedGame && reels && (
+            <section className="flex min-w-0 flex-col gap-4">
+              <ProductionSection icon="play-next" title="Sequence Preview" detail="Stitched source ranges">
+                <div className="grid min-w-0 gap-6 2xl:grid-cols-[minmax(0,0.98fr)_minmax(380px,1.02fr)] 2xl:items-start">
+                  <ReelSequencePlayer
+                    variant="sidecar"
+                    game={selectedGame}
+                    reels={reels}
+                    mode={assemblyMode}
+                    categoryKey={selectedCategory}
+                  />
+                  <SignalMap
+                    variant="sidecar"
+                    reels={reels}
+                    lens={metadataLens}
+                    onLensChange={onMetadataLensChange}
+                    selectedCategory={selectedCategory}
+                    selectedEnhancedIndex={selectedEnhancedClipIndex}
+                    selectedStandardIndex={selectedStandardClipIndex}
+                    onSelect={onSelectSignal}
+                  />
+                </div>
+              </ProductionSection>
+
+              <div className="grid min-w-0 gap-6 border-t border-border-light pt-4">
+                {activeVideoName && enhancedCategory && (
+                  <ReelBuilder
+                    game={selectedGame}
+                    videoName={activeVideoName}
+                    categoryKey={selectedCategory}
+                    category={enhancedCategory}
+                    format={reelFormat}
+                    onFormatChange={onReelFormatChange}
+                  />
+                )}
+              </div>
+            </section>
+          )}
+        </section>
+
+        {showExplainabilityRail && (
+          <aside
+            className={[
+              'order-first flex min-w-0 flex-col gap-6 xl:sticky xl:top-[calc(var(--sj-header-height)+24px)] xl:order-none xl:self-start',
+              explainRailCollapsed ? 'items-end xl:items-center' : '',
+            ].join(' ')}
+          >
+            <WorkspaceExplainabilityRail
+              collapsed={explainRailCollapsed}
+              mode={assemblyMode}
+              selectedCategory={selectedCategory}
+              activeVideoName={activeVideoName}
+              standardClip={standardClip}
+              enhancedClip={enhancedClip}
+              category={enhancedCategory}
+              onToggleCollapse={() => setExplainRailCollapsed((value) => !value)}
+            />
+          </aside>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function AnalysisSummaryPanel({ reels }: { reels: HighlightReels }) {
+  return (
+    <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+      <div className="bg-card px-5 py-4">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <StrandIcon name="document-list" className="h-4 w-4 shrink-0 text-accent" />
+            <h2 className="truncate text-base font-semibold text-text-primary">Analysis Summary</h2>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-text-secondary">
+            {displayAnalysisSummary(reels.match_summary)}
+          </p>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function WorkspaceModeBar({
+  mode,
+  onModeChange,
+}: {
+  mode: AssemblyModeKey
+  onModeChange: (mode: AssemblyModeKey) => void
+}) {
+  const activeMode = assemblyModes.find((item) => item.key === mode) || assemblyModes[1]
+  return (
+    <section className="flex min-w-0 flex-col gap-3 px-1 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent bg-accent-light text-brand-charcoal">
+          <StrandIcon name={activeMode.icon} className="h-4 w-4" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="truncate text-base font-semibold text-text-primary">{activeMode.label}</h2>
+          <p className="mt-0.5 truncate text-xs text-text-secondary">{activeMode.detail}</p>
+        </div>
+      </div>
+      <div className="grid min-w-0 grid-cols-3 gap-1.5 sm:flex sm:items-center" aria-label="Workspace mode" role="group">
+        {assemblyModes.map((option) => (
+          <button
+            key={option.key}
+            type="button"
+            onClick={() => onModeChange(option.key)}
+            className={[
+              'inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-md border px-2.5 text-center text-[11px] font-semibold leading-tight transition-colors sm:w-[156px] sm:text-xs',
+              mode === option.key
+                ? 'border-accent bg-accent-light text-brand-charcoal shadow-[0_1px_4px_rgba(0,220,130,0.14)]'
+                : 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
+            ].join(' ')}
+            title={`${option.label} · ${option.detail}`}
+          >
+            <StrandIcon name={option.icon} className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 truncate">{option.label}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function WorkspaceLaneBar({
+  reels,
+  selectedCategory,
+  onSelect,
+}: {
+  reels: HighlightReels
+  selectedCategory: CategoryKey
+  onSelect: (category: CategoryKey) => void
+}) {
+  const activeCategory = categories.find((category) => category.key === selectedCategory) || categories[0]
+  const activeCount = reels[selectedCategory].clips.length
+  const activeColor = signalColors[selectedCategory]
+  return (
+    <section
+      className="sticky top-[var(--sj-header-height)] z-40 rounded-md border bg-surface px-3 py-2 shadow-[0_8px_18px_rgba(29,28,27,0.08)]"
+      style={{ borderColor: activeColor.border }}
+    >
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
+            style={{
+              backgroundColor: activeColor.bg,
+              borderColor: activeColor.border,
+              color: activeColor.text,
+            }}
+          >
+            <StrandIcon name={activeCategory.icon} className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-text-tertiary">Semantic Lane</p>
+            <h2 className="truncate text-sm font-semibold text-text-primary">{activeCategory.label}</h2>
+          </div>
+          <span className="ml-auto rounded-sm border border-border-light bg-card px-2 py-1 font-mono text-xs font-semibold text-text-primary lg:ml-2">
+            {activeCount}
+          </span>
+        </div>
+        <div className="grid min-w-0 grid-cols-2 gap-1.5 sm:grid-cols-4 lg:flex lg:items-center">
+          {categories.map((category) => {
+            const active = selectedCategory === category.key
+            const count = reels[category.key].clips.length
+            const color = signalColors[category.key]
+            return (
+              <button
+                key={category.key}
+                type="button"
+                onClick={() => onSelect(category.key)}
+                className={[
+                  'inline-flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md border px-2 text-center text-xs font-semibold leading-tight transition-colors lg:w-[150px]',
+                  active
+                    ? 'text-brand-charcoal shadow-[0_1px_4px_rgba(29,28,27,0.12)]'
+                    : 'border-border-light bg-card text-text-secondary hover:bg-surface',
+                ].join(' ')}
+                style={{
+                  borderColor: active ? color.border : undefined,
+                  backgroundColor: active ? color.track : undefined,
+                }}
+                title={`${category.label} · ${count} clips`}
+              >
+                <span
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border"
+                  style={{
+                    backgroundColor: color.bg,
+                    borderColor: color.border,
+                    color: color.text,
+                  }}
+                >
+                  <StrandIcon name={category.icon} className="h-3 w-3" />
+                </span>
+                <span className="min-w-0 truncate">{category.label}</span>
+                <span className="rounded-sm bg-surface px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{count}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ProductionSection({
+  icon,
+  title,
+  detail,
+  children,
+}: {
+  icon: string
+  title: string
+  detail: string
+  children: ReactNode
+}) {
+  return (
+    <section className="border-t border-border-light pt-4">
+      <div className="flex min-w-0 items-center gap-2 px-1">
+        <StrandIcon name={icon} className="h-4 w-4 shrink-0 text-accent" />
+        <div className="min-w-0">
+          <h2 className="truncate text-base font-semibold text-text-primary">{title}</h2>
+          <p className="mt-0.5 truncate text-sm text-text-secondary">{detail}</p>
+        </div>
+      </div>
+      <div className="mt-4 min-w-0">
+        {children}
+      </div>
+    </section>
+  )
+}
+
+function SplitComparisonStage({
+  game,
+  reels,
+  activeVideoName,
+  assemblyMode,
+  selectedCategory,
+  standardClip,
+  enhancedClip,
+  searchMoment,
+  standardIndex,
+  enhancedIndex,
+  onStandardSelect,
+  onEnhancedSelect,
+  emptyText,
+}: {
+  game: Game | null
+  reels?: HighlightReels
+  activeVideoName?: string
+  assemblyMode: AssemblyModeKey
+  selectedCategory: CategoryKey
+  standardClip?: Clip
+  enhancedClip?: Clip
+  searchMoment?: SearchMoment | null
+  standardIndex: number
+  enhancedIndex: number
+  onStandardSelect: (index: number) => void
+  onEnhancedSelect: (index: number) => void
+  emptyText: string
+}) {
+  const category = reels?.[selectedCategory]
+  const rightTitle =
+    searchMoment
+      ? searchMoment.title
+      : assemblyMode === 'wsc_baseline'
+      ? 'Event Feed Baseline'
+      : assemblyMode === 'hyper_personalized'
+        ? category?.title || 'Hyper-Personalized Lane'
+        : 'TwelveLabs Enhanced Cut'
+  const rightEyebrow =
+    searchMoment
+      ? searchMoment.sourceLabel || 'Marengo Search'
+      : assemblyMode === 'wsc_baseline'
+      ? 'Stats Only'
+      : categories.find((item) => item.key === selectedCategory)?.label || 'Semantic'
+  const rightClip = assemblyMode === 'wsc_baseline' ? standardClip : enhancedClip
+
+  return (
+    <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.06)] xl:max-h-[calc(100vh-156px)] xl:overflow-y-auto">
+      <div className="grid gap-4 border-b border-border-light bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary">Split-View Player</p>
+          <h2 className="mt-1 text-lg font-semibold text-text-primary">Stats baseline vs Pegasus lift</h2>
+        </div>
+        <div className="flex flex-wrap gap-2 lg:justify-end">
+          <span className="inline-flex h-8 items-center rounded-sm border border-border bg-surface px-2.5 text-xs font-semibold text-text-secondary">
+            {activeVideoName || game?.label || 'Source footage'}
+          </span>
+        </div>
+      </div>
+      <div className="grid min-w-0 xl:grid-cols-2">
+        <ComparisonPlayer
+          label="Event Feed"
+          title="Stats Baseline"
+          tone="baseline"
+          game={game}
+          sourceVideoName={activeVideoName}
+          clip={standardClip}
+          timelineCategory={reels?.standard_stats}
+          timelineLabel="Event Feed"
+          selectedTimelineIndex={standardIndex}
+          onTimelineSelect={onStandardSelect}
+          emptyText={emptyText}
+        />
+        <ComparisonPlayer
+          label={rightEyebrow}
+          title={rightTitle}
+          tone="enhanced"
+          game={game}
+          sourceVideoName={activeVideoName}
+          clip={searchMoment ? undefined : rightClip}
+          searchMoment={searchMoment}
+          timelineCategory={searchMoment ? undefined : category}
+          timelineLabel={rightEyebrow}
+          selectedTimelineIndex={enhancedIndex}
+          onTimelineSelect={onEnhancedSelect}
+          emptyText={emptyText}
+        />
+      </div>
+    </section>
+  )
+}
+
+function ComparisonPlayer({
+  label,
+  title,
+  tone,
+  game,
+  sourceVideoName,
+  clip,
+  searchMoment,
+  timelineCategory,
+  timelineLabel,
+  selectedTimelineIndex,
+  onTimelineSelect,
+  emptyText,
+}: {
+  label: string
+  title: string
+  tone: 'baseline' | 'enhanced'
+  game: Game | null
+  sourceVideoName?: string
+  clip?: Clip
+  searchMoment?: SearchMoment | null
+  timelineCategory?: HighlightCategory
+  timelineLabel: string
+  selectedTimelineIndex: number
+  onTimelineSelect: (index: number) => void
+  emptyText: string
+}) {
+  const clipVideoName = game && clip ? videoNameForClip(game, clip) : undefined
+  const sourceName = searchMoment?.videoName || clipVideoName || sourceVideoName
+  const startTime = searchMoment?.startTime || clip?.start_time
+  const endTime = searchMoment?.endTime || clip?.end_time
+  const startSeconds = startTime ? secondsFromTime(startTime) : 0
+  const endSeconds = endTime ? secondsFromTime(endTime) : undefined
+  const streamInfoUrl = game && sourceName ? streamInfoForVideoName(game, sourceName) : null
+  const posterUrl = game && sourceName && clip
+    ? reelThumbnailUrl(game, sourceName, clip, '16x9')
+    : game && sourceName
+      ? thumbnailForVideoName(game, sourceName)
+      : undefined
+  const colorClass = tone === 'baseline' ? 'text-brand-charcoal' : 'text-accent'
+  const hasPlayable = Boolean(streamInfoUrl && (searchMoment || clip || sourceName))
+  const description = searchMoment?.description || clip?.description || ''
+  const metaLabel = searchMoment
+    ? `${searchMoment.sourceLabel || 'Marengo search'} match`
+    : clip
+      ? `${sourceLabel(clip.source_type)} · ${cleanClipTypeLabel(clip.clip_type)}`
+      : 'Source video'
+
+  return (
+    <article className="min-w-0 border-b border-border-light last:border-b-0 xl:border-b-0 xl:border-r xl:last:border-r-0">
+      <div className="border-b border-border-light bg-surface px-4 py-3.5">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className={['text-xs font-semibold uppercase tracking-[0.1em]', colorClass].join(' ')}>{label}</p>
+            <h3 className="mt-1 truncate text-base font-semibold text-text-primary">{title}</h3>
+          </div>
+          {startTime && (
+            <span className="shrink-0 rounded-sm border border-border bg-card px-2 py-1 font-mono text-xs font-semibold text-text-secondary">
+              {startTime}{endTime ? ` - ${endTime}` : ''}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="flex aspect-video items-center justify-center bg-card text-text-primary">
+        {hasPlayable && streamInfoUrl ? (
+          <TwelveLabsVideoPlayer
+            key={`${streamInfoUrl}-${startTime || 'source'}-${endTime || 'open'}`}
+            streamInfoUrl={streamInfoUrl}
+            startSeconds={startSeconds}
+            endSeconds={endSeconds}
+            posterUrl={posterUrl}
+            onDuration={() => undefined}
+          />
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
+            <StrandIcon name="info" className="h-7 w-7 text-text-tertiary" />
+            <p className="max-w-sm text-sm font-semibold text-text-secondary">{emptyText}</p>
+          </div>
+        )}
+      </div>
+      {timelineCategory && (
+        <ClipMarkerLane
+          clips={timelineCategory.clips}
+          label={timelineLabel}
+          selectedIndex={selectedTimelineIndex}
+          durationSeconds={0}
+          onSelect={onTimelineSelect}
+        />
+      )}
+      <div className="grid gap-3 p-4 md:grid-cols-[minmax(0,1fr)_160px]">
+        <div className="min-w-0 rounded-md border border-border-light bg-card p-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{metaLabel}</p>
+          <p className="mt-2 line-clamp-3 text-sm font-semibold leading-5 text-text-primary">
+            {description || 'No grounded clip description returned yet.'}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-1">
+          <Detail label="Video" value={sourceName || 'Unmapped'} />
+          <Detail
+            label={searchMoment ? 'Source' : 'Confidence'}
+            value={searchMoment ? searchMoment.sourceLabel || 'Marengo' : confidenceLabel(clip?.confidence || 0)}
+          />
+        </div>
+      </div>
+    </article>
+  )
+}
+
+type SequenceClip = {
+  id: string
+  title: string
+  shortTitle: string
+  detail: string
+  sourceName: string
+  startTime: string
+  endTime: string
+  laneKey: MapCategoryKey
+}
+
+function ReelSequencePlayer({
+  variant = 'standard',
+  game,
+  reels,
+  mode,
+  categoryKey,
+}: {
+  variant?: 'standard' | 'sidecar'
+  game: Game
+  reels: HighlightReels
+  mode: AssemblyModeKey
+  categoryKey: CategoryKey
+}) {
+  const [activeIndex, setActiveIndex] = useState(0)
+  const sequenceClips = useMemo(() => {
+    const sourceCategory = mode === 'wsc_baseline' ? reels.standard_stats : reels[categoryKey]
+    const laneKey: MapCategoryKey = mode === 'wsc_baseline' ? 'standard_stats' : categoryKey
+    return sourceCategory.clips
+      .map((clip, index): SequenceClip | null => {
+        const sourceName = videoNameForClip(game, clip)
+        if (!sourceName) return null
+        return {
+          id: `${mode}-${categoryKey}-${index}-${clip.start_time}`,
+          title: sequenceClipTitle(clip, sourceCategory.title, mode, categoryKey),
+          shortTitle: sequenceClipShortTitle(laneKey),
+          detail: clip.description,
+          sourceName,
+          startTime: clip.start_time,
+          endTime: clip.end_time,
+          laneKey,
+        }
+      })
+      .filter((clip): clip is SequenceClip => Boolean(clip))
+  }, [categoryKey, game, mode, reels])
+  const activeClip = sequenceClips[activeIndex] || sequenceClips[0]
+
+  useEffect(() => {
+    setActiveIndex(0)
+  }, [mode, categoryKey])
+
+  if (!activeClip) {
+    return (
+      <section className="rounded-md border border-border bg-surface p-5 text-sm text-text-tertiary shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+        No sequence clips are available for this assembly mode.
+      </section>
+    )
+  }
+
+  const streamInfoUrl = streamInfoForVideoName(game, activeClip.sourceName)
+  const startSeconds = secondsFromTime(activeClip.startTime)
+  const endSeconds = secondsFromTime(activeClip.endTime)
+  const compact = variant === 'sidecar'
+  const progress = ((activeIndex + 1) / Math.max(sequenceClips.length, 1)) * 100
+
+  return (
+    <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+      <div className="grid gap-4 bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <StrandIcon name="play-next" className="h-4 w-4 text-accent" />
+            <h2 className="text-base font-semibold text-text-primary">Reel Sequence Player</h2>
+          </div>
+          {!compact && <p className="mt-1 text-sm text-text-secondary">Simulated stitched playback by jumping between grounded source ranges.</p>}
+        </div>
+        <span className="text-sm font-semibold text-text-tertiary">{activeIndex + 1} / {sequenceClips.length}</span>
+      </div>
+      <div className="h-1 bg-border-light">
+        <span className="block h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
+      </div>
+      <div className={compact ? 'grid' : 'grid lg:grid-cols-[minmax(0,1.2fr)_360px]'}>
+        <div className="aspect-video bg-card">
+          <TwelveLabsVideoPlayer
+            key={`${streamInfoUrl}-${activeClip.id}`}
+            streamInfoUrl={streamInfoUrl}
+            startSeconds={startSeconds}
+            endSeconds={endSeconds}
+            posterUrl={thumbnailForVideoName(game, activeClip.sourceName)}
+            onDuration={() => undefined}
+            onRangeComplete={() => setActiveIndex((current) => (current + 1) % sequenceClips.length)}
+          />
+        </div>
+        <div className="border-t border-border-light bg-surface px-4 py-3">
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Now playing</p>
+              <h3 className="mt-1 truncate text-sm font-semibold text-text-primary">{activeClip.title}</h3>
+              <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-secondary">{activeClip.detail}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:min-w-[220px]">
+              <div className="rounded-md border border-border-light bg-card px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Range</p>
+                <p className="mt-1 font-mono text-xs font-semibold text-text-primary">{activeClip.startTime} - {activeClip.endTime}</p>
+              </div>
+              <div className="rounded-md border border-border-light bg-card px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Tag</p>
+                <p className="mt-1 truncate text-xs font-semibold text-text-primary">{activeClip.title}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className={compact ? 'relative grid min-w-0 gap-2 border-t border-border-light p-3' : 'relative flex min-w-0 flex-col gap-2 border-t border-border-light p-3 lg:border-l lg:border-t-0'}>
+          <span className="pointer-events-none absolute bottom-4 left-[43px] top-4 w-px bg-border-light" />
+          {sequenceClips.map((clip, index) => {
+            const active = index === activeIndex
+            const color = signalColors[clip.laneKey]
+            return (
+              <button
+                key={clip.id}
+                type="button"
+                onClick={() => setActiveIndex(index)}
+                className={[
+                  'relative grid min-w-0 grid-cols-[64px_minmax(0,1fr)_96px] items-center gap-3 rounded-md border px-3 py-2.5 text-left',
+                  active
+                    ? 'border-accent bg-accent-light text-brand-charcoal'
+                    : 'border-border-light bg-card text-text-secondary hover:border-accent hover:bg-accent-light',
+                ].join(' ')}
+              >
+                <span className="relative flex min-w-0 items-center gap-2">
+                  <span
+                    className={[
+                      'relative z-10 h-3 w-3 shrink-0 rounded-full border-2',
+                      active ? 'shadow-[0_0_0_3px_rgba(0,220,130,0.2)]' : '',
+                    ].join(' ')}
+                    style={{ backgroundColor: color.bg, borderColor: color.border }}
+                  />
+                  <span className="font-mono text-xs font-semibold">{formatSeconds(secondsFromTime(clip.startTime))}</span>
+                </span>
+                <span className="min-w-0 text-sm font-semibold leading-5 text-text-primary">
+                  <span className="line-clamp-2">{clip.detail || `${clip.startTime} - ${clip.endTime}`}</span>
+                </span>
+                <span
+                  className="inline-flex max-w-full justify-self-end truncate rounded-md border px-2 py-1 text-right text-[10px] font-semibold uppercase tracking-[0.06em]"
+                  style={{
+                    backgroundColor: color.track,
+                    borderColor: color.border,
+                    color: color.text,
+                  }}
+                  title={clip.title}
+                >
+                  {clip.shortTitle}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ProducerChatPanel({
+  game,
+  onOpenInWorkspace,
+}: {
+  game: Game
+  onOpenInWorkspace: (videoName: string, searchMoment: SearchMoment) => void
+}) {
+  const [draft, setDraft] = useState('')
+  const [exchanges, setExchanges] = useState<JockeyChatExchange[]>(() => readJockeyChatCache(game.tag))
+  const [loading, setLoading] = useState(false)
+  const [activeSkillKey, setActiveSkillKey] = useState('')
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
+  const chatEndRef = useRef<HTMLDivElement | null>(null)
+  const hydratedCacheTag = useRef<string | null>(null)
+  const canSubmit = Boolean(draft.trim()) && !loading
+  const activeSkill = jockeyProducerSkills.find((skill) => skill.key === activeSkillKey)
+  const showSuggestions = exchanges.length === 0 && !loading && !draft.trim()
+
+  useEffect(() => {
+    hydratedCacheTag.current = null
+    setExchanges(readJockeyChatCache(game.tag))
+    setDraft('')
+    setActiveSkillKey('')
+  }, [game.tag])
+
+  useEffect(() => {
+    if (hydratedCacheTag.current !== game.tag) {
+      hydratedCacheTag.current = game.tag
+      return
+    }
+    writeJockeyChatCache(game.tag, exchanges)
+  }, [exchanges, game.tag])
+
+  useEffect(() => {
+    if (showSuggestions) return
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [exchanges, loading, showSuggestions])
+
+  const loadSkillPrompt = (skill: (typeof jockeyProducerSkills)[number]) => {
+    setActiveSkillKey(skill.key)
+    setDraft(skill.prompt)
+    window.requestAnimationFrame(() => composerRef.current?.focus())
+  }
+
+  const submitPrompt = (prompt: string) => {
+    const message = prompt.trim()
+    if (!message || loading) return
+    const submittedSkill = activeSkill || jockeySkillForPrompt(message)
+    const showReel = jockeyPromptRequestsReel(message, submittedSkill)
+    const reelLimit = showReel && jockeyPromptRequestsSpecificClip(message) ? 1 : 8
+    const currentExchange: JockeyChatExchange = {
+      id: `jockey-exchange-${Date.now()}`,
+      prompt: message,
+      skillKey: submittedSkill?.key,
+      showReel,
+    }
+    setExchanges((current) => [...current, currentExchange])
+    setDraft('')
+    setLoading(true)
+    const body: JockeyChatRequest = {
+      message,
+      include_reel: showReel,
+      limit: showReel ? reelLimit : 0,
+    }
+    fetchJson<JockeyChatResponse>(`/games/${encodeURIComponent(game.tag)}/jockey-chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then((response) => {
+        setExchanges((current) =>
+          current.map((exchange) => (exchange.id === currentExchange.id ? { ...currentExchange, response } : exchange)),
+        )
+      })
+      .catch((error: Error) => {
+        setExchanges((current) =>
+          current.map((exchange) => (exchange.id === currentExchange.id ? { ...currentExchange, error: error.message } : exchange)),
+        )
+      })
+      .finally(() => setLoading(false))
+  }
+
+  return (
+    <section className="flex min-h-[calc(100vh-132px)] w-full flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto px-1 py-8">
+        {showSuggestions ? (
+          <div className="mx-auto flex min-h-[440px] w-full max-w-3xl flex-col justify-center">
+            <div className="grid gap-2">
+              {jockeyProducerSkills.map((skill) => (
+                <button
+                  key={skill.key}
+                  type="button"
+                  onClick={() => loadSkillPrompt(skill)}
+                  className="group grid grid-cols-[32px_minmax(0,1fr)] items-center gap-3 rounded-md border border-border-light bg-surface px-4 py-3 text-left text-text-secondary shadow-[0_1px_2px_rgba(31,41,33,0.035)] transition-colors hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+                >
+                  <span className="inline-flex h-8 w-8 items-center justify-center" style={{ color: skill.color }}>
+                    <StrandIcon name={skill.icon} className="h-5 w-5" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-text-primary">{skill.label}</span>
+                    <span className="mt-1 line-clamp-2 block text-xs font-medium leading-5 text-text-secondary group-hover:text-brand-charcoal">{skill.prompt}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 pb-4">
+            {exchanges.map((exchange) => (
+              <JockeyExchangeView
+                key={exchange.id}
+                game={game}
+                exchange={exchange}
+                onOpenInWorkspace={onOpenInWorkspace}
+              />
+            ))}
+            {loading && (
+              <div className="inline-flex w-fit items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-semibold text-text-secondary">
+                <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
+                Jockey is answering
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+        )}
+      </div>
+
+      <div className="sticky bottom-0 border-t border-border-light bg-background/95 px-1 py-4 backdrop-blur-sm">
+        <div className="mx-auto flex max-w-5xl items-end gap-3 rounded-md border border-border bg-surface px-3 py-2 shadow-[0_10px_30px_rgba(29,28,27,0.08)]">
+          <textarea
+            ref={composerRef}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            rows={1}
+            className="max-h-[132px] min-h-[48px] flex-1 resize-none bg-transparent px-2 py-3 text-sm font-medium leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
+            placeholder={activeSkill ? activeSkill.label : 'Ask Jockey a question or ask for a clip.'}
+          />
+          <button
+            type="button"
+            onClick={() => submitPrompt(draft)}
+            disabled={!canSubmit}
+            className={[
+              'mb-1 inline-flex h-10 shrink-0 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
+              canSubmit
+                ? 'border-accent bg-accent-light text-brand-charcoal hover:bg-accent'
+                : 'cursor-not-allowed border-border bg-card text-text-tertiary',
+            ].join(' ')}
+          >
+            <StrandIcon name={loading ? 'spinner' : 'generate'} className={['h-4 w-4', loading ? 'animate-spin' : ''].join(' ')} />
+            Send
+          </button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function JockeyExchangeView({
+  game,
+  exchange,
+  onOpenInWorkspace,
+}: {
+  game: Game
+  exchange: JockeyChatExchange
+  onOpenInWorkspace: (videoName: string, searchMoment: SearchMoment) => void
+}) {
+  return (
+    <div className="min-w-0">
+      <div
+        className="ml-auto max-w-3xl rounded-md border px-4 py-3 text-sm font-semibold leading-6 text-brand-charcoal"
+        style={{
+          borderColor: jockeySkillForKey(exchange.skillKey)?.color || '#00DC82',
+          backgroundColor: jockeySkillForKey(exchange.skillKey)?.tint || 'rgba(0,220,130,0.12)',
+        }}
+      >
+        <p>{exchange.prompt}</p>
+      </div>
+      {exchange.error ? (
+        <div className="mt-4 max-w-3xl rounded-md border border-error bg-error-light px-4 py-3 text-sm font-semibold leading-6 text-error-dark">
+          {exchange.error}
+        </div>
+      ) : exchange.response ? (
+        <JockeyResponseShowcase
+          game={game}
+          response={exchange.response}
+          skill={jockeySkillForKey(exchange.skillKey)}
+          showReel={exchange.showReel}
+          onOpenInWorkspace={onOpenInWorkspace}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function JockeyResponseShowcase({
+  game,
+  response,
+  skill,
+  showReel,
+  onOpenInWorkspace,
+}: {
+  game: Game
+  response: JockeyChatResponse
+  skill?: (typeof jockeyProducerSkills)[number]
+  showReel: boolean
+  onOpenInWorkspace: (videoName: string, searchMoment: SearchMoment) => void
+}) {
+  if (showReel) {
+    return (
+      <div className="mt-4">
+        {response.clips.length ? (
+          <JockeyClipShowcase
+            game={game}
+            clips={response.clips}
+            onOpenInWorkspace={onOpenInWorkspace}
+          />
+        ) : (
+          <p className="mt-4 text-sm font-semibold text-text-tertiary">No grounded reel clips returned.</p>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-4 max-w-4xl rounded-md border border-border-light bg-surface px-4 py-4 shadow-[0_1px_2px_rgba(31,41,33,0.035)]">
+      <div className="flex items-center gap-2">
+        <StrandIcon name={skill?.icon || 'speech'} className="h-4 w-4 text-accent" />
+        <h3 className="text-sm font-semibold text-text-primary">Jockey</h3>
+      </div>
+      <p className="mt-3 text-sm font-medium leading-6 text-text-secondary">{response.narrative_summary}</p>
+    </div>
+  )
+}
+
+function JockeyClipShowcase({
+  game,
+  clips,
+  onOpenInWorkspace,
+}: {
+  game: Game
+  clips: JockeyManifestClip[]
+  onOpenInWorkspace: (videoName: string, searchMoment: SearchMoment) => void
+}) {
+  const showSliderRow = clips.length > 3
+
+  return (
+    <div className={showSliderRow ? 'mt-4 max-w-4xl overflow-x-auto pb-3' : 'mt-4 max-w-[680px]'}>
+      <div className={showSliderRow ? 'flex w-max snap-x gap-3' : 'grid grid-cols-[repeat(auto-fit,minmax(164px,196px))] gap-3'}>
+        {clips.map((clip, index) => {
+          const sourceName = jockeyClipVideoName(game, clip)
+          const streamInfoUrl = sourceName ? streamInfoForVideoName(game, sourceName) : null
+          const downloadUrl = sourceName ? jockeyReelDownloadUrl(game, sourceName, clip, index) : null
+          const posterUrl = sourceName ? thumbnailForVideoName(game, sourceName) : undefined
+          const workspaceMoment = sourceName ? jockeyClipSearchMoment(sourceName, clip) : null
+          const paddedRange = paddedRangeForClip(clip)
+
+          return (
+            <article
+              key={clip.id}
+              className={[
+                'min-w-0 overflow-hidden rounded-md border border-border-light bg-surface shadow-[0_8px_18px_rgba(29,28,27,0.055)]',
+                showSliderRow ? 'w-[196px] shrink-0 snap-start' : '',
+              ].join(' ')}
+            >
+            <div className="relative m-1.5 aspect-[9/16] overflow-hidden rounded-md bg-brand-charcoal ring-1 ring-black/5">
+              {downloadUrl && (
+                <a
+                  href={downloadUrl}
+                  download
+                  className="absolute right-2 top-2 z-10 inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/28 bg-brand-charcoal/78 text-white shadow-[0_8px_18px_rgba(0,0,0,0.2)] backdrop-blur-sm hover:border-accent hover:bg-accent hover:text-brand-charcoal"
+                  aria-label={`Download ${clip.start_time} reel`}
+                  title="Download reel"
+                >
+                  <StrandIcon name="download" className="h-4 w-4" />
+                </a>
+              )}
+              {streamInfoUrl ? (
+                <TwelveLabsVideoPlayer
+                  key={`${streamInfoUrl}-${clip.id}`}
+                  streamInfoUrl={streamInfoUrl}
+                  startSeconds={paddedRange.start}
+                  endSeconds={paddedRange.end}
+                  posterUrl={posterUrl}
+                  segmentRange={{
+                    startSeconds: paddedRange.start,
+                    endSeconds: paddedRange.end,
+                    startLabel: formatSeconds(paddedRange.start),
+                    endLabel: formatSeconds(paddedRange.end),
+                  }}
+                  variant="minimal"
+                  fit="cover"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center px-5 text-center text-sm font-semibold text-white/82">
+                  Clip source is not mapped to a registered video.
+                </div>
+              )}
+            </div>
+
+            <div className="px-3 pb-3 pt-1">
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <p className="min-w-0 truncate font-mono text-xs font-semibold text-text-primary">
+                  {formatSeconds(paddedRange.start)} - {formatSeconds(paddedRange.end)}
+                </p>
+                {workspaceMoment && sourceName && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenInWorkspace(sourceName, workspaceMoment)}
+                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-tertiary hover:bg-accent-light hover:text-brand-charcoal"
+                    aria-label={`Open ${clip.start_time} clip in Workspace`}
+                    title="Open in Workspace"
+                  >
+                    <StrandIcon name="arrow-diagonal" className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 truncate text-xs font-semibold text-text-primary">{clip.moment_type || `Reel ${index + 1}`}</p>
+              <p className="mt-1 line-clamp-3 text-xs leading-5 text-text-secondary">{clip.jockey_rationale}</p>
+              <p className="mt-2 truncate text-xs font-medium text-text-tertiary">
+                {sourceName || clip.video_reference}
+              </p>
+            </div>
+          </article>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function WorkspaceExplainabilityRail({
+  collapsed,
+  mode,
+  selectedCategory,
+  activeVideoName,
+  standardClip,
+  enhancedClip,
+  category,
+  onToggleCollapse,
+}: {
+  collapsed: boolean
+  mode: AssemblyModeKey
+  selectedCategory: CategoryKey
+  activeVideoName?: string
+  standardClip?: Clip
+  enhancedClip?: Clip
+  category?: HighlightCategory
+  onToggleCollapse: () => void
+}) {
+  const modeLabel = assemblyModes.find((item) => item.key === mode)?.label || 'Assembly'
+  const lane = categories.find((item) => item.key === selectedCategory) || categories[0]
+  const selectedClip = mode === 'wsc_baseline' ? standardClip : enhancedClip
+  const selectedRange = selectedClip ? `${selectedClip.start_time} - ${selectedClip.end_time}` : 'No clip selected'
+
+  if (collapsed) {
+    return (
+      <section className="w-fit">
+        <button
+          type="button"
+          onPointerDown={(event) => {
+            event.preventDefault()
+            onToggleCollapse()
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              onToggleCollapse()
+            }
+          }}
+          className="inline-flex h-10 min-w-0 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 text-text-secondary shadow-[0_6px_18px_rgba(29,28,27,0.06)] transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal focus:outline-none focus:ring-2 focus:ring-accent/30 xl:h-11 xl:w-11 xl:px-0"
+          aria-expanded="false"
+          aria-label="Expand explainability sidebar"
+          title="Expand explainability"
+        >
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border border-accent bg-accent-light text-brand-charcoal">
+            <StrandIcon name="vision" className="h-4 w-4" />
+          </span>
+          <span className="min-w-0 truncate text-xs font-semibold uppercase tracking-[0.08em] xl:sr-only">
+            Explainability
+          </span>
+          <StrandIcon name="expand" className="h-3.5 w-3.5 shrink-0 text-text-secondary xl:hidden" />
+        </button>
+      </section>
+    )
+  }
+
+  return (
+    <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.06)] xl:max-h-[calc(100vh-156px)] xl:overflow-y-auto">
+      <div className="border-b border-border-light bg-card px-4 py-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <StrandIcon name="vision" className="h-4 w-4 shrink-0 text-accent" />
+            <h2 className="truncate text-base font-semibold text-text-primary">Explainability</h2>
+          </div>
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              event.preventDefault()
+              onToggleCollapse()
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                onToggleCollapse()
+              }
+            }}
+            className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-2 text-text-secondary transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+            aria-expanded="true"
+            aria-label="Collapse explainability sidebar"
+            title="Collapse explainability"
+          >
+            <StrandIcon name="collapse" className="h-4 w-4" />
+            <span className="text-xs font-semibold">Hide</span>
+          </button>
+        </div>
+        <p className="mt-1 text-sm leading-5 text-text-secondary">
+          Selected clip evidence stays pinned while you move through Workspace.
+        </p>
+      </div>
+
+      <div className="grid gap-3 border-b border-border-light p-4">
+        <div className="grid grid-cols-2 gap-2">
+          <Detail label="Mode" value={modeLabel} />
+          <Detail label="Lane" value={mode === 'wsc_baseline' ? 'Event Feed' : lane.label} />
+        </div>
+        <div className="rounded-md border border-accent/60 bg-accent-light px-3 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-charcoal">Active evidence</p>
+          <p className="mt-1 line-clamp-2 text-sm font-semibold leading-5 text-text-primary">
+            {selectedClip?.description || activeVideoName || 'Select a clip from the player or discovery map'}
+          </p>
+          <p className="mt-2 font-mono text-xs font-semibold text-text-secondary">{selectedRange}</p>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-4 p-4">
+        <ReasonBlock title="Stats trigger" clip={standardClip} expectedSource="stats" />
+        <ReasonBlock title="TwelveLabs signal" clip={enhancedClip} expectedSource="semantic" />
+        {category?.assembly_notes.length ? (
+          <div className="border-t border-border-light pt-4">
+            <h3 className="text-sm font-semibold text-text-primary">Assembly Notes</h3>
+            <div className="mt-3 flex flex-col gap-2">
+              {category.assembly_notes.map((note, index) => (
+                <p key={`${note}-${index}`} className="rounded-md bg-card px-3 py-2 text-sm leading-5 text-text-secondary">
+                  {note}
+                </p>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
 function WorkspaceVideoCarousel({
   game,
+  videoNames,
   activeVideoName,
   onSelect,
 }: {
   game: Game
+  videoNames: string[]
   activeVideoName?: string
   onSelect: (videoName: string) => void
 }) {
-  const uniqueVideos = useMemo(() => uniqueVideoNames(game.source_videos || []), [game.source_videos])
+  const uniqueVideos = useMemo(() => uniqueVideoNames(videoNames), [videoNames])
   const loopVideos = useMemo(() => {
     if (uniqueVideos.length === 0) return []
     const minimumItems = Math.max(8, uniqueVideos.length)
@@ -663,8 +2017,8 @@ function WorkspaceVideoCarousel({
         type="button"
         onClick={() => onSelect(videoName)}
         className={[
-          'group relative h-[118px] w-[210px] shrink-0 overflow-hidden rounded-md border bg-brand-charcoal text-left shadow-[0_8px_24px_rgba(29,28,27,0.1)]',
-          active ? 'border-accent ring-2 ring-accent/35' : 'border-white/10 hover:border-accent/80',
+          'group relative h-[118px] w-[210px] shrink-0 overflow-hidden rounded-md border bg-card text-left shadow-[0_8px_24px_rgba(29,28,27,0.08)]',
+          active ? 'border-accent ring-2 ring-accent/35' : 'border-border-light hover:border-accent/80',
         ].join(' ')}
         aria-label={`Open ${videoName}`}
         aria-current={active ? 'true' : undefined}
@@ -675,14 +2029,8 @@ function WorkspaceVideoCarousel({
           className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           loading="lazy"
         />
-        <span className="absolute inset-0 bg-gradient-to-t from-black/82 via-black/18 to-transparent" />
-        <span className="absolute bottom-0 left-0 right-0 p-3">
-          <span className="line-clamp-2 text-xs font-semibold leading-4 text-white">{videoName}</span>
-          {active && (
-            <span className="mt-2 inline-flex h-6 items-center rounded-sm bg-white px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-charcoal">
-              Active
-            </span>
-          )}
+        <span className="absolute inset-x-0 bottom-0 bg-surface/92 p-3 shadow-[0_-8px_24px_rgba(29,28,27,0.08)] backdrop-blur-sm">
+          <span className="line-clamp-2 text-xs font-semibold leading-4 text-text-primary">{videoName}</span>
         </span>
       </button>
     )
@@ -783,7 +2131,7 @@ function OverviewPage({
             <button
               type="button"
               onClick={() => onNavigate('discover')}
-              className="inline-flex h-10 items-center gap-2 rounded-md border border-brand-charcoal bg-brand-charcoal px-4 text-sm font-semibold text-white hover:bg-text-primary"
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-accent bg-accent-light px-4 text-sm font-semibold text-brand-charcoal hover:bg-accent"
             >
               <StrandIcon name="search" className="h-4 w-4" />
               Discover
@@ -791,7 +2139,7 @@ function OverviewPage({
             <button
               type="button"
               onClick={() => onNavigate('workspace')}
-              className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:border-brand-charcoal"
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:border-accent hover:bg-accent-light"
             >
               <StrandIcon name="play-boxed" className="h-4 w-4" />
               Workspace
@@ -934,7 +2282,7 @@ function OverviewLaneRow({ icon, label, count, width }: { icon: string; label: s
         <span className="truncate">{label}</span>
       </div>
       <div className="h-2 overflow-hidden rounded-sm bg-border-light">
-        <span className="block h-full rounded-sm bg-brand-charcoal" style={{ width: `${width}%` }} />
+        <span className="block h-full rounded-sm bg-accent" style={{ width: `${width}%` }} />
       </div>
       <span className="text-right text-sm font-semibold text-text-primary">{count}</span>
     </div>
@@ -955,50 +2303,358 @@ function OverviewStage({ icon, title, detail }: { icon: string; title: string; d
   )
 }
 
+function UploadVideosModal({
+  open,
+  game,
+  onClose,
+  onGameUpdated,
+  onUploadQueued,
+}: {
+  open: boolean
+  game: Game | null
+  onClose: () => void
+  onGameUpdated: (game: Game, preferredVideoName?: string) => void
+  onUploadQueued: (message: string) => void
+}) {
+  const [selectedFiles, setSelectedFiles] = useState<UploadPreviewItem[]>([])
+  const [dragActive, setDragActive] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const selectedFilesRef = useRef<UploadPreviewItem[]>([])
+
+  useEffect(() => {
+    selectedFilesRef.current = selectedFiles
+  }, [selectedFiles])
+
+  useEffect(() => {
+    return () => {
+      selectedFilesRef.current.forEach((item) => window.URL.revokeObjectURL(item.url))
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !uploading) onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose, open, uploading])
+
+  const clearFiles = useCallback(() => {
+    setSelectedFiles((current) => {
+      current.forEach((item) => window.URL.revokeObjectURL(item.url))
+      return []
+    })
+    setUploadError('')
+  }, [])
+
+  useEffect(() => {
+    if (!open) {
+      clearFiles()
+      setDragActive(false)
+      setUploading(false)
+    }
+  }, [clearFiles, open])
+
+  const closeModal = useCallback(() => {
+    if (uploading) return
+    onClose()
+  }, [onClose, uploading])
+
+  const addFiles = useCallback((fileList?: FileList | null) => {
+    if (!fileList) return
+    const nextFiles = Array.from(fileList).filter(isVideoFile)
+    if (!nextFiles.length) return
+    setUploadError('')
+    setSelectedFiles((current) => {
+      const existingKeys = new Set(current.map((item) => uploadFileKey(item.file)))
+      const additions = nextFiles
+        .filter((file) => !existingKeys.has(uploadFileKey(file)))
+        .map((file) => ({
+          id: `${uploadFileKey(file)}-${Math.random().toString(36).slice(2)}`,
+          file,
+          url: window.URL.createObjectURL(file),
+        }))
+      return [...current, ...additions]
+    })
+  }, [])
+
+  const removeFile = useCallback((id: string) => {
+    if (uploading) return
+    setSelectedFiles((current) => {
+      const removed = current.find((item) => item.id === id)
+      if (removed) window.URL.revokeObjectURL(removed.url)
+      return current.filter((item) => item.id !== id)
+    })
+  }, [uploading])
+
+  const updateDuration = useCallback((id: string, durationSeconds: number) => {
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return
+    setSelectedFiles((current) =>
+      current.map((item) => (item.id === id ? { ...item, durationSeconds } : item)),
+    )
+  }, [])
+
+  const openFilePicker = useCallback(() => {
+    if (uploading) return
+    fileInputRef.current?.click()
+  }, [uploading])
+
+  const openFilePickerFromSurface = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (uploading) return
+    const target = event.target instanceof HTMLElement ? event.target : null
+    if (target?.closest('button')) return
+    openFilePicker()
+  }, [openFilePicker, uploading])
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    if (!uploading) setDragActive(true)
+  }
+  const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setDragActive(false)
+  }
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setDragActive(false)
+    if (!uploading) addFiles(event.dataTransfer.files)
+  }
+
+  const uploadSelectedVideos = useCallback(async () => {
+    if (!game || !selectedFiles.length || uploading) return
+    setUploading(true)
+    setUploadError('')
+    const uploadedNames: string[] = []
+    try {
+      for (let index = 0; index < selectedFiles.length; index += 1) {
+        const item = selectedFiles[index]
+        const formData = new FormData()
+        formData.set('method', 'direct')
+        formData.set('file', item.file)
+        const response = await fetchJson<UploadGameVideoResponse>(`/games/${encodeURIComponent(game.tag)}/upload`, {
+          method: 'POST',
+          body: formData,
+        })
+        uploadedNames.push(response.video_name)
+        onGameUpdated(response.game, response.video_name)
+      }
+      onUploadQueued(
+        uploadedNames.length === 1
+          ? `${uploadedNames[0]} uploaded. Index and knowledge-base updates will finish in a few minutes.`
+          : `${uploadedNames.length} videos uploaded. Index and knowledge-base updates will finish in a few minutes.`,
+      )
+      onClose()
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }, [game, onClose, onGameUpdated, onUploadQueued, selectedFiles, uploading])
+
+  if (!open) return null
+
+  const hasFiles = selectedFiles.length > 0
+  const knownDuration = selectedFiles.reduce((total, item) => total + (item.durationSeconds || 0), 0)
+  const uploadDisabled = !game || !hasFiles || uploading
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 px-4 py-5">
+      <div
+        className="flex max-h-[calc(100vh-40px)] w-full max-w-[560px] flex-col overflow-hidden rounded-[20px] bg-white px-5 py-4 text-[#202020] shadow-[0_20px_56px_rgba(0,0,0,0.24)] sm:px-6 sm:py-5"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="upload-videos-title"
+      >
+        <div className="flex items-start justify-between gap-6">
+          <h2 id="upload-videos-title" className="text-xl font-semibold leading-none tracking-normal sm:text-2xl">
+            Upload videos
+          </h2>
+          <span className="rounded-[7px] border-2 border-[#918d88] px-2 py-0.5 text-sm font-semibold leading-none text-[#918d88]">
+            2/2
+          </span>
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="video/*"
+          multiple
+          className="sr-only"
+          onChange={(event) => {
+            addFiles(event.currentTarget.files)
+            event.currentTarget.value = ''
+          }}
+        />
+
+        <div className="mt-4 min-h-0 overflow-y-auto">
+          <div
+            className={[
+              'flex min-h-[180px] flex-col rounded-[20px] border-2 border-dashed px-4 py-4 transition-colors sm:min-h-[200px] sm:px-5 sm:py-4',
+              uploading ? 'cursor-not-allowed' : 'cursor-pointer',
+              dragActive ? 'border-[#202020] bg-[#fafafa]' : 'border-[#c6c3c0] bg-white',
+            ].join(' ')}
+            onClick={openFilePickerFromSurface}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            {hasFiles ? (
+              <>
+                <div className="flex items-start justify-between gap-6">
+                  <p className="text-base font-semibold leading-none">
+                    {selectedFiles.length} {selectedFiles.length === 1 ? 'video' : 'videos'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={openFilePicker}
+                    disabled={uploading}
+                    className="rounded-[10px] border-2 border-[#202020] px-3 py-1.5 text-sm font-medium leading-none text-[#202020] hover:bg-[#f4f4f4] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Browse
+                  </button>
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-x-4 gap-y-5">
+                  {selectedFiles.map((item) => (
+                    <div key={item.id} className="min-w-0 w-[126px] sm:w-[136px]">
+                      <div className="relative">
+                        <div className="aspect-video overflow-hidden rounded-[14px] bg-[#efefef]">
+                          <video
+                            src={item.url}
+                            muted
+                            playsInline
+                            preload="metadata"
+                            className="h-full w-full object-cover"
+                            onLoadedMetadata={(event) => {
+                              updateDuration(item.id, event.currentTarget.duration)
+                            }}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeFile(item.id)}
+                          disabled={uploading}
+                          className="absolute -right-1.5 -top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-[#4b4b4b] text-white shadow-[0_2px_8px_rgba(29,28,27,0.2)] hover:bg-[#202020] disabled:cursor-not-allowed disabled:opacity-60"
+                          aria-label={`Remove ${item.file.name}`}
+                          title={`Remove ${item.file.name}`}
+                        >
+                          <StrandIcon name="close" className="h-3 w-3" />
+                        </button>
+                      </div>
+                      <p className="mt-2 truncate text-sm font-semibold leading-tight">{item.file.name}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-auto flex justify-end pt-5">
+                  <p className="text-sm font-semibold leading-none">
+                    Total video duration is {knownDuration ? formatUploadDuration(knownDuration) : 'calculating'}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="flex min-h-[150px] flex-1 flex-col items-center justify-center text-center">
+                <button
+                  type="button"
+                  onClick={openFilePicker}
+                  disabled={uploading}
+                  className="flex flex-col items-center gap-2.5 rounded-[12px] px-4 py-2.5 text-[#202020] hover:bg-[#f7f7f7] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <span className="flex flex-col items-center text-[#202020]" aria-hidden="true">
+                    <span className="text-3xl font-light leading-[0.75]">↑</span>
+                    <span className="mt-1 h-0.5 w-7 rounded-full bg-[#202020]" />
+                  </span>
+                  <span className="text-lg font-medium leading-tight sm:text-xl">Drop videos or browse files</span>
+                </button>
+                <div className="mt-6 flex flex-wrap justify-center gap-1.5">
+                  {uploadRequirementLabels.map((label) => (
+                    <span key={label} className="rounded-[6px] border border-[#202020] px-1.5 py-0.5 text-[11px] font-medium leading-none sm:text-xs">
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {uploadError && (
+            <div className="mt-4">
+              <Notice tone="error" icon="warning" text={uploadError} />
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={closeModal}
+            disabled={uploading}
+            className="rounded-[12px] border-2 border-[#202020] bg-white px-5 py-2 text-sm font-medium leading-none text-[#202020] hover:bg-[#f7f7f7] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={uploadSelectedVideos}
+            disabled={uploadDisabled}
+            className={[
+              'rounded-[12px] border-2 px-5 py-2 text-sm font-semibold leading-none',
+              uploadDisabled
+                ? 'cursor-not-allowed border-[#dad8d6] bg-[#ecebea] text-[#8d8985]'
+                : 'border-[#202020] bg-[#202020] text-white hover:bg-[#343434]',
+            ].join(' ')}
+          >
+            Upload
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function DiscoverPage({
   game,
   loading,
   error,
-  reelsByTag,
   onOpenInWorkspace,
 }: {
   game: Game | null
   loading: boolean
   error: string
-  reelsByTag: Record<string, HighlightReels>
   onOpenInWorkspace: (item: DiscoverItem) => void
 }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [submittedSearchQuery, setSubmittedSearchQuery] = useState('')
-  const [activeFilter, setActiveFilter] = useState<DiscoverFilterKey>('all')
-  const [searchResponse, setSearchResponse] = useState<JockeySearchResponse | null>(null)
+  const [searchResponse, setSearchResponse] = useState<MarengoSearchResponse | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [activePreviewId, setActivePreviewId] = useState<string | null>(null)
   const sourceVideos = useMemo(() => game?.source_videos || [], [game])
-  const hasLiveJockeyConnection = Boolean(game?.knowledge_store_id && sourceVideos.length > 0)
-  const reelsByVideo = useMemo(() => {
-    if (!game) return {}
-    return Object.fromEntries(
-      sourceVideos.map((videoName) => [videoName, reelsByTag[reelCacheKey(game.tag, videoName)]]),
-    ) as Record<string, HighlightReels | undefined>
-  }, [game, reelsByTag, sourceVideos])
   const normalizedQuery = normalizeSearchText(submittedSearchQuery)
   const trimmedSearchQuery = submittedSearchQuery.trim()
   const draftSearchQuery = searchQuery.trim()
   const items = useMemo(() => {
     if (!game) return []
     if (normalizedQuery) return searchResponse ? searchResultItems(game, searchResponse) : []
-    return knowledgeBaseItems(game, sourceVideos, '', reelsByVideo, activeFilter)
-  }, [activeFilter, game, normalizedQuery, reelsByVideo, searchResponse, sourceVideos])
+    return sourceVideoItems(game, sourceVideos)
+  }, [game, normalizedQuery, searchResponse, sourceVideos])
   const resultLabel = normalizedQuery
     ? searchLoading
       ? 'Searching'
       : `${items.length} results`
     : `${items.length} videos`
   const searchSummary = normalizedQuery
-    ? searchResponse?.query_interpretation || 'Searching visual, speech, audio, OCR, and semantic moments in the indexed footage.'
-    : 'Search across indexed source videos with natural language, then open a result directly in the workspace.'
-  const jockeyStatus = hasLiveJockeyConnection ? 'Live Jockey search' : 'Source metadata'
+    ? searchResponse?.query_interpretation || 'Matching visual and audio evidence in the footage.'
+    : 'Search source footage for visual and audio moments that are not captured in the event feed.'
+
+  useEffect(() => {
+    const firstSearchItem = normalizedQuery ? items.find((item) => item.resultType === 'search') : null
+    setActivePreviewId(firstSearchItem?.id || null)
+  }, [items, normalizedQuery])
+
   const submitSearch = useCallback(() => {
     const nextQuery = searchQuery.trim()
     setSubmittedSearchQuery(nextQuery)
@@ -1032,14 +2688,15 @@ function DiscoverPage({
     setSearchLoading(true)
     setSearchError('')
     const timeout = window.setTimeout(() => {
-      fetchJson<JockeySearchResponse>(`/games/${encodeURIComponent(game.tag)}/search`, {
+      fetchJson<MarengoSearchResponse>(`/games/${encodeURIComponent(game.tag)}/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
           query: trimmedSearchQuery,
           limit: 12,
-          filter: activeFilter === 'all' ? undefined : activeFilter,
+          group_by: 'clip',
+          search_options: ['visual', 'audio'],
         }),
       })
         .then((body) => {
@@ -1061,7 +2718,7 @@ function DiscoverPage({
       window.clearTimeout(timeout)
       controller.abort()
     }
-  }, [activeFilter, game, trimmedSearchQuery])
+  }, [game, trimmedSearchQuery])
 
   if (error) {
     return (
@@ -1076,7 +2733,7 @@ function DiscoverPage({
       <section className="flex flex-1 items-center justify-center px-6 py-10">
         <div className="flex items-center gap-3 rounded-md border border-border bg-surface px-4 py-3 text-sm font-semibold text-text-secondary shadow-[0_1px_2px_rgba(29,28,27,0.035)]">
           <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
-          Loading sports knowledge base videos
+          Loading sports videos
         </div>
       </section>
     )
@@ -1088,28 +2745,27 @@ function DiscoverPage({
         <div className="grid gap-5 border-b border-border pb-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
           <div className="min-w-0">
             <div className="inline-flex h-8 items-center rounded-full bg-accent-light px-4 text-xs font-semibold uppercase tracking-[0.18em] text-brand-charcoal">
-              Search
+              Marengo Search
             </div>
             <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-tight text-text-primary lg:text-5xl">
-              {normalizedQuery ? submittedSearchQuery : `${game.label} Knowledge Base`}
+              {normalizedQuery ? submittedSearchQuery : game.label}
             </h2>
             <p className="mt-3 max-w-3xl text-base leading-7 text-text-secondary">{searchSummary}</p>
           </div>
-          <p className="hidden text-xs font-semibold uppercase tracking-[0.28em] text-text-tertiary lg:block">
-            Jockey · Search Results
-          </p>
         </div>
 
         <DiscoverSearchPanel
           value={searchQuery}
           onChange={updateSearchQuery}
           onSubmit={submitSearch}
-          activeFilter={activeFilter}
-          onFilterChange={setActiveFilter}
           resultLabel={resultLabel}
-          jockeyStatus={jockeyStatus}
           searchLoading={searchLoading}
           canSearch={Boolean(draftSearchQuery) && !searchLoading}
+          presets={marengoSearchPresets}
+          onPresetSelect={(preset) => {
+            setSearchQuery(preset)
+            setSubmittedSearchQuery(preset)
+          }}
         />
 
         <section className="min-w-0">
@@ -1117,10 +2773,6 @@ function DiscoverPage({
             <div className="inline-flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.18em] text-text-tertiary">
               <StrandIcon name={searchLoading ? 'spinner' : 'search'} className={['h-4 w-4', searchLoading ? 'animate-spin' : ''].join(' ')} />
               {resultLabel} · click to open
-            </div>
-            <div className="inline-flex h-9 w-fit items-center gap-2 rounded-md border border-border bg-card px-3 text-xs font-semibold text-text-secondary">
-              <StrandIcon name="checkmark" className="h-4 w-4 text-accent" />
-              {jockeyStatus}
             </div>
           </div>
 
@@ -1136,14 +2788,20 @@ function DiscoverPage({
                 <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
                   <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
                 </div>
-                <h3 className="mt-4 text-base font-semibold text-text-primary">Searching indexed video</h3>
-                <p className="mt-2 text-sm leading-6 text-text-secondary">Jockey is matching the query against visual, audio, speech, OCR, and semantic evidence.</p>
+                <h3 className="mt-4 text-base font-semibold text-text-primary">Searching video</h3>
+                <p className="mt-2 text-sm leading-6 text-text-secondary">Matching the query against visual and audio evidence.</p>
               </div>
             </div>
           ) : items.length > 0 ? (
             <div className="grid auto-rows-fr gap-5 md:grid-cols-2 xl:grid-cols-3">
               {items.map((item) => (
-                <DiscoverResultCard key={item.id} item={item} onOpenInWorkspace={onOpenInWorkspace} />
+                <DiscoverResultCard
+                  key={item.id}
+                  item={item}
+                  onOpenInWorkspace={onOpenInWorkspace}
+                  isPreviewActive={activePreviewId === item.id}
+                  onTogglePreview={() => setActivePreviewId((current) => (current === item.id ? null : item.id))}
+                />
               ))}
             </div>
           ) : (
@@ -1159,94 +2817,82 @@ function DiscoverSearchPanel({
   value,
   onChange,
   onSubmit,
-  activeFilter,
-  onFilterChange,
   resultLabel,
-  jockeyStatus,
   searchLoading,
   canSearch,
+  presets,
+  onPresetSelect,
 }: {
   value: string
   onChange: (value: string) => void
   onSubmit: () => void
-  activeFilter: DiscoverFilterKey
-  onFilterChange: (value: DiscoverFilterKey) => void
   resultLabel: string
-  jockeyStatus: string
   searchLoading: boolean
   canSearch: boolean
+  presets: string[]
+  onPresetSelect: (value: string) => void
 }) {
   return (
     <div className="grid gap-4 rounded-md border border-border bg-card p-4 shadow-[0_8px_24px_rgba(29,28,27,0.045)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
       <label htmlFor="discover-search" className="sr-only">
-        Search indexed videos
+        Search source videos
       </label>
-      <div className="flex min-h-12 min-w-0 items-center gap-3 rounded-md border border-border bg-surface pl-4 pr-2 focus-within:border-brand-charcoal">
-        <StrandIcon name={searchLoading ? 'spinner' : 'search'} className={['h-4 w-4 text-text-tertiary', searchLoading ? 'animate-spin' : ''].join(' ')} />
-        <input
-          id="discover-search"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') onSubmit()
-          }}
-          className="min-w-0 flex-1 bg-transparent text-base font-medium text-text-primary outline-none placeholder:text-text-tertiary"
-          placeholder="Find goals, crowd reactions, pressure, celebrations..."
-        />
-        {value && (
+      <div className="grid gap-3">
+        <div className="flex min-h-12 min-w-0 items-center gap-3 rounded-md border border-border bg-surface pl-4 pr-2 focus-within:border-accent">
+          <StrandIcon name={searchLoading ? 'spinner' : 'search'} className={['h-4 w-4 text-text-tertiary', searchLoading ? 'animate-spin' : ''].join(' ')} />
+          <input
+            id="discover-search"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') onSubmit()
+            }}
+            className="min-w-0 flex-1 bg-transparent text-base font-medium text-text-primary outline-none placeholder:text-text-tertiary"
+            placeholder="Search visual/audio moments: player celebration, crowd roar, diving save..."
+          />
+          {value && (
+            <button
+              type="button"
+              onClick={() => onChange('')}
+              className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-text-secondary hover:border-accent hover:text-brand-charcoal"
+              aria-label="Clear search"
+              title="Clear search"
+            >
+              <StrandIcon name="close" className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => onChange('')}
-            className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-text-secondary hover:border-accent hover:text-brand-charcoal"
-            aria-label="Clear search"
-            title="Clear search"
+            onClick={onSubmit}
+            disabled={!canSearch}
+            className={[
+              'inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold',
+              canSearch
+                ? 'border-accent bg-accent-light text-brand-charcoal hover:bg-accent'
+                : 'cursor-not-allowed border-border bg-card text-text-tertiary',
+            ].join(' ')}
           >
-            <StrandIcon name="close" className="h-3.5 w-3.5" />
+            <StrandIcon name="search" className="h-4 w-4" />
+            Search
           </button>
-        )}
-        <button
-          type="button"
-          onClick={onSubmit}
-          disabled={!canSearch}
-          className={[
-            'inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold',
-            canSearch
-              ? 'border-brand-charcoal bg-brand-charcoal text-white hover:bg-text-primary'
-              : 'cursor-not-allowed border-border bg-card text-text-tertiary',
-          ].join(' ')}
-        >
-          <StrandIcon name="search" className="h-4 w-4" />
-          Search
-        </button>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-        {discoverFilters.map((filter) => {
-          const active = activeFilter === filter.key
-          return (
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {presets.map((preset) => (
             <button
-              key={filter.key}
+              key={preset}
               type="button"
-              onClick={() => onFilterChange(filter.key)}
-              className={[
-                'inline-flex h-10 items-center gap-2 rounded-md border px-3 text-xs font-semibold uppercase tracking-[0.08em]',
-                active
-                  ? 'border-brand-charcoal bg-brand-charcoal text-white'
-                  : 'border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
-              ].join(' ')}
-              aria-pressed={active}
-              title={`Filter by ${filter.label}`}
+              onClick={() => onPresetSelect(preset)}
+              className="inline-flex h-8 max-w-full items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
             >
-              <StrandIcon name={filter.icon} className="h-4 w-4" />
-              <span>{filter.label}</span>
+              <StrandIcon name="vision" className="h-3.5 w-3.5 text-accent" />
+              <span className="truncate">{preset}</span>
             </button>
-          )
-        })}
+          ))}
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border-light pt-3 text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary lg:col-span-2">
         <span>{resultLabel}</span>
-        <span>{jockeyStatus}</span>
       </div>
     </div>
   )
@@ -1261,35 +2907,83 @@ function DiscoverMetric({ label, value }: { label: string; value: string }) {
   )
 }
 
-function DiscoverResultCard({ item, onOpenInWorkspace }: { item: DiscoverItem; onOpenInWorkspace: (item: DiscoverItem) => void }) {
+function DiscoverResultCard({
+  item,
+  onOpenInWorkspace,
+  isPreviewActive,
+  onTogglePreview,
+}: {
+  item: DiscoverItem
+  onOpenInWorkspace: (item: DiscoverItem) => void
+  isPreviewActive: boolean
+  onTogglePreview: () => void
+}) {
   const category = item.categoryKey ? mapLanes.find((lane) => lane.key === item.categoryKey) : null
   const isMomentResult = item.resultType === 'moment' || item.resultType === 'search'
   const canOpen = Boolean(item.videoName)
+  const canPreviewSegment = item.resultType === 'search' && Boolean(item.media && item.searchMoment && item.startTime)
   const actionLabel = isMomentResult ? `Open moment in ${item.videoName}` : `Open details for ${item.videoName}`
+  const timeRange = item.startTime ? `${item.startTime}${item.endTime ? ` - ${item.endTime}` : ''}` : ''
+  const previewStartSeconds = item.startTime ? secondsFromTime(item.startTime) : 0
+  const previewEndSeconds = item.endTime ? secondsFromTime(item.endTime) : undefined
+  const segmentRange: SegmentRange | undefined = canPreviewSegment
+    ? {
+        startSeconds: previewStartSeconds,
+        endSeconds: previewEndSeconds,
+        startLabel: item.startTime || formatSeconds(previewStartSeconds),
+        endLabel: item.endTime,
+      }
+    : undefined
+  const primaryMatch = item.matches[0]
+
   return (
-    <article className="group flex min-w-0 flex-col overflow-hidden rounded-md border-2 border-brand-charcoal/75 bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <button
-        type="button"
-        onClick={() => onOpenInWorkspace(item)}
-        disabled={!canOpen}
-        className="relative m-3 aspect-video overflow-hidden rounded-md bg-brand-charcoal text-left disabled:cursor-not-allowed"
-        aria-label={actionLabel}
-        title={actionLabel}
-      >
-        <VideoThumb poster={item.poster} title={item.title} />
-        <span className="absolute inset-0 bg-gradient-to-t from-black/76 via-black/8 to-transparent opacity-90" />
-        {item.startTime && (
-          <span className="absolute bottom-3 left-3 rounded-md bg-brand-charcoal px-2 py-1 font-mono text-xs font-semibold text-white">
-            {item.startTime}
-          </span>
+    <article className="group flex min-w-0 flex-col overflow-hidden rounded-md border border-border bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+      <div className="relative m-3 overflow-hidden rounded-md border border-border-light bg-card">
+        {canPreviewSegment && isPreviewActive ? (
+          <div className="aspect-video">
+            <TwelveLabsVideoPlayer
+              key={`${item.id}-${item.startTime || 'start'}-${item.endTime || 'end'}`}
+              streamInfoUrl={item.media}
+              startSeconds={previewStartSeconds}
+              endSeconds={previewEndSeconds}
+              posterUrl={item.poster}
+              segmentRange={segmentRange}
+              variant="minimal"
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={canPreviewSegment ? onTogglePreview : () => onOpenInWorkspace(item)}
+            disabled={!canPreviewSegment && !canOpen}
+            className="relative block aspect-video w-full overflow-hidden bg-card text-left disabled:cursor-not-allowed"
+            aria-label={canPreviewSegment ? `Play result in ${item.videoName}` : actionLabel}
+            title={canPreviewSegment ? `Play result in ${item.videoName}` : actionLabel}
+          >
+            <VideoThumb poster={item.poster} title={item.title} />
+            <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
+              <span className="flex h-12 w-12 items-center justify-center rounded-full border border-accent bg-accent-light text-brand-charcoal shadow-[0_8px_20px_rgba(29,28,27,0.12)]">
+                <StrandIcon name={canPreviewSegment ? 'play' : 'arrow-diagonal'} className="h-4 w-4" />
+              </span>
+            </span>
+            {segmentRange && <DiscoverSearchSegmentMarker range={segmentRange} />}
+          </button>
         )}
-        <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
-          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-brand-charcoal shadow-[0_8px_20px_rgba(0,0,0,0.18)]">
-            <StrandIcon name={isMomentResult ? 'play' : 'arrow-diagonal'} className="h-4 w-4" />
-          </span>
-        </span>
-      </button>
-      <div className="flex flex-1 flex-col px-5 pb-5 pt-1 text-center">
+        <div className="pointer-events-none absolute left-3 top-3 flex max-w-[calc(100%-24px)] flex-wrap gap-2">
+          {item.resultType !== 'search' && item.startTime && (
+            <span className="rounded-md border border-border bg-surface/92 px-2 py-1 font-mono text-xs font-semibold text-text-primary backdrop-blur-sm">
+              {timeRange}
+            </span>
+          )}
+          {item.resultType !== 'search' && primaryMatch && (
+            <span className="rounded-md border border-border bg-surface/92 px-2 py-1 text-xs font-semibold text-text-primary backdrop-blur-sm">
+              {primaryMatch.label}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-1 flex-col px-5 pb-5 pt-1">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-tertiary">{item.label}</p>
@@ -1297,14 +2991,71 @@ function DiscoverResultCard({ item, onOpenInWorkspace }: { item: DiscoverItem; o
             {item.subtitle && <p className="mt-2 line-clamp-2 text-sm leading-5 text-text-secondary">{item.subtitle}</p>}
           </div>
         </div>
-        <div className="mt-4 flex flex-wrap justify-center gap-2">
+
+        {item.resultType === 'search' && primaryMatch?.text && (
+          <p className="mt-4 rounded-md border border-border-light bg-surface px-3 py-3 text-sm font-medium leading-5 text-text-primary">
+            {primaryMatch.text}
+          </p>
+        )}
+
+        <div className="mt-4 flex flex-wrap gap-2">
           {category && <DiscoverBadge icon={category.icon}>{category.label}</DiscoverBadge>}
           {item.sourceType && <DiscoverBadge icon="vision">{sourceLabel(item.sourceType)}</DiscoverBadge>}
-          {item.resultType === 'search' && <DiscoverBadge icon="search">Jockey</DiscoverBadge>}
         </div>
+
         <DiscoverMatchList heading={item.matchHeading} matches={item.matches} />
+
+        {item.resultType === 'search' && (
+          <div className="mt-auto flex flex-wrap gap-2 pt-5">
+            <button
+              type="button"
+              onClick={() => onOpenInWorkspace(item)}
+              disabled={!canOpen}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <StrandIcon name="arrow-diagonal" className="h-4 w-4" />
+              Open in Workspace
+            </button>
+          </div>
+        )}
       </div>
     </article>
+  )
+}
+
+function DiscoverSearchSegmentMarker({ range }: { range: SegmentRange }) {
+  const segmentEndSeconds = Math.max(range.endSeconds ?? range.startSeconds + 1, range.startSeconds + 1)
+  const safeDuration = Math.max(segmentEndSeconds, range.startSeconds + 1, 1)
+  const startPercent = clamp((range.startSeconds / safeDuration) * 100, 0, 100)
+  const endPercent = clamp((segmentEndSeconds / safeDuration) * 100, startPercent, 100)
+  const widthPercent = Math.max(6, endPercent - startPercent)
+  const leftPercent = clamp(startPercent, 0, 100 - widthPercent)
+  const rightPercent = leftPercent + widthPercent
+
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-x-3 bottom-3 z-10 rounded-md border border-accent/35 bg-brand-charcoal/94 px-2.5 py-2 text-white shadow-[0_8px_22px_rgba(29,28,27,0.22)]"
+    >
+      <span className="relative block h-2.5 overflow-hidden rounded-full bg-white/24">
+        <span
+          className="absolute top-0 h-full rounded-full bg-accent shadow-[0_0_12px_rgba(0,220,130,0.55)]"
+          style={{ left: `${leftPercent}%`, width: `${widthPercent}%` }}
+        />
+        <span
+          className="absolute top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent"
+          style={{ left: `${leftPercent}%` }}
+        />
+        <span
+          className="absolute top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-accent"
+          style={{ left: `${rightPercent}%` }}
+        />
+      </span>
+      <span className="mt-1 flex justify-between gap-3 font-mono text-[10px] font-semibold leading-none text-white/70">
+        <span>{range.startLabel}</span>
+        <span>{range.endLabel || formatSeconds(Math.round(segmentEndSeconds))}</span>
+      </span>
+    </span>
   )
 }
 
@@ -1346,7 +3097,7 @@ function DiscoverEmptyState({ searchQuery }: { searchQuery: string }) {
           <StrandIcon name="search" className="h-4 w-4" />
         </div>
         <h3 className="mt-4 text-base font-semibold text-text-primary">No matches</h3>
-        <p className="mt-2 text-sm leading-6 text-text-secondary">{searchQuery ? `"${searchQuery}" did not match any indexed moment.` : 'No source videos are available.'}</p>
+        <p className="mt-2 text-sm leading-6 text-text-secondary">{searchQuery ? `"${searchQuery}" did not match any moment.` : 'No source videos are available.'}</p>
       </div>
     </div>
   )
@@ -1356,7 +3107,7 @@ function VideoThumb({ poster, title }: { poster: string; title: string }) {
   if (!poster) {
     return (
       <div className="flex h-full w-full items-center justify-center px-5 text-center">
-        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-white/70">{title}</span>
+        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-text-tertiary">{title}</span>
       </div>
     )
   }
@@ -1373,17 +3124,46 @@ function VideoThumb({ poster, title }: { poster: string; title: string }) {
 function TwelveLabsVideoPlayer({
   streamInfoUrl,
   startSeconds,
+  endSeconds,
   posterUrl,
   onDuration,
+  onRangeComplete,
+  onStatusChange,
+  segmentRange,
+  variant = 'default',
+  fit = 'contain',
+  autoPlay = false,
+  muted = false,
+  showSegmentControls = true,
+  showStatusOverlay = true,
+  statusOverlayStyle = 'message',
 }: {
   streamInfoUrl: string
   startSeconds: number
+  endSeconds?: number
   posterUrl?: string
-  onDuration: (duration: number) => void
+  onDuration?: (duration: number) => void
+  onRangeComplete?: () => void
+  onStatusChange?: (status: 'loading' | 'ready' | 'error') => void
+  segmentRange?: SegmentRange
+  variant?: 'default' | 'minimal'
+  fit?: 'contain' | 'cover'
+  autoPlay?: boolean
+  muted?: boolean
+  showSegmentControls?: boolean
+  showStatusOverlay?: boolean
+  statusOverlayStyle?: 'message' | 'loader'
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [message, setMessage] = useState('Resolving TwelveLabs stream...')
+  const [durationSeconds, setDurationSeconds] = useState(0)
+  const [currentSeconds, setCurrentSeconds] = useState(startSeconds)
+  const [playing, setPlaying] = useState(false)
+
+  useEffect(() => {
+    onStatusChange?.(status)
+  }, [onStatusChange, status])
 
   useEffect(() => {
     const video = videoRef.current
@@ -1392,16 +3172,23 @@ function TwelveLabsVideoPlayer({
     let disposed = false
     let hls: Hls | null = null
     let handleMetadata: (() => void) | null = null
+    let handleTimeUpdate: (() => void) | null = null
+    let handlePlay: (() => void) | null = null
+    let handlePause: (() => void) | null = null
+    let rangeCompleted = false
     const controller = new AbortController()
 
     setStatus('loading')
     setMessage('Resolving TwelveLabs stream...')
-    onDuration(0)
+    setDurationSeconds(0)
+    setCurrentSeconds(startSeconds)
+    setPlaying(false)
+    onDuration?.(0)
     video.pause()
     video.removeAttribute('src')
     video.load()
 
-    fetchJson<TwelveLabsStreamInfo>(streamInfoUrl, { signal: controller.signal })
+    fetchTwelveLabsStreamInfo(streamInfoUrl, controller.signal)
       .then((stream) => {
         if (disposed) return
         if (stream.provider !== 'twelvelabs' || stream.type !== 'hls' || !stream.manifest_url) {
@@ -1411,19 +3198,58 @@ function TwelveLabsVideoPlayer({
         if (!manifestUrl) {
           throw new Error('TwelveLabs stream response did not include a secure HLS manifest')
         }
+        setMessage('Loading TwelveLabs HLS preview...')
+        const playWhenReady = () => {
+          if (!autoPlay || disposed) return
+          video.play().catch(() => undefined)
+        }
 
         handleMetadata = () => {
           if (disposed) return
           const duration = Number.isFinite(video.duration) ? video.duration : 0
-          onDuration(duration)
+          setDurationSeconds(duration)
+          onDuration?.(duration)
           video.currentTime = clamp(startSeconds, 0, Math.max(duration, startSeconds))
+          setCurrentSeconds(video.currentTime)
           setStatus('ready')
           setMessage('')
+          playWhenReady()
+        }
+        handleTimeUpdate = () => {
+          if (disposed) return
+          setCurrentSeconds(video.currentTime)
+          if (rangeCompleted || !endSeconds || endSeconds <= startSeconds) return
+          if (video.currentTime >= endSeconds - 0.15) {
+            rangeCompleted = true
+            video.pause()
+            onRangeComplete?.()
+          }
+        }
+        handlePlay = () => {
+          if (disposed) return
+          rangeCompleted = false
+          if (endSeconds && endSeconds > startSeconds && video.currentTime >= endSeconds - 0.15) {
+            video.currentTime = startSeconds
+            setCurrentSeconds(startSeconds)
+          }
+          if (video.currentTime < startSeconds - 0.15) {
+            video.currentTime = startSeconds
+            setCurrentSeconds(startSeconds)
+          }
+          setPlaying(true)
+        }
+        handlePause = () => {
+          if (!disposed) setPlaying(false)
         }
         video.addEventListener('loadedmetadata', handleMetadata)
+        video.addEventListener('timeupdate', handleTimeUpdate)
+        video.addEventListener('play', handlePlay)
+        video.addEventListener('pause', handlePause)
 
         if (video.canPlayType('application/vnd.apple.mpegurl')) {
           video.src = manifestUrl
+          video.load()
+          playWhenReady()
           return
         }
 
@@ -1435,6 +3261,7 @@ function TwelveLabsVideoPlayer({
               setMessage('TwelveLabs HLS stream could not be played in this browser')
             }
           })
+          hls.on(Hls.Events.MANIFEST_PARSED, playWhenReady)
           hls.loadSource(manifestUrl)
           hls.attachMedia(video)
           return
@@ -1452,21 +3279,239 @@ function TwelveLabsVideoPlayer({
       disposed = true
       controller.abort()
       if (handleMetadata) video.removeEventListener('loadedmetadata', handleMetadata)
+      if (handleTimeUpdate) video.removeEventListener('timeupdate', handleTimeUpdate)
+      if (handlePlay) video.removeEventListener('play', handlePlay)
+      if (handlePause) video.removeEventListener('pause', handlePause)
       if (hls) hls.destroy()
       video.pause()
       video.removeAttribute('src')
       video.load()
     }
-  }, [streamInfoUrl, startSeconds, onDuration])
+  }, [streamInfoUrl, startSeconds, endSeconds, onDuration, onRangeComplete])
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    if (autoPlay) {
+      if (status === 'ready') {
+        if (endSeconds && endSeconds > startSeconds && video.currentTime >= endSeconds - 0.15) {
+          video.currentTime = startSeconds
+          setCurrentSeconds(startSeconds)
+        }
+        if (video.currentTime < startSeconds - 0.15) {
+          video.currentTime = startSeconds
+          setCurrentSeconds(startSeconds)
+        }
+      }
+      video.play().catch(() => undefined)
+      return
+    }
+    video.pause()
+  }, [autoPlay, endSeconds, startSeconds, status])
+
+  const togglePlayback = useCallback(() => {
+    const video = videoRef.current
+    if (!video || status !== 'ready') return
+    if (video.paused) {
+      if (endSeconds && endSeconds > startSeconds && video.currentTime >= endSeconds - 0.15) {
+        video.currentTime = startSeconds
+        setCurrentSeconds(startSeconds)
+      }
+      if (video.currentTime < startSeconds - 0.15) {
+        video.currentTime = startSeconds
+        setCurrentSeconds(startSeconds)
+      }
+      video.play().catch(() => {
+        setStatus('error')
+        setMessage('Video playback could not be started')
+      })
+      return
+    }
+    video.pause()
+  }, [endSeconds, startSeconds, status])
+
+  const seekToPosition = useCallback((event: MouseEvent<HTMLButtonElement>) => {
+    const video = videoRef.current
+    if (!video || status !== 'ready') return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const ratio = clamp((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 1)
+    const seekStart = segmentRange ? segmentRange.startSeconds : 0
+    const seekEnd = segmentRange
+      ? Math.max(segmentRange.endSeconds ?? segmentRange.startSeconds + 1, segmentRange.startSeconds + 1)
+      : Math.max(durationSeconds, endSeconds || startSeconds + 1, 1)
+    video.currentTime = seekStart + ratio * Math.max(1, seekEnd - seekStart)
+    setCurrentSeconds(video.currentTime)
+  }, [durationSeconds, endSeconds, segmentRange, startSeconds, status])
 
   return (
     <div className="relative h-full w-full">
-      <video ref={videoRef} className="h-full w-full object-contain accent-accent" controls playsInline preload="metadata" poster={posterUrl} />
-      {status !== 'ready' && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-brand-charcoal/82 px-6 text-center">
-          <p className="max-w-md text-sm font-semibold text-white/92">{message}</p>
+      <video
+        ref={videoRef}
+        className={['h-full w-full accent-accent', fit === 'cover' ? 'object-cover' : 'object-contain'].join(' ')}
+        controls={!segmentRange}
+        muted={muted}
+        playsInline
+        preload="metadata"
+        poster={posterUrl}
+      />
+      {segmentRange && showSegmentControls && (
+        <TwelveLabsSegmentControls
+          currentSeconds={currentSeconds}
+          durationSeconds={durationSeconds}
+          disabled={status !== 'ready'}
+          playing={playing}
+          range={segmentRange}
+          variant={variant}
+          onSeek={seekToPosition}
+          onTogglePlayback={togglePlayback}
+        />
+      )}
+      {status !== 'ready' && showStatusOverlay && (
+        <div
+          className={[
+            'pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center',
+            variant === 'minimal' ? 'bg-brand-charcoal/74 text-white backdrop-blur-[2px]' : 'bg-surface/96 text-text-primary',
+          ].join(' ')}
+        >
+          {statusOverlayStyle === 'loader' ? (
+            <div className="inline-flex items-center gap-2 rounded-md border border-white/20 bg-brand-charcoal/78 px-3 py-2 text-white shadow-[0_8px_20px_rgba(0,0,0,0.24)]">
+              <StrandIcon name={status === 'error' ? 'warning' : 'spinner'} className={['h-4 w-4', status === 'loading' ? 'animate-spin' : ''].join(' ')} />
+              <span className="text-xs font-semibold">{status === 'error' ? message : 'Preparing reel'}</span>
+            </div>
+          ) : (
+            <p className={['max-w-md text-sm font-semibold', variant === 'minimal' ? 'text-white' : 'text-text-primary'].join(' ')}>{message}</p>
+          )}
         </div>
       )}
+    </div>
+  )
+}
+
+function TwelveLabsSegmentControls({
+  currentSeconds,
+  durationSeconds,
+  disabled,
+  playing,
+  range,
+  variant = 'default',
+  onSeek,
+  onTogglePlayback,
+}: {
+  currentSeconds: number
+  durationSeconds: number
+  disabled: boolean
+  playing: boolean
+  range: SegmentRange
+  variant?: 'default' | 'minimal'
+  onSeek: (event: MouseEvent<HTMLButtonElement>) => void
+  onTogglePlayback: () => void
+}) {
+  const segmentEndSeconds = Math.max(range.endSeconds ?? range.startSeconds + 1, range.startSeconds + 1)
+  const safeDuration = Math.max(durationSeconds, segmentEndSeconds, range.startSeconds + 1, 1)
+  const startPercent = clamp((range.startSeconds / safeDuration) * 100, 0, 100)
+  const endPercent = clamp((segmentEndSeconds / safeDuration) * 100, startPercent, 100)
+  const widthPercent = Math.max(6, endPercent - startPercent)
+  const leftPercent = clamp(startPercent, 0, 100 - widthPercent)
+  const rightPercent = leftPercent + widthPercent
+  const currentPercent = clamp((currentSeconds / safeDuration) * 100, 0, 100)
+  const segmentDuration = Math.max(1, segmentEndSeconds - range.startSeconds)
+  const segmentCurrentPercent = clamp(((currentSeconds - range.startSeconds) / segmentDuration) * 100, 0, 100)
+
+  if (variant === 'minimal') {
+    return (
+      <div className="absolute inset-x-3 bottom-3 z-20">
+        <div className="grid grid-cols-[32px_minmax(0,1fr)_52px] items-center gap-2 rounded-md bg-brand-charcoal/82 px-2 py-1.5 text-white shadow-[0_8px_20px_rgba(29,28,27,0.18)] backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={onTogglePlayback}
+            disabled={disabled}
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-brand-charcoal hover:bg-accent disabled:cursor-not-allowed disabled:bg-white/35 disabled:text-white/60"
+            aria-label={playing ? 'Pause video' : 'Play video'}
+            title={playing ? 'Pause video' : 'Play video'}
+          >
+            <StrandIcon name={playing ? 'pause' : 'play'} className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            onClick={onSeek}
+            disabled={disabled}
+            className="relative h-7 min-w-0 rounded-full disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="Seek video"
+            title="Seek video"
+          >
+            <span className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/25" />
+            <span
+              className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-accent"
+              style={{ left: 0, width: '100%' }}
+            />
+            <span
+              className="absolute left-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/70"
+              style={{ width: `${segmentCurrentPercent}%` }}
+            />
+            <span
+              className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/70 bg-accent shadow-sm"
+              style={{ left: `${segmentCurrentPercent}%` }}
+            />
+          </button>
+          <span className="text-right font-mono text-[10px] font-semibold tabular-nums text-white/78">
+            {formatSeconds(Math.round(currentSeconds))}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="absolute inset-x-3 bottom-3 z-20 rounded-md border border-border bg-surface/96 px-3 py-2 text-text-primary shadow-[0_8px_24px_rgba(29,28,27,0.22)]">
+      <div className="grid grid-cols-[34px_minmax(0,1fr)_64px] items-center gap-3">
+        <button
+          type="button"
+          onClick={onTogglePlayback}
+          disabled={disabled}
+          className="flex h-8 w-8 items-center justify-center rounded-md border border-accent bg-accent text-brand-charcoal hover:bg-accent-light disabled:cursor-not-allowed disabled:border-border disabled:bg-card disabled:text-text-tertiary"
+          aria-label={playing ? 'Pause video' : 'Play video'}
+          title={playing ? 'Pause video' : 'Play video'}
+        >
+          <StrandIcon name={playing ? 'pause' : 'play'} className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onSeek}
+          disabled={disabled}
+          className="relative h-9 min-w-0 rounded-md disabled:cursor-not-allowed disabled:opacity-60"
+          aria-label="Seek video"
+          title="Seek video"
+        >
+          <span className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-border-light" />
+          <span
+            className="absolute left-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-text-tertiary/45"
+            style={{ width: `${currentPercent}%` }}
+          />
+          <span
+            className="absolute top-1/2 h-3 -translate-y-1/2 rounded-full bg-accent shadow-[0_0_12px_rgba(0,220,130,0.55)]"
+            style={{ left: `${leftPercent}%`, width: `${widthPercent}%` }}
+          />
+          <span
+            className="absolute top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-accent"
+            style={{ left: `${leftPercent}%` }}
+          />
+          <span
+            className="absolute top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-accent"
+            style={{ left: `${rightPercent}%` }}
+          />
+          <span
+            className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-brand-charcoal bg-card shadow-sm"
+            style={{ left: `${currentPercent}%` }}
+          />
+        </button>
+        <span className="text-right font-mono text-[10px] font-semibold text-text-secondary">
+          {formatSeconds(Math.round(currentSeconds))}
+        </span>
+      </div>
+      <div className="mt-1 flex justify-between gap-3 pl-12 pr-16 font-mono text-[10px] font-semibold text-text-tertiary">
+        <span>{range.startLabel}</span>
+        <span>{range.endLabel || formatSeconds(Math.round(segmentEndSeconds))}</span>
+      </div>
     </div>
   )
 }
@@ -1503,7 +3548,7 @@ function StatusStrip({
     return <Notice tone="error" icon="warning" text={reelsError} />
   }
   if (isLoadingReels) {
-    return <Notice tone="neutral" icon="spinner" text={`Generating reels for ${selectedGame.label}`} />
+    return <Notice tone="neutral" icon="spinner" text={`Loading analysis for ${selectedGame.label}`} />
   }
   if (reels) {
     const enhancedCount =
@@ -1523,7 +3568,7 @@ function StatusStrip({
             <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
               <WorkspaceFact icon="usage" label="Sport" value={selectedGame.sport} />
               <WorkspaceFact icon="indexes" label="References" value={String(reels.standard_stats.clips.length)} />
-              <WorkspaceFact icon="generate" label="Enhanced" value={String(enhancedCount)} />
+              <WorkspaceFact icon="neural-network" label="Enhanced" value={String(enhancedCount)} />
             </div>
           </div>
           <button
@@ -1538,7 +3583,7 @@ function StatusStrip({
       </section>
     )
   }
-  return <Notice tone="neutral" icon="hourglass" text="Waiting for Jockey response" />
+  return <Notice tone="neutral" icon="hourglass" text="Waiting for Pegasus analysis" />
 }
 
 function WorkspaceFact({ icon, label, value }: { icon: string; label: string; value: string }) {
@@ -1553,112 +3598,19 @@ function WorkspaceFact({ icon, label, value }: { icon: string; label: string; va
   )
 }
 
-function CategorySelectorPanel({
-  className = '',
-  reels,
-  selectedCategory,
-  onSelect,
-}: {
-  className?: string
-  reels?: HighlightReels
-  selectedCategory: CategoryKey
-  onSelect: (category: CategoryKey) => void
-}) {
-  return (
-    <section className={['rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]', className].join(' ')}>
-      <div className="border-b border-border-light bg-card px-4 py-3.5">
-        <div className="flex items-center gap-2">
-          <StrandIcon name="filter" className="h-4 w-4 text-accent" />
-          <h2 className="text-base font-semibold text-text-primary">Clip Lanes</h2>
-        </div>
-        <p className="mt-1 text-sm text-text-secondary">Jockey categories</p>
-      </div>
-      <div className="flex flex-col gap-2 p-3">
-        {categories.map((category) => {
-          const count = reels?.[category.key].clips.length ?? 0
-          const active = selectedCategory === category.key
-          return (
-            <button
-              key={category.key}
-              type="button"
-              onClick={() => onSelect(category.key)}
-              className={[
-                'grid min-h-[48px] grid-cols-[auto_1fr_auto] items-center gap-3 rounded-md border px-3 text-left text-sm font-semibold transition-colors',
-                active
-                  ? 'border-brand-charcoal bg-card text-text-primary ring-2 ring-brand-charcoal/10'
-                  : 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
-              ].join(' ')}
-            >
-              <StrandIcon name={category.icon} className="h-4 w-4" />
-              <span className="truncate">{category.label}</span>
-              <span className="rounded-sm bg-card px-2 py-1 text-xs font-semibold text-text-tertiary">{count}</span>
-            </button>
-          )
-        })}
-      </div>
-    </section>
-  )
-}
-
-function JockeyIndexNotice({ game }: { game: Game | null }) {
+function PegasusIndexNotice({ game }: { game: Game | null }) {
   return (
     <section className="rounded-md border border-warning bg-warning-light p-5 text-warning-dark shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
       <div className="flex items-start gap-3">
         <StrandIcon name="hourglass" className="mt-0.5 h-5 w-5" />
         <div>
-          <h2 className="text-base font-semibold">TwelveLabs semantic analysis is not indexed yet</h2>
+          <h2 className="text-base font-semibold">Analysis is not ready yet</h2>
           <p className="mt-2 text-sm leading-6">
-            {game?.label || 'This sports knowledge base'} has source videos available for playback, but Jockey clips, semantic lift, meta discovery, and explainability require a real TwelveLabs knowledge store with indexed items.
+            {game?.label || 'This sports workspace'} has source videos available for playback, but this source does not have a saved analysis package yet.
           </p>
           <p className="mt-2 text-sm leading-6">
-            Run the upload/index flow first: upload each video as an asset, create or select a TwelveLabs knowledge store, add the assets as items, wait until each item is ready, then generate the Jockey highlight response.
+            Once the saved analysis is available, the summary, clip lanes, explainability, and reel tools will appear here.
           </p>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function SemanticLiftSummary({ reels }: { reels: HighlightReels }) {
-  const lift = semanticLift(reels)
-  const maxCategoryCount = Math.max(1, ...lift.categoryCounts.map((item) => item.count))
-  return (
-    <section className="rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="grid gap-5 px-5 py-5 lg:grid-cols-[320px_1fr]">
-        <div>
-          <div className="flex items-center gap-2">
-            <StrandIcon name="generate" className="h-4 w-4 text-accent" />
-            <h2 className="text-base font-semibold text-text-primary">Semantic Lift Summary</h2>
-          </div>
-          <p className="mt-2 text-sm leading-6 text-text-secondary">
-            +{lift.enhancedCount} Jockey-selected clips layered over {lift.standardCount} verified event-reference clips.
-          </p>
-        </div>
-
-        <div className="grid gap-5 md:grid-cols-[1fr_1fr]">
-          <div className="grid grid-cols-3 gap-4">
-            <CompactMetric label="Semantic-only" value={String(lift.semanticOnly)} />
-            <CompactMetric label="Hybrid" value={String(lift.hybrid)} />
-            <CompactMetric label="90+ conf." value={String(lift.highConfidence)} />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            {lift.categoryCounts.map((item) => {
-              const color = signalColors[item.key]
-              return (
-                <div key={item.key} className="grid grid-cols-[128px_1fr_28px] items-center gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{item.label}</span>
-                  <span className="h-2 overflow-hidden rounded-sm bg-border-light">
-                    <span
-                      className="block h-full rounded-sm"
-                      style={{ width: `${(item.count / maxCategoryCount) * 100}%`, backgroundColor: color.bg }}
-                    />
-                  </span>
-                  <span className="text-right text-sm font-semibold text-text-primary">{item.count}</span>
-                </div>
-              )
-            })}
-          </div>
         </div>
       </div>
     </section>
@@ -1666,6 +3618,7 @@ function SemanticLiftSummary({ reels }: { reels: HighlightReels }) {
 }
 
 function SignalMap({
+  variant = 'standard',
   reels,
   lens,
   onLensChange,
@@ -1674,6 +3627,7 @@ function SignalMap({
   selectedStandardIndex,
   onSelect,
 }: {
+  variant?: 'standard' | 'sidecar'
   reels: HighlightReels
   lens: LensKey
   onLensChange: (lens: LensKey) => void
@@ -1705,18 +3659,22 @@ function SignalMap({
   const referenceLabelMap = Object.fromEntries(
     references.map((reference, index) => [reference, `V${index + 1}`]),
   )
+  const compact = variant === 'sidecar'
+  const mapLens: LensKey = lens === 'confidence' ? 'category' : lens
 
   return (
     <section className="rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.05)]">
-      <div className="grid gap-5 border-b border-border-light px-5 py-5 lg:grid-cols-[1fr_360px]">
-        <div>
+      <div className={['grid gap-4 border-b border-border-light', compact ? 'px-4 py-4' : 'px-5 py-5 lg:grid-cols-[1fr_360px]'].join(' ')}>
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
             <StrandIcon name="neural-network" className="h-4 w-4 text-brand-charcoal" />
             <h2 className="text-base font-semibold text-text-primary">Meta Discovery Map</h2>
           </div>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
-            {semanticCount} semantic or hybrid clips mapped against {referenceCount} indexed video references.
-          </p>
+          {!compact && (
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
+              {semanticCount} semantic or hybrid clips mapped against {referenceCount} indexed video references.
+            </p>
+          )}
           <div className="mt-4 flex flex-wrap gap-2">
             {lensOptions.map((option) => (
               <button
@@ -1725,7 +3683,7 @@ function SignalMap({
                 onClick={() => onLensChange(option.key)}
                 className={[
                   'inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold transition-colors',
-                  lens === option.key
+                  mapLens === option.key
                     ? 'border-accent bg-accent-light text-brand-charcoal'
                     : 'border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light',
                 ].join(' ')}
@@ -1736,33 +3694,34 @@ function SignalMap({
             ))}
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-4">
+        <div className={['grid grid-cols-3', compact ? 'gap-3' : 'gap-4'].join(' ')}>
           <CompactMetric label="Semantic lift" value={String(semanticCount)} />
           <CompactMetric label="Confidence" value={avgConfidence} />
           <CompactMetric label="References" value={String(referenceCount)} />
         </div>
       </div>
 
-      <div className="overflow-x-auto p-5">
-        <div className="min-w-[860px]">
-          <div className="mb-5 flex h-9 items-end gap-1 rounded-md border border-border bg-card px-2 py-1.5">
+      <div className={compact ? 'p-4' : 'overflow-x-auto p-5'}>
+        <div className={compact ? 'min-w-0' : 'min-w-[860px]'}>
+          <div className={['mb-5 flex items-end gap-1 rounded-md border border-border bg-card px-2 py-1.5', compact ? 'h-8' : 'h-9'].join(' ')}>
             {nodes.map((node) => {
               const selected = isSelectedSignal(node.lane.key, node.index, selectedCategory, selectedEnhancedIndex, selectedStandardIndex)
-              const color = signalColor(node.lane.key, node.clip, lens, referenceColorMap)
+              const color = signalColor(node.lane.key, node.clip, mapLens, referenceColorMap)
               return (
                 <button
                   key={`${node.lane.key}-${node.index}-${node.clip.start_time}-dna`}
                   type="button"
-                  aria-label={`${node.lane.label} ${node.clip.start_time}`}
+                  aria-label={`${node.lane.label} ${node.clip.start_time}, confidence ${confidenceLabel(node.clip.confidence)}`}
+                  title={`${node.lane.label} · Confidence ${confidenceLabel(node.clip.confidence)} · ${node.clip.start_time}-${node.clip.end_time}`}
                   onClick={() => onSelect(node.lane.key, node.index)}
                   className={[
                     'h-full min-w-[10px] flex-1 rounded-sm border transition-transform hover:-translate-y-0.5',
-                    selected ? 'ring-2 ring-brand-charcoal ring-offset-2 ring-offset-card' : '',
+                    selected ? 'ring-2 ring-accent ring-offset-2 ring-offset-card' : '',
                   ].join(' ')}
                   style={{
                     backgroundColor: color.bg,
                     borderColor: color.border,
-                            opacity: signalOpacity(node.clip.confidence, 0.42),
+                    opacity: signalOpacity(node.clip.confidence, 0.42),
                   }}
                 />
               )
@@ -1772,42 +3731,44 @@ function SignalMap({
           <div className="flex flex-col gap-3.5">
             {mapLanes.map((lane) => {
               const laneNodes = nodes.filter((node) => node.lane.key === lane.key)
-              const laneTrackColor = lens === 'category' ? signalColors[lane.key].track : '#E8E7E5'
+              const laneTrackColor = mapLens === 'category' ? signalColors[lane.key].track : '#E8E7E5'
               return (
-                <div key={lane.key} className="grid grid-cols-[132px_1fr] items-center gap-4">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-text-secondary">
+                <div key={lane.key} className={['grid items-center', compact ? 'grid-cols-[86px_1fr] gap-2' : 'grid-cols-[132px_1fr] gap-4'].join(' ')}>
+                  <div className={['flex items-center gap-2 font-semibold text-text-secondary', compact ? 'text-xs' : 'text-sm'].join(' ')}>
                     <StrandIcon name={lane.icon} className="h-4 w-4" />
-                    <span>{lane.label}</span>
+                    <span className="truncate">{lane.label}</span>
                     <span className="ml-auto text-xs font-semibold text-text-tertiary">{laneNodes.length}</span>
                   </div>
-                  <div className="relative h-12 rounded-md border border-border-light bg-surface">
+                  <div className={['relative rounded-md border border-border-light bg-surface', compact ? 'h-10' : 'h-12'].join(' ')}>
                     <div className="absolute left-3 right-3 top-1/2 h-1 -translate-y-1/2 rounded-sm" style={{ backgroundColor: laneTrackColor }} />
                     {laneNodes.map((node) => {
                       const left = clamp((node.start / maxTime) * 100, 0, 97)
                       const width = clamp(((node.end - node.start) / maxTime) * 100, 2.2, 18)
                       const selected = isSelectedSignal(node.lane.key, node.index, selectedCategory, selectedEnhancedIndex, selectedStandardIndex)
-                      const color = signalColor(node.lane.key, node.clip, lens, referenceColorMap)
+                      const color = signalColor(node.lane.key, node.clip, mapLens, referenceColorMap)
                       return (
                         <button
                           key={`${lane.key}-${node.index}-${node.clip.start_time}`}
                           type="button"
                           onClick={() => onSelect(lane.key, node.index)}
-                          aria-label={`${lane.label} ${node.clip.start_time} ${node.clip.description}`}
+                          aria-label={`${lane.label} ${node.clip.start_time}, confidence ${confidenceLabel(node.clip.confidence)}. ${node.clip.description}`}
+                          title={`${lane.label} · Confidence ${confidenceLabel(node.clip.confidence)} · ${node.clip.start_time}-${node.clip.end_time}`}
                           className={[
-                            'absolute top-1/2 inline-flex h-5 -translate-y-1/2 items-center justify-center rounded-sm border px-1 text-[10px] font-semibold leading-none shadow-[0_2px_6px_rgba(31,41,33,0.12)] transition-transform hover:scale-110',
-                            selected ? 'z-10 ring-2 ring-brand-charcoal ring-offset-2 ring-offset-surface' : '',
+                            'absolute top-1/2 inline-flex -translate-y-1/2 items-center justify-center rounded-sm border font-mono font-bold leading-none shadow-[0_2px_6px_rgba(31,41,33,0.12)] transition-transform hover:scale-110',
+                            compact ? 'h-6 px-1.5 text-[9px]' : 'h-5 px-1 text-[10px]',
+                            selected ? 'z-10 ring-2 ring-accent ring-offset-2 ring-offset-surface' : '',
                           ].join(' ')}
                           style={{
                             left: `${left}%`,
                             width: `${width}%`,
-                            minWidth: 24,
+                            minWidth: compact ? 30 : 24,
                             backgroundColor: color.bg,
                             borderColor: color.border,
                             color: color.text,
                             opacity: signalOpacity(node.clip.confidence, 0.55),
                           }}
                         >
-                          {signalLabel(node.clip, lens, referenceLabelMap)}
+                          {signalLabel(node.clip, mapLens, referenceLabelMap)}
                         </button>
                       )
                     })}
@@ -1863,7 +3824,7 @@ function FeaturedClipPanel({
     ? `${effectiveClip.start_time} - ${effectiveClip.end_time}`
     : searchMoment?.startTime
       ? `${searchMoment.startTime}${searchMoment.endTime ? ` - ${searchMoment.endTime}` : ''}`
-      : 'Full source'
+      : ''
   const sourceName = sourceVideoName || searchMoment?.videoName || (effectiveClip && game ? videoNameForClip(game, effectiveClip) : undefined)
   const posterUrl = game && sourceName && effectiveClip
     ? reelThumbnailUrl(game, sourceName, effectiveClip, '16x9')
@@ -1884,16 +3845,18 @@ function FeaturedClipPanel({
           {sourceName && <p className="mt-2 truncate text-sm text-text-secondary">{sourceName}</p>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex h-8 items-center gap-2 rounded-sm border border-border bg-surface px-2.5 font-mono text-xs font-semibold text-text-secondary">
-            {clipRangeLabel}
-          </span>
+          {clipRangeLabel && (
+            <span className="inline-flex h-8 items-center gap-2 rounded-sm border border-border bg-surface px-2.5 font-mono text-xs font-semibold text-text-secondary">
+              {clipRangeLabel}
+            </span>
+          )}
           {effectiveClip && <Confidence value={effectiveClip.confidence} />}
         </div>
       </div>
       {streamInfoUrl || effectiveClip ? (
         <div className="grid lg:grid-cols-[minmax(0,1.55fr)_380px]">
           <div className="min-w-0 border-b border-border-light lg:border-b-0 lg:border-r">
-            <div className="flex aspect-video items-center justify-center bg-brand-charcoal text-white">
+            <div className="flex aspect-video items-center justify-center bg-card text-text-primary">
               {streamInfoUrl ? (
                 <TwelveLabsVideoPlayer
                   key={`${streamInfoUrl}-${effectiveClip?.start_time || 'source'}-${effectiveClip?.end_time || 'full'}`}
@@ -1904,9 +3867,9 @@ function FeaturedClipPanel({
                 />
               ) : (
                 <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
-                  <StrandIcon name="info" className="h-8 w-8 text-white/90" />
-                  <p className="max-w-sm text-sm font-medium text-white/95">No TwelveLabs stream mapping for this video</p>
-                  {effectiveClip && <p className="max-w-md break-all text-xs text-white/70">{effectiveClip.video_reference}</p>}
+                  <StrandIcon name="info" className="h-8 w-8 text-text-tertiary" />
+                  <p className="max-w-sm text-sm font-medium text-text-secondary">No TwelveLabs stream mapping for this video</p>
+                  {effectiveClip && <p className="max-w-md break-all text-xs text-text-tertiary">{effectiveClip.video_reference}</p>}
                 </div>
               )}
             </div>
@@ -1927,7 +3890,7 @@ function FeaturedClipPanel({
                 <div className="grid grid-cols-2 gap-3">
                   <Detail label="Timecode" value={clipRangeLabel} />
                   <Detail label="Video" value={sourceName || searchMoment.videoName} />
-                  <Detail label="Source" value="Jockey search" />
+                  <Detail label="Source" value={searchMoment.sourceLabel || 'Marengo search'} />
                   <Detail label="Reference" value={searchMoment.videoReference} />
                 </div>
                 <div className="rounded-md border border-border-light bg-card p-3">
@@ -1941,7 +3904,7 @@ function FeaturedClipPanel({
                 <div className="grid grid-cols-2 gap-3">
                   <Detail label="Timecode" value={clipRangeLabel} />
                   <Detail label="Source" value={sourceLabel(effectiveClip.source_type)} />
-                  <Detail label="Clip type" value={effectiveClip.clip_type} />
+                  <Detail label="Clip type" value={cleanClipTypeLabel(effectiveClip.clip_type)} />
                   <Detail label="Reference" value={effectiveClip.video_reference} />
                 </div>
                 <div className="rounded-md border border-border-light bg-card p-3">
@@ -1952,7 +3915,11 @@ function FeaturedClipPanel({
                 <div className="rounded-md border border-border-light bg-surface p-3">
                   <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Selection Signal</p>
                   <p className="mt-2 text-sm font-semibold leading-5 text-text-primary">{effectiveClip.explainability_label}</p>
+                  {effectiveClip.evidence_summary && (
+                    <p className="mt-2 text-sm leading-5 text-text-primary">{effectiveClip.evidence_summary}</p>
+                  )}
                   <p className="mt-2 text-sm leading-5 text-text-secondary">{effectiveClip.selection_reason}</p>
+                  <EvidenceStack clip={effectiveClip} />
                   {!hasUsableConfidence(effectiveClip.confidence) && (
                     <p className="mt-2 text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Confidence not returned for this clip</p>
                   )}
@@ -2000,15 +3967,15 @@ function ClipMarkerLane({
   )
   const safeDuration = Math.max(durationSeconds, maxClipEnd, 1)
   return (
-    <div className="border-b border-border bg-brand-charcoal px-4 py-3 text-white lg:border-b-0">
-      <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-white/55">
+    <div className="border-b border-border bg-card px-4 py-3 text-text-secondary lg:border-b-0">
+      <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
         <span>{clips.length} {label} points</span>
         <span>
           {selectedClip.start_time} - {selectedClip.end_time}
         </span>
       </div>
       <div className="relative mt-3 h-7" aria-label={`${label} clip points on player timeline`}>
-        <div className="absolute left-0 right-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/14" />
+        <div className="absolute left-0 right-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-border-light" />
         {clips.map((clip, index) => {
           const start = secondsFromTime(clip.start_time)
           const end = Math.max(secondsFromTime(clip.end_time), start + 1)
@@ -2024,8 +3991,8 @@ function ClipMarkerLane({
               className={[
                 'absolute top-1/2 h-3 -translate-y-1/2 rounded-full border transition-transform hover:scale-y-150',
                 selected
-                  ? 'border-accent bg-accent shadow-[0_0_14px_rgba(0,220,130,0.5)] ring-2 ring-white/80'
-                  : 'border-white/38 bg-white/62 hover:border-accent hover:bg-accent',
+                  ? 'border-accent bg-accent shadow-[0_0_14px_rgba(0,220,130,0.35)] ring-2 ring-accent/25'
+                  : 'border-border bg-surface hover:border-accent hover:bg-accent',
               ].join(' ')}
               style={{
                 left: `${left}%`,
@@ -2041,63 +4008,12 @@ function ClipMarkerLane({
   )
 }
 
-function ClipRail({
-  category,
-  selectedIndex,
-  onSelect,
-}: {
-  category: HighlightCategory
-  selectedIndex: number
-  onSelect: (index: number) => void
-}) {
-  return (
-    <section className="rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="flex items-center justify-between gap-4 border-b border-border-light bg-card px-4 py-3.5">
-        <div>
-          <h2 className="text-base font-semibold text-text-primary">{category.title}</h2>
-          <p className="mt-1 text-sm text-text-secondary">{category.objective}</p>
-        </div>
-        <span className="text-sm font-semibold text-text-tertiary">{category.clips.length} clips</span>
-      </div>
-      {category.clips.length > 0 ? (
-        <div className="grid gap-2 p-3 md:grid-cols-2 xl:grid-cols-3">
-          {category.clips.map((clip, index) => (
-            <button
-              key={`${clip.video_reference}-${clip.start_time}-${index}`}
-              type="button"
-              onClick={() => onSelect(index)}
-              className={[
-                'min-h-[120px] rounded-md border p-3 text-left shadow-[0_1px_2px_rgba(31,41,33,0.025)] transition-colors',
-                selectedIndex === index
-                  ? 'border-accent bg-accent-light text-text-primary'
-                  : 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light',
-              ].join(' ')}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">
-                  {clip.start_time} - {clip.end_time}
-                </span>
-                <Confidence value={clip.confidence} />
-              </div>
-              <p className="mt-3 line-clamp-3 text-sm font-medium leading-5">{clip.description}</p>
-              <p className="mt-3 text-xs font-semibold text-text-tertiary">{clip.explainability_label}</p>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div className="px-4 py-10 text-sm text-text-tertiary">No clips returned for this category</div>
-      )}
-    </section>
-  )
-}
-
 function ReelBuilder({
   game,
   videoName,
   categoryKey,
   category,
   format,
-  onCategoryChange,
   onFormatChange,
 }: {
   game: Game
@@ -2105,51 +4021,51 @@ function ReelBuilder({
   categoryKey: CategoryKey
   category: HighlightCategory
   format: ReelFormatKey
-  onCategoryChange: (category: CategoryKey) => void
   onFormatChange: (format: ReelFormatKey) => void
 }) {
   const formatSpec = reelFormats.find((item) => item.key === format) || reelFormats[0]
+  const activeCategory = categories.find((item) => item.key === categoryKey) || categories[0]
   return (
     <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="grid gap-4 border-b border-border-light bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_220px_220px] lg:items-center">
-        <div className="min-w-0">
+      <div className="grid gap-4 border-b border-border-light bg-card px-5 py-4 xl:grid-cols-[minmax(220px,0.42fr)_minmax(0,0.58fr)] xl:items-start">
+        <div className="min-w-0 lg:max-w-xl">
           <div className="flex items-center gap-2">
             <StrandIcon name="play-boxed" className="h-4 w-4 text-accent" />
             <h2 className="text-base font-semibold text-text-primary">Tag Reels</h2>
           </div>
+          <p className="mt-1 truncate text-sm font-medium text-text-secondary">{videoName}</p>
+          <p className="mt-2 inline-flex h-7 max-w-full items-center gap-1.5 rounded-sm border border-border-light bg-surface px-2 text-xs font-semibold text-text-secondary">
+            <StrandIcon name={activeCategory.icon} className="h-3.5 w-3.5 shrink-0 text-accent" />
+            <span className="truncate">{activeCategory.label}</span>
+          </p>
         </div>
-        <label className="min-w-0">
-          <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Category</span>
-          <select
-            value={categoryKey}
-            onChange={(event) => onCategoryChange(event.target.value as CategoryKey)}
-            className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-primary outline-none focus:border-accent"
-          >
-            {categories.map((option) => (
-              <option key={option.key} value={option.key}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="min-w-0">
-          <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Format</span>
-          <select
-            value={format}
-            onChange={(event) => onFormatChange(event.target.value as ReelFormatKey)}
-            className="h-10 w-full rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-primary outline-none focus:border-accent"
-          >
-            {reelFormats.map((option) => (
-              <option key={option.key} value={option.key}>
-                {option.label} · {option.detail}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="grid min-w-0 gap-3">
+          <fieldset className="min-w-0">
+            <legend className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Format</legend>
+            <div className="grid min-w-0 grid-cols-2 gap-1.5 sm:grid-cols-4">
+              {reelFormats.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => onFormatChange(option.key)}
+                  className={[
+                    'inline-flex h-9 min-w-0 items-center justify-center rounded-md border px-2 text-center text-xs font-semibold leading-tight transition-colors',
+                    format === option.key
+                      ? 'border-accent bg-accent-light text-brand-charcoal shadow-[0_1px_4px_rgba(0,220,130,0.14)]'
+                      : 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light',
+                  ].join(' ')}
+                  title={`${option.label} · ${option.detail}`}
+                >
+                  <span className="min-w-0 truncate">{option.label}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+        </div>
       </div>
 
       {category.clips.length > 0 ? (
-        <div className="overflow-x-auto p-4">
+        <div className="overflow-x-auto px-4 py-4">
           <div className="flex min-w-max snap-x gap-3">
             {category.clips.map((clip, index) => (
               <ReelCard
@@ -2189,138 +4105,105 @@ function ReelCard({
   format: ReelFormatKey
   formatSpec: { key: ReelFormatKey; label: string; detail: string; aspect: string }
 }) {
-  const [previewing, setPreviewing] = useState(false)
-  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [hoverPreviewing, setHoverPreviewing] = useState(false)
+  const [previewLocked, setPreviewLocked] = useState(false)
+  const [playerStatus, setPlayerStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const paddedRange = paddedRangeForClip(clip)
+  const streamInfoUrl = streamInfoForVideoName(game, videoName)
   const posterUrl = reelThumbnailUrl(game, videoName, clip, format)
-  const previewUrl = reelPreviewUrl(game, videoName, clip, categoryKey, index, format)
   const downloadUrl = reelDownloadUrl(game, videoName, clip, categoryKey, index, format)
+  const categoryLabel = categories.find((category) => category.key === categoryKey)?.label || 'Reel'
+  const segmentRange = useMemo(() => ({
+    startSeconds: paddedRange.start,
+    endSeconds: paddedRange.end,
+    startLabel: formatSeconds(paddedRange.start),
+    endLabel: formatSeconds(paddedRange.end),
+  }), [paddedRange.end, paddedRange.start])
+  const previewing = hoverPreviewing || previewLocked
 
   useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
-    if (previewing) {
-      video.currentTime = 0
-      video.play().catch(() => undefined)
-      return
-    }
-    video.pause()
-    video.currentTime = 0
-  }, [previewing, previewUrl])
+    setPlayerStatus('loading')
+  }, [format, segmentRange.endSeconds, segmentRange.startSeconds, streamInfoUrl])
 
   return (
     <article
       tabIndex={0}
       aria-label={`Preview reel clip ${index + 1}`}
-      className="group w-[224px] shrink-0 snap-start overflow-hidden rounded-md border border-border-light bg-surface shadow-[0_1px_2px_rgba(31,41,33,0.035)] outline-none transition duration-200 hover:-translate-y-1 hover:border-accent hover:bg-accent-light focus:border-accent focus:bg-accent-light focus:ring-2 focus:ring-accent/25 focus-within:border-accent"
-      onClick={() => setPreviewing(true)}
-      onFocus={() => setPreviewing(true)}
-      onPointerEnter={() => setPreviewing(true)}
-      onPointerLeave={() => setPreviewing(false)}
-      onMouseEnter={() => setPreviewing(true)}
-      onMouseLeave={() => setPreviewing(false)}
-      onFocusCapture={() => setPreviewing(true)}
+      aria-busy={playerStatus === 'loading'}
+      className="group w-[224px] shrink-0 snap-start cursor-pointer overflow-hidden rounded-md border border-border-light bg-surface shadow-[0_1px_2px_rgba(31,41,33,0.035)] outline-none transition duration-200 hover:-translate-y-1 hover:border-accent hover:bg-accent-light focus:border-accent focus:bg-accent-light focus:ring-2 focus:ring-accent/25 focus-within:border-accent"
+      onClick={() => {
+        setHoverPreviewing(true)
+        setPreviewLocked(true)
+      }}
+      onFocus={() => setHoverPreviewing(true)}
+      onPointerEnter={() => setHoverPreviewing(true)}
+      onPointerLeave={() => setHoverPreviewing(false)}
+      onMouseEnter={() => setHoverPreviewing(true)}
+      onMouseLeave={() => setHoverPreviewing(false)}
+      onFocusCapture={() => setHoverPreviewing(true)}
       onBlurCapture={(event) => {
         const nextTarget = event.relatedTarget as Node | null
-        if (!nextTarget || !event.currentTarget.contains(nextTarget)) setPreviewing(false)
+        if (!nextTarget || !event.currentTarget.contains(nextTarget)) setHoverPreviewing(false)
       }}
     >
-      <div className="relative overflow-hidden bg-black" style={{ aspectRatio: formatSpec.aspect }}>
+      <div className="relative overflow-hidden bg-card" style={{ aspectRatio: formatSpec.aspect }}>
         <img alt="" src={posterUrl} loading="lazy" className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
-        {previewing && (
-          <video
-            key={previewUrl}
-            ref={videoRef}
-            src={previewUrl}
-            poster={posterUrl}
-            className="absolute inset-0 h-full w-full object-cover"
+        <div className="absolute inset-0">
+          <TwelveLabsVideoPlayer
+            key={`${streamInfoUrl}-${segmentRange.startSeconds}-${segmentRange.endSeconds}-${format}`}
+            streamInfoUrl={streamInfoUrl}
+            startSeconds={segmentRange.startSeconds}
+            endSeconds={segmentRange.endSeconds}
+            posterUrl={posterUrl}
+            segmentRange={segmentRange}
+            variant="minimal"
+            fit="cover"
+            autoPlay={previewing}
             muted
-            loop
-            playsInline
-            preload="metadata"
+            showSegmentControls={false}
+            showStatusOverlay
+            statusOverlayStyle="loader"
+            onStatusChange={setPlayerStatus}
           />
-        )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/88 via-black/18 to-black/16" />
-        <div className="absolute left-3 right-3 top-3 flex items-center justify-between gap-2">
-          <span className="rounded-full border border-white/18 bg-black/50 px-2 py-1 text-[10px] font-semibold tracking-[0.02em] text-white backdrop-blur-sm">{game.tag}</span>
-          <span className="rounded-full border border-white/18 bg-black/34 px-2 py-1 text-[10px] font-semibold tracking-[0.02em] text-white backdrop-blur-sm">{formatSpec.label}</span>
         </div>
-        {!previewing && (
-          <div className="absolute left-1/2 top-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/35 text-white/88 opacity-90 backdrop-blur-sm transition group-hover:scale-105 group-hover:bg-accent group-hover:text-brand-charcoal">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/62 to-transparent" />
+        <div className="absolute left-3 right-3 top-3 flex min-w-0 items-start justify-between gap-2">
+          <span
+            className="min-w-0 max-w-[136px] truncate rounded-md border border-white/24 bg-brand-charcoal/92 px-2.5 py-1.5 font-mono text-[11px] font-bold leading-none tracking-[0.02em] text-white shadow-[0_8px_18px_rgba(0,0,0,0.2)] backdrop-blur-sm"
+            title={categoryLabel}
+          >
+            {categoryLabel}
+          </span>
+          <a
+            href={downloadUrl}
+            download
+            aria-label={`Download ${categoryLabel} reel clip ${index + 1}`}
+            title="Download reel"
+            onClick={(event) => event.stopPropagation()}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/24 bg-brand-charcoal/92 text-white shadow-[0_8px_18px_rgba(0,0,0,0.2)] backdrop-blur-sm transition hover:border-accent hover:bg-accent hover:text-brand-charcoal focus:outline-none focus:ring-2 focus:ring-accent/40"
+          >
+            <StrandIcon name="download" className="h-4 w-4" />
+          </a>
+        </div>
+        {!previewing && playerStatus === 'ready' && (
+          <div className="absolute left-1/2 top-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-surface/90 text-text-primary opacity-95 backdrop-blur-sm transition group-hover:scale-105 group-hover:border-accent group-hover:bg-accent">
             <StrandIcon name="play" className="h-4 w-4" />
           </div>
         )}
-        <div className="absolute bottom-3 left-3 right-3">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/50">Range</p>
-          <p className="mt-1 text-sm font-semibold text-white">{formatSeconds(paddedRange.start)} - {formatSeconds(paddedRange.end)}</p>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/68 to-transparent" />
+        <div className="absolute bottom-3 left-3 right-3 flex min-w-0 items-center justify-between gap-2">
+          <span className="shrink-0 rounded-md border border-accent/70 bg-accent px-2 py-1.5 text-[10px] font-bold uppercase leading-none tracking-[0.08em] text-brand-charcoal shadow-[0_8px_18px_rgba(0,0,0,0.18)]">
+            Range
+          </span>
+          <span
+            className="min-w-0 truncate rounded-md border border-white/24 bg-brand-charcoal/92 px-2.5 py-1.5 font-mono text-[11px] font-bold leading-none tracking-[0.02em] text-white shadow-[0_8px_18px_rgba(0,0,0,0.2)] backdrop-blur-sm"
+            title={`${formatSeconds(paddedRange.start)} - ${formatSeconds(paddedRange.end)}`}
+          >
+            {formatSeconds(paddedRange.start)} - {formatSeconds(paddedRange.end)}
+          </span>
         </div>
-      </div>
-      <div className="flex flex-col gap-3 p-3">
-        <div>
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Clip {index + 1}</p>
-            <span className="rounded-sm border border-border-light bg-card px-2 py-1 text-xs font-semibold text-text-secondary">{Math.round(paddedRange.duration)}s</span>
-          </div>
-          <p className="mt-2 line-clamp-2 min-h-[40px] text-sm font-semibold leading-5 text-text-primary">{clip.description}</p>
-        </div>
-        <a
-          href={downloadUrl}
-          download
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-semibold text-text-primary hover:border-accent hover:bg-accent hover:text-brand-charcoal"
-        >
-          <StrandIcon name="download" className="h-4 w-4" />
-          Download
-        </a>
       </div>
     </article>
-  )
-}
-
-function ExplainabilityPanel({
-  open,
-  onToggle,
-  standardClip,
-  enhancedClip,
-  category,
-}: {
-  open: boolean
-  onToggle: () => void
-  standardClip?: Clip
-  enhancedClip?: Clip
-  category?: HighlightCategory
-}) {
-  return (
-    <section className="rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center justify-between gap-3 border-b border-border-light bg-card px-4 py-3.5 text-left"
-      >
-        <span>
-          <span className="block text-base font-semibold text-text-primary">Explainability</span>
-          {category && <span className="mt-1 block text-sm text-text-secondary">{category.title}</span>}
-        </span>
-        <StrandIcon name={open ? 'collapse' : 'expand'} className="h-4 w-4 text-text-secondary" />
-      </button>
-      {open && (
-        <div className="flex flex-col gap-4 p-4">
-          <ReasonBlock title="Stats-driven" clip={standardClip} expectedSource="stats" />
-          <ReasonBlock title="Semantic-driven" clip={enhancedClip} expectedSource="semantic" />
-          {category?.assembly_notes.length ? (
-            <div className="border-t border-border-light pt-4">
-              <h3 className="text-sm font-semibold text-text-primary">Assembly Notes</h3>
-              <div className="mt-3 flex flex-col gap-2">
-                {category.assembly_notes.map((note, index) => (
-                  <p key={`${note}-${index}`} className="rounded-md bg-card px-3 py-2 text-sm leading-5 text-text-secondary">
-                    {note}
-                  </p>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </div>
-      )}
-    </section>
   )
 }
 
@@ -2347,12 +4230,45 @@ function ReasonBlock({
       {clip ? (
         <div className="mt-3 flex flex-col gap-3">
           <p className="text-sm font-semibold text-text-primary">{clip.explainability_label}</p>
+          {clip.evidence_summary && <p className="text-sm leading-5 text-text-primary">{clip.evidence_summary}</p>}
           <p className="text-sm leading-5 text-text-secondary">{clip.selection_reason}</p>
+          <EvidenceStack clip={clip} compact />
           <Detail label="Confidence" value={confidenceLabel(clip.confidence)} />
         </div>
       ) : (
         <p className="mt-3 text-sm text-text-tertiary">No clip selected</p>
       )}
+    </div>
+  )
+}
+
+function EvidenceStack({ clip, compact = false }: { clip: Clip; compact?: boolean }) {
+  const rows = [
+    { label: 'Visual', values: clip.visual_evidence || [] },
+    { label: 'Audio', values: clip.audio_evidence || [] },
+    { label: 'Transcript', values: clip.transcript_evidence || [] },
+  ].filter((row) => row.values.length)
+  const contextRows = [
+    clip.timeline_rationale ? { label: 'Timing', value: clip.timeline_rationale } : null,
+    clip.editorial_use ? { label: 'Edit', value: clip.editorial_use } : null,
+  ].filter(Boolean) as { label: string; value: string }[]
+  if (!rows.length && !contextRows.length) return null
+
+  return (
+    <div className={compact ? 'flex flex-col gap-2' : 'mt-3 flex flex-col gap-2'}>
+      {rows.map((row) => (
+        <div key={row.label} className="rounded-md border border-border-light bg-card px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{row.label}</p>
+          <ul className="mt-1 flex flex-col gap-1 text-sm leading-5 text-text-secondary">
+            {row.values.slice(0, 3).map((value, index) => (
+              <li key={`${row.label}-${index}`}>{value}</li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      {contextRows.map((row) => (
+        <Detail key={row.label} label={row.label} value={row.value} />
+      ))}
     </div>
   )
 }
@@ -2407,6 +4323,45 @@ function sourceLabel(sourceType: Clip['source_type']) {
   return 'Stats'
 }
 
+function sequenceClipTitle(clip: Clip, fallbackTitle: string, mode: AssemblyModeKey, categoryKey: CategoryKey) {
+  const laneKey: MapCategoryKey = mode === 'wsc_baseline' ? 'standard_stats' : categoryKey
+  const laneTitles: Record<MapCategoryKey, string> = {
+    standard_stats: 'Event Moment',
+    best_plays: 'Best Play',
+    emotional_moments: 'Emotional Moment',
+    fan_experience: 'Crowd Moment',
+    behind_the_scenes: 'Behind the Scenes',
+  }
+  return laneTitles[laneKey] || cleanClipTypeLabel(clip.clip_type) || fallbackTitle || 'Reel Moment'
+}
+
+function sequenceClipShortTitle(laneKey: MapCategoryKey) {
+  const shortTitles: Record<MapCategoryKey, string> = {
+    standard_stats: 'Event',
+    best_plays: 'Best',
+    emotional_moments: 'Emotion',
+    fan_experience: 'Fans',
+    behind_the_scenes: 'BTS',
+  }
+  return shortTitles[laneKey]
+}
+
+function cleanClipTypeLabel(clipType?: string) {
+  if (!clipType) return ''
+  const normalized = clipType.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  if (/^game event$/i.test(normalized)) return 'Event Moment'
+  if (/^highlight$/i.test(normalized)) return 'Highlight Moment'
+  return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function displayAnalysisSummary(summary: string) {
+  return summary
+    .replace(/^.+?\.mp4\s+Workspace highlights generated with\s+\S+\.\s*/i, '')
+    .replace(/^Workspace highlights generated with\s+\S+\.\s*/i, '')
+    .trim() || summary
+}
+
 function semanticLift(reels: HighlightReels) {
   const enhancedClips = categories.flatMap((category) => reels[category.key].clips)
   return {
@@ -2415,11 +4370,6 @@ function semanticLift(reels: HighlightReels) {
     semanticOnly: enhancedClips.filter((clip) => clip.source_type === 'semantic').length,
     hybrid: enhancedClips.filter((clip) => clip.source_type === 'stats_semantic').length,
     highConfidence: enhancedClips.filter((clip) => clip.confidence >= 0.9).length,
-    categoryCounts: categories.map((category) => ({
-      key: category.key,
-      label: category.label.replace(' Moments', '').replace(' Experience', '').replace('Behind the Scenes', 'BTS'),
-      count: reels[category.key].clips.length,
-    })),
   }
 }
 
@@ -2434,7 +4384,7 @@ function reelCacheKey(tag: string, videoName?: string) {
 function scopeReelsToVideo(game: Game, reels: HighlightReels, videoName: string): HighlightReels {
   return {
     ...reels,
-    match_summary: `${videoName} source-only highlight analysis.`,
+    match_summary: reels.match_summary || `${videoName} source-only highlight analysis.`,
     standard_stats: scopeCategoryToVideo(game, reels.standard_stats, videoName),
     best_plays: scopeCategoryToVideo(game, reels.best_plays, videoName),
     emotional_moments: scopeCategoryToVideo(game, reels.emotional_moments, videoName),
@@ -2480,6 +4430,61 @@ function confidenceLabel(confidence: number) {
   return hasUsableConfidence(confidence) ? String(Math.round(confidence * 100)) : 'N/A'
 }
 
+function jockeySkillForKey(skillKey?: string) {
+  return jockeyProducerSkills.find((skill) => skill.key === skillKey)
+}
+
+function jockeySkillForPrompt(prompt: string) {
+  const normalizedPrompt = prompt.trim().toLowerCase()
+  return jockeyProducerSkills.find((skill) => normalizedPrompt === skill.prompt.toLowerCase())
+}
+
+function jockeyPromptRequestsReel(prompt: string, skill?: (typeof jockeyProducerSkills)[number]) {
+  const clipLanguage = /\b(reels?|clips?|moments?|showcase|play|highlights?)\b|\bshow\s+me\b.*\b(clip|moment|highlight|play|reel)\b/i
+  return clipLanguage.test(prompt) || clipLanguage.test(skill?.label || '')
+}
+
+function jockeyPromptRequestsSpecificClip(prompt: string) {
+  return /\b(one|single|specific|that|this)\b.*\b(reel|clip|moment|highlight|play)\b|\b(showcase|show\s+me|play)\b.*\b(clip|moment|highlight|play)\b/i.test(prompt)
+}
+
+function jockeyChatCacheKey(tag: string) {
+  return `${JOCKEY_CHAT_CACHE_PREFIX}${tag}`
+}
+
+function readJockeyChatCache(tag: string): JockeyChatExchange[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(jockeyChatCacheKey(tag))
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(isJockeyChatExchange)
+  } catch {
+    return []
+  }
+}
+
+function writeJockeyChatCache(tag: string, exchanges: JockeyChatExchange[]) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      jockeyChatCacheKey(tag),
+      JSON.stringify(exchanges),
+    )
+  } catch {
+    // Ignore private-mode/quota storage failures; the live chat still works.
+  }
+}
+
+function isJockeyChatExchange(value: unknown): value is JockeyChatExchange {
+  if (!value || typeof value !== 'object') return false
+  const exchange = value as Partial<JockeyChatExchange>
+  return typeof exchange.id === 'string'
+    && typeof exchange.prompt === 'string'
+    && typeof exchange.showReel === 'boolean'
+}
+
 function signalOpacity(confidence: number, minimum: number) {
   return hasUsableConfidence(confidence) ? Math.max(minimum, confidence) : Math.max(minimum, 0.78)
 }
@@ -2510,12 +4515,29 @@ function formatSeconds(totalSeconds: number) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
-function paddedRangeForClip(clip: Clip) {
+function paddedRangeForClip(clip: Pick<Clip, 'start_time' | 'end_time'>) {
   const rawStart = secondsFromTime(clip.start_time)
   const rawEnd = Math.max(secondsFromTime(clip.end_time), rawStart + 1)
   const start = Math.max(0, rawStart - REEL_PADDING_SECONDS)
   const end = rawEnd + REEL_PADDING_SECONDS
   return { start, end, duration: end - start }
+}
+
+function reelClipParamsForRange(
+  clip: Pick<Clip, 'start_time' | 'end_time'>,
+  name: string,
+  format: ReelFormatKey,
+  download?: boolean,
+) {
+  const paddedRange = paddedRangeForClip(clip)
+  const params = new URLSearchParams({
+    start: String(paddedRange.start),
+    end: String(paddedRange.end),
+    format,
+    name,
+  })
+  if (download !== undefined) params.set('download', download ? '1' : '0')
+  return params
 }
 
 function reelClipParams(
@@ -2525,15 +4547,7 @@ function reelClipParams(
   format: ReelFormatKey,
   download?: boolean,
 ) {
-  const paddedRange = paddedRangeForClip(clip)
-  const params = new URLSearchParams({
-    start: String(paddedRange.start),
-    end: String(paddedRange.end),
-    format,
-    name: `${categoryKey}-${index + 1}`,
-  })
-  if (download !== undefined) params.set('download', download ? '1' : '0')
-  return params
+  return reelClipParamsForRange(clip, `${categoryKey}-${index + 1}`, format, download)
 }
 
 function reelDownloadUrl(
@@ -2560,7 +4574,12 @@ function reelPreviewUrl(
   return apiUrl(`/games/${encodeURIComponent(game.tag)}/reel/${encodeURIComponent(videoName)}?${params.toString()}`)
 }
 
-function reelThumbnailUrl(game: Game, videoName: string, clip: Clip, format: ReelFormatKey) {
+function jockeyReelDownloadUrl(game: Game, videoName: string, clip: Pick<Clip, 'start_time' | 'end_time'>, index: number) {
+  const params = reelClipParamsForRange(clip, `jockey-${index + 1}`, '9x16', true)
+  return apiUrl(`/games/${encodeURIComponent(game.tag)}/reel/${encodeURIComponent(videoName)}?${params.toString()}`)
+}
+
+function reelThumbnailUrl(game: Game, videoName: string, clip: Pick<Clip, 'start_time' | 'end_time'>, format: ReelFormatKey) {
   const paddedRange = paddedRangeForClip(clip)
   const params = new URLSearchParams({
     time: String(paddedRange.start),
@@ -2601,6 +4620,19 @@ function uniqueVideoNames(sourceVideos: string[]) {
   return Array.from(new Set(sourceVideos.filter(Boolean)))
 }
 
+function workspaceMappedVideoNames(game: Game) {
+  const sourceVideos = uniqueVideoNames(game.source_videos || [])
+  return [...sourceVideos].sort((left, right) => {
+    const leftRank = workspaceMappedIndexId(game, left) ? 0 : 1
+    const rightRank = workspaceMappedIndexId(game, right) ? 0 : 1
+    return leftRank - rightRank || sourceVideos.indexOf(left) - sourceVideos.indexOf(right)
+  })
+}
+
+function workspaceMappedIndexId(game: Game, videoName: string) {
+  return game.marengo_video_ids?.[videoName]
+}
+
 function clipSelectionForVideo(game: Game, reels: HighlightReels, videoName: string): { category: MapCategoryKey; index: number } | null {
   const lanes = [
     ...categories.map((category) => category.key),
@@ -2617,6 +4649,31 @@ function videoNameForClip(game: Game, clip: Clip) {
   return videoNameForReference(game, clip.video_reference)
 }
 
+function jockeyClipVideoName(game: Game, clip: JockeyManifestClip) {
+  return clip.video_name || videoNameForReference(game, clip.video_reference)
+}
+
+function jockeyClipSearchMoment(videoName: string, clip: JockeyManifestClip): SearchMoment {
+  const potential = typeof clip.highlight_potential === 'number' && Number.isFinite(clip.highlight_potential)
+    ? `Highlight potential: ${Math.round(clip.highlight_potential * 100)}`
+    : ''
+  const relevance = [
+    clip.emotional_intensity ? `Intensity: ${clip.emotional_intensity}` : '',
+    potential,
+  ].filter(Boolean).join(' · ')
+
+  return {
+    videoName,
+    videoReference: clip.video_reference,
+    title: clip.moment_type || 'Jockey clip',
+    description: clip.jockey_rationale,
+    relevance: relevance || 'Jockey Chat reel selection',
+    startTime: clip.start_time,
+    endTime: clip.end_time,
+    sourceLabel: 'Jockey Chat',
+  }
+}
+
 function videoNameForReference(game: Game, reference: string) {
   if (!reference) return undefined
   const sourceVideos = game.source_videos || []
@@ -2626,6 +4683,12 @@ function videoNameForReference(game: Game, reference: string) {
 
   const assetMatch = Object.entries(game.video_asset_ids || {}).find(([, assetId]) => assetId === reference)?.[0]
   if (assetMatch) return assetMatch
+  const embeddedAssetMatch = Object.entries(game.video_asset_ids || {}).find(([, assetId]) => Boolean(assetId && reference.includes(assetId)))?.[0]
+  if (embeddedAssetMatch) return embeddedAssetMatch
+  const marengoMatch = Object.entries(game.marengo_video_ids || {}).find(([, marengoVideoId]) => marengoVideoId === reference)?.[0]
+  if (marengoMatch) return marengoMatch
+  const embeddedMarengoMatch = Object.entries(game.marengo_video_ids || {}).find(([, marengoVideoId]) => Boolean(marengoVideoId && reference.includes(marengoVideoId)))?.[0]
+  if (embeddedMarengoMatch) return embeddedMarengoMatch
 
   const basename = reference.split('/').pop() || reference
   if (sourceVideos.includes(basename)) return basename
@@ -2641,13 +4704,13 @@ function gameOptionLabel(game: Game) {
   return game.label === game.sport ? game.label : `${game.label} · ${game.sport}`
 }
 
-function searchResultItems(game: Game, response: JockeySearchResponse): DiscoverItem[] {
+function searchResultItems(game: Game, response: MarengoSearchResponse): DiscoverItem[] {
   return response.results
     .map((result, index) => discoverItemFromSearchResult(game, result, index))
     .filter((item): item is DiscoverItem => Boolean(item))
 }
 
-function discoverItemFromSearchResult(game: Game, result: JockeySearchResult, index: number): DiscoverItem | null {
+function discoverItemFromSearchResult(game: Game, result: MarengoSearchResult, index: number): DiscoverItem | null {
   const videoName = result.video_name || videoNameForReference(game, result.video_reference)
   if (!videoName) return null
   const startTime = result.start_time || result.timestamp
@@ -2665,26 +4728,26 @@ function discoverItemFromSearchResult(game: Game, result: JockeySearchResult, in
   }
   return {
     id: `${game.tag}-${result.id || `search-${index}`}`,
-    label: 'Jockey Result',
+    label: 'Marengo Match',
     title,
     subtitle,
     media: streamInfoForVideoName(game, videoName),
-    poster: thumbnailForVideoName(game, videoName),
+    poster: result.thumbnail_url || thumbnailForVideoName(game, videoName),
     videoName,
     knowledgeStoreId: game.knowledge_store_id,
     clipCount: 1,
     semanticCount: 1,
     matches: [{
       id: `${result.id || index}-match`,
-      label: 'Matched Evidence',
+      label: result.rank ? `Marengo Rank ${result.rank}` : 'Visual/Audio Match',
       text: result.description,
       detail: result.relevance,
       startTime,
       endTime,
     }],
-    matchHeading: 'Why it matched',
+    matchHeading: 'Matched Evidence',
     searchScore: responseScore(result, index),
-    hasJockeySearch: true,
+    hasMarengoSearch: true,
     resultType: 'search',
     startTime,
     endTime,
@@ -2692,133 +4755,15 @@ function discoverItemFromSearchResult(game: Game, result: JockeySearchResult, in
   }
 }
 
-function responseScore(result: JockeySearchResult, index: number) {
+function responseScore(result: MarengoSearchResult, index: number) {
   return typeof result.confidence === 'number' && Number.isFinite(result.confidence)
     ? result.confidence
     : 1 / (index + 1)
 }
 
-function knowledgeBaseItems(
-  game: Game,
-  sourceVideos: string[],
-  searchQuery: string,
-  reelsByVideo: Record<string, HighlightReels | undefined>,
-  activeFilter: DiscoverFilterKey,
-) {
-  const normalized = normalizeSearchText(searchQuery)
-  const tokens = searchTokens(normalized)
-  const uniqueSourceVideos = Array.from(new Set(sourceVideos))
-  if (!normalized) {
-    return uniqueSourceVideos.map((videoName, index) =>
-      discoverItemFromVideo({
-        game,
-        videoName,
-        sourceIndex: index,
-        clipEntries: [],
-        noteEntries: [],
-        clipCount: 0,
-        semanticCount: 0,
-        normalized,
-        baseMatches: false,
-      }),
-    )
-  }
-  return uniqueSourceVideos
-    .flatMap((videoName, index) => {
-      const reels = reelsByVideo[videoName]
-      const clipEntries = discoverClipEntries(game, videoName, reels).filter((entry) => matchesDiscoverFilter(entry, activeFilter))
-      const scoredClipEntries = clipEntries.map((entry) => ({
-        ...entry,
-        searchScore: queryScore(entry.searchText, normalized, tokens),
-      }))
-      const noteEntries = discoverAssemblyNotes(game, videoName, reels, activeFilter)
-      const noteMatches = normalized
-        ? noteEntries.filter((entry) => textMatchesQuery(entry.searchText, normalized, tokens))
-        : []
-      const baseText = normalizeSearchText([videoName, game.label, game.sport, game.knowledge_store_id].join(' '))
-      const baseMatches = textMatchesQuery(baseText, normalized, tokens)
-      const sortedClipEntries = [...scoredClipEntries].sort((left, right) => {
-        if (normalized) return right.searchScore - left.searchScore || right.clip.confidence - left.clip.confidence
-        return right.clip.confidence - left.clip.confidence
-      })
-      const semanticCount = clipEntries.filter((entry) => entry.clip.source_type !== 'stats').length
-
-      if (normalized) {
-        const clipItems = sortedClipEntries
-          .filter((entry) => textMatchesQuery(entry.searchText, normalized, tokens))
-          .map((entry) =>
-            discoverItemFromClip({
-              game,
-              videoName,
-              sourceIndex: index,
-              entry,
-              clipCount: clipEntries.length,
-              semanticCount,
-            }),
-          )
-        const videoItem = baseMatches || (noteMatches.length > 0 && clipItems.length === 0)
-          ? [discoverItemFromVideo({
-            game,
-            videoName,
-            sourceIndex: index,
-            clipEntries: sortedClipEntries,
-            noteEntries: noteMatches,
-            clipCount: clipEntries.length,
-            semanticCount,
-            normalized,
-            baseMatches,
-          })]
-          : []
-        return [...videoItem, ...clipItems]
-      }
-
-      return []
-    })
-    .sort((left, right) => {
-      if (!normalized) return 0
-      return right.searchScore - left.searchScore || left.title.localeCompare(right.title)
-    })
-}
-
-function discoverItemFromVideo({
-  game,
-  videoName,
-  sourceIndex,
-  clipEntries,
-  noteEntries,
-  clipCount,
-  semanticCount,
-  normalized,
-  baseMatches,
-}: {
-  game: Game
-  videoName: string
-  sourceIndex: number
-  clipEntries: Array<ReturnType<typeof discoverClipEntries>[number] & { searchScore?: number }>
-  noteEntries: ReturnType<typeof discoverAssemblyNotes>
-  clipCount: number
-  semanticCount: number
-  normalized: string
-  baseMatches: boolean
-}): DiscoverItem {
-  const baseMatch: DiscoverMatch[] = normalized && baseMatches
-    ? [{
-      id: `${videoName}-source-match`,
-      label: 'Source Video',
-      text: videoName,
-      detail: `${game.label} · ${game.sport}`,
-    }]
-    : []
-  const clipMatches = clipEntries.slice(0, baseMatch.length ? 2 : 3).map((entry) => discoverMatchFromClip(entry))
-  const noteMatches = noteEntries.slice(0, Math.max(0, 3 - baseMatch.length - clipMatches.length)).map((note, index) => ({
-    id: `${videoName}-note-${index}`,
-    label: 'Assembly Note',
-    text: note.text,
-    detail: `${game.label} · ${game.sport}`,
-  }))
-  const topClip = clipEntries[0]
-  return {
-    id: `${game.tag}-${videoName}-${sourceIndex}`,
+function sourceVideoItems(game: Game, sourceVideos: string[]): DiscoverItem[] {
+  return Array.from(new Set(sourceVideos)).map((videoName, index) => ({
+    id: `${game.tag}-${videoName}-${index}`,
     label: 'Source Video',
     title: videoName,
     subtitle: '',
@@ -2826,135 +4771,14 @@ function discoverItemFromVideo({
     poster: thumbnailForVideoName(game, videoName),
     videoName,
     knowledgeStoreId: game.knowledge_store_id,
-    clipCount,
-    semanticCount,
-    matches: [...baseMatch, ...clipMatches, ...noteMatches],
-    matchHeading: normalized ? 'Matched Evidence' : 'Top Signals',
-    searchScore: (baseMatches ? 8 : 0) + clipEntries.reduce((total, entry) => total + (entry.searchScore || 0), 0) + noteEntries.length,
-    hasJockeySearch: clipCount > 0,
+    clipCount: 0,
+    semanticCount: 0,
+    matches: [],
+    matchHeading: 'Matched Evidence',
+    searchScore: 0,
+    hasMarengoSearch: false,
     resultType: 'video',
-    categoryKey: topClip?.lane.key,
-    startTime: topClip?.clip.start_time,
-    endTime: topClip?.clip.end_time,
-    confidence: topClip?.clip.confidence,
-    sourceType: topClip?.clip.source_type,
-    openTarget: topClip ? {
-      categoryKey: topClip.lane.key,
-      clipIndex: topClip.index,
-    } : undefined,
-  }
-}
-
-function discoverItemFromClip({
-  game,
-  videoName,
-  sourceIndex,
-  entry,
-  clipCount,
-  semanticCount,
-}: {
-  game: Game
-  videoName: string
-  sourceIndex: number
-  entry: ReturnType<typeof discoverClipEntries>[number] & { searchScore?: number }
-  clipCount: number
-  semanticCount: number
-}): DiscoverItem {
-  const match = discoverMatchFromClip(entry)
-  return {
-    id: `${game.tag}-${videoName}-${entry.lane.key}-${entry.index}-${sourceIndex}`,
-    label: `${entry.lane.label} Moment`,
-    title: entry.clip.description,
-    subtitle: `${videoName} · ${entry.clip.start_time}-${entry.clip.end_time}`,
-    media: streamInfoForVideoName(game, videoName),
-    poster: thumbnailForVideoName(game, videoName),
-    videoName,
-    knowledgeStoreId: game.knowledge_store_id,
-    clipCount,
-    semanticCount,
-    matches: [match],
-    matchHeading: 'Best Evidence',
-    searchScore: (entry.searchScore || 0) + entry.clip.confidence * 2,
-    hasJockeySearch: true,
-    resultType: 'moment',
-    categoryKey: entry.lane.key,
-    startTime: entry.clip.start_time,
-    endTime: entry.clip.end_time,
-    confidence: entry.clip.confidence,
-    sourceType: entry.clip.source_type,
-    openTarget: {
-      categoryKey: entry.lane.key,
-      clipIndex: entry.index,
-    },
-  }
-}
-
-function discoverClipEntries(game: Game, videoName: string, reels?: HighlightReels) {
-  if (!reels) return []
-  return mapLanes.flatMap((lane) =>
-    reels[lane.key].clips
-      .map((clip, index) => ({
-        lane,
-        clip,
-        index,
-        searchText: normalizeSearchText([
-          lane.label,
-          clip.category,
-          clip.clip_type,
-          sourceLabel(clip.source_type),
-          clip.description,
-          clip.score_context,
-          clip.selection_reason,
-          clip.explainability_label,
-          clip.start_time,
-          clip.end_time,
-          clip.video_reference,
-        ].join(' ')),
-      }))
-      .filter((entry) => videoNameForClip(game, entry.clip) === videoName),
-  )
-}
-
-function discoverAssemblyNotes(game: Game, videoName: string, reels: HighlightReels | undefined, activeFilter: DiscoverFilterKey) {
-  if (!reels) return []
-  return mapLanes.flatMap((lane) =>
-    matchesLaneFilter(lane.key, activeFilter)
-      ? reels[lane.key].assembly_notes.map((note) => ({
-        text: note,
-        searchText: normalizeSearchText([lane.label, note, game.label, game.sport, videoName].join(' ')),
-      }))
-      : [],
-  )
-}
-
-function discoverMatchFromClip(entry: ReturnType<typeof discoverClipEntries>[number]): DiscoverMatch {
-  const detailParts = [
-    entry.clip.score_context,
-    entry.clip.selection_reason,
-  ].filter(Boolean)
-  return {
-    id: `${entry.lane.key}-${entry.index}-${entry.clip.start_time}`,
-    label: `${entry.lane.label} · ${sourceLabel(entry.clip.source_type)}`,
-    text: entry.clip.description,
-    detail: detailParts.join(' · ') || entry.clip.explainability_label,
-    categoryKey: entry.lane.key,
-    clipIndex: entry.index,
-    startTime: entry.clip.start_time,
-    endTime: entry.clip.end_time,
-    confidence: entry.clip.confidence,
-    sourceType: entry.clip.source_type,
-  }
-}
-
-function matchesDiscoverFilter(entry: ReturnType<typeof discoverClipEntries>[number], activeFilter: DiscoverFilterKey) {
-  if (activeFilter === 'all') return true
-  if (activeFilter === 'semantic') return entry.clip.source_type !== 'stats'
-  return entry.lane.key === activeFilter
-}
-
-function matchesLaneFilter(laneKey: MapCategoryKey, activeFilter: DiscoverFilterKey) {
-  if (activeFilter === 'all' || activeFilter === 'semantic') return true
-  return laneKey === activeFilter
+  }))
 }
 
 function discoverStats(sourceVideos: string[], reelsByVideo: Record<string, HighlightReels | undefined>) {
@@ -2975,23 +4799,28 @@ function normalizeSearchText(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-function searchTokens(normalizedQuery: string) {
-  return normalizedQuery.split(' ').filter((token) => token.length > 0)
-}
-
-function textMatchesQuery(text: string, normalizedQuery: string, tokens: string[]) {
-  if (!normalizedQuery) return true
-  return text.includes(normalizedQuery) || tokens.every((token) => text.includes(token))
-}
-
-function queryScore(text: string, normalizedQuery: string, tokens: string[]) {
-  if (!normalizedQuery) return 0
-  return (text.includes(normalizedQuery) ? 8 : 0) + tokens.reduce((total, token) => total + (text.includes(token) ? 1 : 0), 0)
-}
-
-function shortId(value: string) {
+function shortId(value?: string) {
+  if (!value) return ''
   if (value.length <= 12) return value
   return `${value.slice(0, 6)}...${value.slice(-4)}`
+}
+
+function isVideoFile(file: File) {
+  return file.type.startsWith('video/') || /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(file.name)
+}
+
+function uploadFileKey(file: File) {
+  return `${file.name}-${file.size}-${file.lastModified}`
+}
+
+function formatUploadDuration(totalSeconds: number) {
+  const seconds = Math.max(0, Math.round(totalSeconds))
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const remainder = seconds % 60
+  if (hours) return `${hours}hr ${minutes}min ${remainder}sec`
+  if (minutes) return `${minutes}min ${remainder}sec`
+  return `${remainder}sec`
 }
 
 function apiUrl(path: string) {
@@ -3023,6 +4852,33 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(message)
   }
   return body as T
+}
+
+async function fetchTwelveLabsStreamInfo(url: string, signal?: AbortSignal): Promise<TwelveLabsStreamInfo> {
+  if (signal?.aborted) {
+    throw new DOMException('Request aborted', 'AbortError')
+  }
+  const cached = streamInfoCache.get(url)
+  if (cached) return cached
+
+  let request = streamInfoRequests.get(url)
+  if (!request) {
+    request = fetchJson<TwelveLabsStreamInfo>(url)
+      .then((stream) => {
+        streamInfoCache.set(url, stream)
+        return stream
+      })
+      .finally(() => {
+        streamInfoRequests.delete(url)
+      })
+    streamInfoRequests.set(url, request)
+  }
+
+  const stream = await request
+  if (signal?.aborted) {
+    throw new DOMException('Request aborted', 'AbortError')
+  }
+  return stream
 }
 
 export default App

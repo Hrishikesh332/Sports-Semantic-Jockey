@@ -20,10 +20,11 @@ def highlight_prompt(match_context, wsc_baseline):
         "behind_the_scenes: semantic-only clips showing warmups, coach reactions, bench camaraderie, tunnel walks, huddles, or sideline context.",
         "For full-match or long-form source videos, cover the complete story arc. Do not cluster enhanced categories only in the opening minutes. When evidence exists, include representative early, middle, and late clips, especially late score swings, final-result moments, fourth-quarter/second-half pressure, and post-result reactions.",
         "If standard_stats contains events deep into the source video, best_plays should also include later confirmed events with visible reaction, replay, crowd, bench, or momentum context when supported by the footage.",
-        "Every clip must include start_time, end_time, video_reference, clip_type, category, source_type, description, score_context, selection_reason, confidence, and explainability_label.",
+        "Every clip must include start_time, end_time, video_reference, clip_type, category, source_type, description, score_context, selection_reason, confidence, explainability_label, evidence_summary, visual_evidence, audio_evidence, transcript_evidence, timeline_rationale, and editorial_use.",
         "For every included clip, confidence must be a calibrated evidence confidence from 0.01 to 1.0 based on how clearly the indexed footage supports that exact timestamp, description, source type, and score context. Never return 0 for an included clip; if confidence cannot be supported, omit the clip.",
         "Use source_type stats for standard_stats, semantic for semantic-only categories, and stats_semantic only when a clip has both game-event and semantic evidence.",
         "Use explainability_label values like Stats Event: Goal, Stats Event: Touchdown, Semantic Detection: High-confidence celebration, or Semantic Detection: Crowd roar.",
+        "For explainability, evidence_summary must be one concise sentence; visual_evidence, audio_evidence, and transcript_evidence must be short evidence lists with empty arrays when not supported; timeline_rationale must explain why this exact range starts and ends where it does; editorial_use must explain where the clip belongs in an edited reel.",
         "Do not invent clips, timestamps, players, scores, emotions, unsupported confidence values, or video references.",
         "If a category does not have usable evidence, return an empty clips array for that category.",
     ]

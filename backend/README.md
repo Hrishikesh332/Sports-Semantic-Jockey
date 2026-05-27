@@ -1,6 +1,9 @@
 # Sports Jockey Backend
 
-Flask backend for uploading videos to TwelveLabs, creating knowledge stores, indexing assets, querying Jockey, and generating structured sports highlight reels.
+Flask backend for uploading videos to TwelveLabs, creating knowledge stores,
+indexing assets, running Marengo search, serving TwelveLabs HLS streams, using
+Jockey for chat/pass-through workflows, and generating Workspace highlight reels
+with Pegasus 1.5.
 
 ## Setup
 
@@ -22,10 +25,12 @@ gunicorn to `0.0.0.0:10000`. Keep the explicit `--bind` in the start command so
 the service binds to Render's active `PORT` value instead of the injected
 default.
 
-Required environment:
+Environment example:
 
 ```env
 TWELVELABS_API_KEY=
+INDEX_ID=
+TWELVELABS_PEGASUS_MODEL=pegasus1.5
 PORT=5000
 CORS_ALLOWED_ORIGINS=https://sports-semantic-jockey.vercel.app,http://localhost:5173,http://127.0.0.1:5173
 APP_URL=
@@ -34,7 +39,6 @@ KEEP_ALIVE_INTERVAL_MINUTES=9
 KEEP_ALIVE_PATH=/health
 KEEP_ALIVE_URL=
 KEEP_ALIVE_TIMEOUT_SECONDS=15
-HIGHLIGHT_REEL_CACHE_ENABLED=false
 DEFAULT_GAME_REGISTRATIONS_JSON=
 ```
 
@@ -48,13 +52,27 @@ being called.
 `CORS_ALLOWED_ORIGINS` is a comma-separated allowlist for browser requests. The
 default includes the deployed Vercel app and local Vite dev origins.
 
+`TWELVELABS_API_KEY` and `INDEX_ID` are required for the live TwelveLabs flows.
+`INDEX_ID` is the TwelveLabs index used by Workspace Pegasus analysis and
+Marengo search. `TWELVELABS_PEGASUS_MODEL` defaults to `pegasus1.5`.
+Useful optional runtime knobs include `TWELVELABS_REQUEST_TIMEOUT_SECONDS`,
+`TWELVELABS_ANALYZE_RETRY_ATTEMPTS`, `PEGASUS_SYNC_WINDOW_SECONDS`,
+`SPORTS_STREAM_INFO_CACHE_TTL_SECONDS`,
+`SPORTS_UPLOAD_ASSET_POLL_ATTEMPTS`, `SPORTS_UPLOAD_ASSET_POLL_INTERVAL_SECONDS`,
+and `SPORTS_UPLOAD_BACKGROUND_WORKERS`.
+
 `DEFAULT_GAME_REGISTRATIONS_JSON` can provide one game object or an array of game
 objects when ignored local `data/games/*.json` files are not present in a
 deployed environment. The frontend needs `tag`, `label`, `sport`,
 `knowledge_store_id`, `source_videos`, and `video_asset_ids` for the live
-backend flow. `HIGHLIGHT_REEL_CACHE_ENABLED=false` means
-`/games/<tag>/highlight-reels` calls TwelveLabs Jockey live instead of reading
-or writing generated response logs. Turn it on only for local caching.
+backend flow. `INDEX_ID` is required for semantic search, index ingestion, and
+Workspace metadata-backed highlight display.
+`marengo_video_ids` is optional metadata for mapping indexed results back to
+source videos. `/games/<tag>/highlight-reels` resolves the selected `asset_id`,
+reads reusable Pegasus responses from the matching TwelveLabs indexed asset
+`user_metadata`, and calls `/analyze` only when metadata is missing or stale.
+Generated analysis is written back to indexed asset `user_metadata`; generated
+response logs are not used.
 
 Minimal shape:
 
@@ -65,7 +83,8 @@ Minimal shape:
   "sport": "Sports",
   "knowledge_store_id": "ks_...",
   "source_videos": ["Match.mp4"],
-  "video_asset_ids": {"Match.mp4": "asset_id"}
+  "video_asset_ids": {"Match.mp4": "asset_id"},
+  "marengo_video_ids": {"Match.mp4": "indexed_video_id"}
 }
 ```
 
@@ -85,9 +104,43 @@ app/
 data/games/            local analyzed game registry ignored by git
 data/videos/           local videos ignored by git
 scripts/               smoke tests
-logs/                  stored API responses
 wsgi.py                local entrypoint
 ```
+
+## Workspace Flow
+
+Workspace highlight display is metadata-led and API-backed:
+
+1. Resolve the selected source video to its registered TwelveLabs `asset_id`.
+2. Fetch `GET /assets/{asset_id}` and ensure the asset is ready.
+3. Find the indexed asset for the same selected asset through
+   `GET /assets/{asset_id}/indexed-assets`.
+4. Read reusable Pegasus output on the matching indexed asset `user_metadata`
+   through `GET /indexes/{INDEX_ID}/indexed-assets/{id}`.
+5. If the metadata is absent, stale, or mismatched, analyze the source asset with
+   Pegasus, store both the compact reels and full detailed response back to
+   indexed asset `user_metadata`, then return the saved response shape.
+
+The metadata fields are:
+
+```text
+sports_jockey_pegasus_reels_v2
+sports_jockey_pegasus_detailed_response_v2
+sports_jockey_pegasus_reels_hash_v2
+sports_jockey_pegasus_model_v2
+sports_jockey_pegasus_asset_id_v2
+sports_jockey_pegasus_indexed_asset_id_v2
+sports_jockey_pegasus_index_id_v2
+sports_jockey_pegasus_source_video_v2
+sports_jockey_pegasus_generated_at_v2
+```
+
+Selected-video responses include a compact `_pegasus_metadata` provenance object
+so the UI can show that the displayed reels came from indexed asset
+`user_metadata`.
+
+The backend does not read from or write to generated response logs, pinned logs,
+or local temporary JSON state for Workspace results.
 
 ## Endpoints
 
@@ -115,6 +168,22 @@ Fields:
 | `file` | file | yes |
 
 Returns: TwelveLabs asset object.
+
+### `POST /assets/<asset_id>/index`
+
+Adds an existing TwelveLabs asset to the configured search/analyze index from
+`INDEX_ID`.
+
+Optional body:
+
+```json
+{
+  "enable_video_stream": true
+}
+```
+
+Returns `202` with the TwelveLabs indexed-asset response. The API response does
+not expose the configured index id.
 
 ### `POST /knowledge-stores`
 
@@ -150,7 +219,11 @@ Returns: TwelveLabs knowledge store item object.
 
 ### `POST /ingestions`
 
-Runs the backend-owned ingestion workflow end to end: link local source videos for playback, create or reuse a TwelveLabs knowledge store, upload source assets for HLS playback, upload/index the configured knowledge-store videos, poll until items are ready, register the local game, and optionally generate per-video debug highlight response logs.
+Runs the backend-owned ingestion workflow end to end: link local source videos
+for playback, create or reuse a TwelveLabs knowledge store, upload source assets
+for HLS playback, upload/index the configured knowledge-store videos, poll until
+items are ready, and register the local game. It does not persist local state
+JSON or generate debug highlight response logs.
 
 Body:
 
@@ -164,15 +237,13 @@ Body:
   ],
   "index_videos": [
     {"path": "data/videos/match.mp4", "source_name": "match.mp4", "offset_seconds": 0}
-  ],
-  "state_file": "sports_ingest_state.json",
-  "generate_highlights": true
+  ]
 }
 ```
 
 `index_videos` is optional. Provide it when a source video must be indexed as multiple parts; `source_name` maps each indexed part back to the playable source video, and `offset_seconds` shifts returned clip timestamps back onto the full source timeline.
 
-Returns the app-facing registered game, source `video_asset_ids`, item statuses, and explicit debug highlight response logs when generated.
+Returns the app-facing registered game, source `video_asset_ids`, and item statuses.
 
 ### `GET /knowledge-stores/<store_id>/items/<item_id>`
 
@@ -227,7 +298,11 @@ Returns:
 }
 ```
 
-Each clip includes `start_time`, `end_time`, `video_reference`, `clip_type`, `category`, `source_type`, `description`, `score_context`, `selection_reason`, `confidence`, and `explainability_label`.
+Each clip includes `start_time`, `end_time`, `video_reference`, `clip_type`,
+`category`, `source_type`, `description`, `score_context`, `selection_reason`,
+`confidence`, `explainability_label`, `evidence_summary`, `visual_evidence`,
+`audio_evidence`, `transcript_evidence`, `timeline_rationale`, and
+`editorial_use`.
 
 ### `POST /games`
 
@@ -243,29 +318,39 @@ Body:
   "knowledge_store_id": "store_id",
   "source_videos": ["match.mp4"],
   "video_asset_ids": {"match.mp4": "asset_id"},
+  "marengo_video_ids": {"match.mp4": "indexed_video_id"},
   "video_reference_map": {"jockey_video_reference": "match.mp4"},
-  "highlight_response_log": "optional_debug_response_log.json",
   "wsc_baseline": {}
 }
 ```
 
 Required: `tag`, `label`, `sport`, `knowledge_store_id`
 
-Returns: app-facing registered game object. Debug log fields are retained in the local registry for manual diagnostics, but they are not exposed through `/games` responses.
+Returns: app-facing registered game object. Highlight log fields are ignored so
+runtime generation stays API-backed.
 
 ### `GET /games`
 
-Lists app-facing game registrations without debug log fields. The checked-in demo
+Lists app-facing game registrations without internal fields. The checked-in demo
 registration is returned even when ignored local `data/games/*.json` files are
 not present in a deployed environment.
 
 ### `GET /games/<tag>`
 
-Returns one app-facing game registration without debug log fields.
+Returns one app-facing game registration without internal fields.
 
 ### `POST /games/<tag>/highlight-reels`
 
-Returns a complete per-source Jockey highlight response. Knowledge-base discovery, source-video metadata, search, thumbnails, streaming, and reel generation stay live through backend/TwelveLabs endpoints. Generated response logs are disabled by default; set `HIGHLIGHT_REEL_CACHE_ENABLED=true` only when you intentionally want local generated-response caching. Legacy pinned response logs are still only available for manual debug replay with `use_pinned_log: true`; the frontend does not send that flag.
+Returns a complete per-source Pegasus 1.5 highlight response from the configured
+index-backed assets. Source-video metadata, search, thumbnails, streaming, and
+reel playback stay live through backend/TwelveLabs endpoints. Generated
+response logs and legacy pinned logs are not used.
+For a selected source video, the backend first resolves the registered
+`asset_id`, reads the matching indexed asset metadata under `INDEX_ID`, and
+returns that metadata value only when the stored Pegasus response hash and stored
+`asset_id` match the current request. If the saved analysis is missing or stale,
+it calls `/analyze`, stores the full response back into indexed asset metadata,
+and returns that response.
 
 Body:
 
@@ -273,20 +358,67 @@ Body:
 {
   "video_name": "Optional registered source video name",
   "match_context": "Optional match context",
-  "wsc_baseline": {},
-  "use_pinned_log": false,
-  "force_refresh": false,
-  "ignore_log_cache": false
+  "wsc_baseline": {}
 }
 ```
 
-When `HIGHLIGHT_REEL_CACHE_ENABLED=true` and the response is generated live for a `video_name`, the backend writes a generated response log with all required sections: `match_summary`, `standard_stats`, `best_plays`, `emotional_moments`, `fan_experience`, and `behind_the_scenes`. Use `force_refresh: true` or `ignore_log_cache: true` only when cache is enabled and you intentionally want to bypass the generated log and regenerate.
-
 Returns the same highlight schema as `POST /highlight-reels`.
+
+`video_name` is required because Workspace metadata is stored per indexed asset.
+The frontend Workspace sends `video_name`.
+
+### `POST /games/<tag>/upload`
+
+Uploads a video into the selected game workflow. The backend saves the file under
+`data/videos/` for local playback and uploads it once as a TwelveLabs asset. The
+response returns immediately with `status: "indexing"`; a background worker waits
+until the asset is ready, then sends the same `asset_id` to both the existing
+game knowledge store and the configured `INDEX_ID`.
+
+Form fields:
+
+```text
+method=direct
+file=<video file>
+```
+
+Returns the updated app-facing game plus the TwelveLabs knowledge-store item and
+indexed-asset creation responses. The returned status is `indexing` because both
+knowledge-store item indexing and index processing continue asynchronously after
+TwelveLabs accepts the requests.
+
+### `POST /games/<tag>/jockey-chat`
+
+Uses TwelveLabs Jockey only for the conversational chat section. Normal chat
+requests return a concise `narrative_summary` and no clips. Clip manifests are
+requested only when the user asks for a reel or sends `include_reel: true`.
+
+Body:
+
+```json
+{
+  "message": "What stands out in this game?",
+  "include_reel": false,
+  "limit": 8,
+  "video_name": "Optional registered source video name",
+  "session_id": "Optional TwelveLabs response session id"
+}
+```
+
+Returns:
+
+```json
+{
+  "session_id": "...",
+  "message": "...",
+  "narrative_summary": "...",
+  "clips": []
+}
+```
 
 ### `POST /games/<tag>/search`
 
-Runs live TwelveLabs Jockey natural-language video search for the registered game's `knowledge_store_id`. This follows the Jockey search recipe: the backend calls `/v1.3/responses` with `model: "jockey1.0"` and a structured JSON schema for search results, then maps returned video references back to registered source videos.
+Runs live TwelveLabs semantic video search against the configured `INDEX_ID`. The backend calls `/v1.3/search` with visual/audio options, maps returned video references back to registered source videos, and normalizes the response for the Discover UI. This endpoint requires `INDEX_ID` and does not fall back to Jockey search.
 
 Body:
 
@@ -295,6 +427,7 @@ Body:
   "query": "goal celebration",
   "limit": 12,
   "filter": "semantic",
+  "search_options": ["visual", "audio"],
   "video_name": "Optional registered source video name"
 }
 ```
@@ -322,10 +455,38 @@ Returns a TwelveLabs HLS stream descriptor for a registered source video.
 
 The frontend video player uses this endpoint and plays the returned TwelveLabs HLS manifest. The local `/media` route remains available for diagnostics.
 
+### `GET /games/<tag>/thumbnail/<video_name>`
+
+Returns a generated local thumbnail when available, otherwise an SVG placeholder.
+
+### `GET /games/<tag>/reel/<video_name>`
+
+Exports an MP4 clip from the registered video's live TwelveLabs HLS stream. This
+is used for manual diagnostics and simple clip export, not for Workspace analysis.
+
+Query parameters:
+
+```text
+start=<seconds>
+end=<seconds>
+format=9x16|16x9|1x1|4x5
+name=<optional label>
+download=0|1
+```
+
+### `GET /games/<tag>/reel-thumbnail/<video_name>`
+
+Returns a generated local JPEG thumbnail for a reel time and format, or an SVG
+placeholder when the thumbnail cannot be generated.
+
 ## Smoke Test
 
 ```bash
 python3 scripts/olympics_smoke_test.py
 ```
 
-The smoke test reads local videos from `data/videos/`, registers an analyzed game tag, calls Jockey through `/games/<tag>/highlight-reels`, and writes raw responses to `logs/`. Generated registry data, videos, and logs are ignored by git except `.gitkeep` files.
+The smoke test reads local videos from `data/videos/`, exercises upload,
+knowledge-store, game registration, media, and highlight routes, and prints a
+summary. For Workspace Pegasus metadata reuse, use a source video whose
+`asset_id` is already indexed under `INDEX_ID`; otherwise index the asset first
+with `POST /assets/<asset_id>/index`.

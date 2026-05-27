@@ -75,8 +75,7 @@ def main():
             }
             for spec in INDEX_VIDEOS
         ],
-        "state_file": "sports_ingest_state.json",
-        "generate_highlights": True,
+        "generate_highlights": False,
     }
     result = run_ingestion(payload, progress=print_status)
     print(json.dumps(result, indent=2, ensure_ascii=False))
