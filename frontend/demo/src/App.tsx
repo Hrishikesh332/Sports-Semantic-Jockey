@@ -4,6 +4,7 @@ import Hls from 'hls.js'
 import type { CSSProperties, DragEvent, MouseEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import logoFull from '../../assets/logo-full.svg?raw'
+import logoMark from '../../assets/logo-mark.svg?raw'
 
 const iconModules = import.meta.glob('../../icons/*.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
 const icons = Object.fromEntries(
@@ -141,6 +142,7 @@ type TwelveLabsStreamInfo = {
 
 const streamInfoCache = new Map<string, TwelveLabsStreamInfo>()
 const streamInfoRequests = new Map<string, Promise<TwelveLabsStreamInfo>>()
+const warmedManifestOrigins = new Set<string>()
 
 type MarengoSearchResult = {
   id: string
@@ -298,10 +300,6 @@ const mapLanes: Array<{ key: MapCategoryKey; label: string; icon: string }> = [
   { key: 'behind_the_scenes', label: 'BTS', icon: 'indexes' },
 ]
 
-const lensOptions: Array<{ key: LensKey; label: string; icon: string }> = [
-  { key: 'category', label: 'Category', icon: 'grid' },
-]
-
 const marengoSearchPresets = [
   'goal celebration teammates',
   'fan going wild in the stands',
@@ -311,7 +309,7 @@ const marengoSearchPresets = [
 
 const navItems: Array<{ key: ViewKey; label: string; icon: string }> = [
   { key: 'discover', label: 'Discover', icon: 'search-v2' },
-  { key: 'workspace', label: 'Workspace', icon: 'canvas' },
+  { key: 'workspace', label: 'Dashboard', icon: 'dashboard' },
   { key: 'jockey', label: 'Jockey', icon: 'speech' },
   { key: 'overview', label: 'Overview', icon: 'document-list' },
 ]
@@ -368,7 +366,9 @@ function navButtonClass(currentView: ViewKey, itemView: ViewKey) {
 
 function App() {
   const headerRef = useRef<HTMLElement | null>(null)
+  const [laneBarNode, setLaneBarNode] = useState<HTMLElement | null>(null)
   const [headerHeight, setHeaderHeight] = useState(76)
+  const [laneBarHeight, setLaneBarHeight] = useState(0)
   const [games, setGames] = useState<Game[]>([])
   const [selectedTag, setSelectedTag] = useState('')
   const [view, setView] = useState<ViewKey>(() => viewFromPath(window.location.pathname))
@@ -376,7 +376,6 @@ function App() {
   const [selectedEnhancedClipIndex, setSelectedEnhancedClipIndex] = useState(0)
   const [selectedStandardClipIndex, setSelectedStandardClipIndex] = useState(0)
   const [featuredSignalCategory, setFeaturedSignalCategory] = useState<MapCategoryKey>('best_plays')
-  const [metadataLens, setMetadataLens] = useState<LensKey>('category')
   const [assemblyMode, setAssemblyMode] = useState<AssemblyModeKey>('twelvelabs_enhanced')
   const [reelsByTag, setReelsByTag] = useState<Record<string, HighlightReels>>({})
   const [gamesError, setGamesError] = useState('')
@@ -500,19 +499,25 @@ function App() {
     if (categoryKey === 'standard_stats') {
       setSelectedStandardClipIndex(index)
       setFeaturedSignalCategory('standard_stats')
-      scrollWorkspaceDetailsIntoView()
+      setAssemblyMode('wsc_baseline')
+      scrollAssemblyHighlightsIntoView()
       return
     }
     setSelectedCategory(categoryKey)
     setSelectedEnhancedClipIndex(index)
     setFeaturedSignalCategory(categoryKey)
-    scrollWorkspaceDetailsIntoView()
+    if (assemblyMode === 'wsc_baseline') setAssemblyMode('twelvelabs_enhanced')
+    scrollAssemblyHighlightsIntoView()
   }
   const selectCategoryTab = (categoryKey: CategoryKey) => {
     setSelectedSearchMoment(null)
     setSelectedCategory(categoryKey)
     setSelectedEnhancedClipIndex(0)
     setFeaturedSignalCategory(categoryKey)
+  }
+  const selectWorkspaceLane = (categoryKey: CategoryKey) => {
+    selectCategoryTab(categoryKey)
+    if (assemblyMode === 'wsc_baseline') setAssemblyMode('hyper_personalized')
   }
   const navigate = (nextView: ViewKey) => {
     setView(nextView)
@@ -521,6 +526,11 @@ function App() {
   const scrollWorkspaceDetailsIntoView = () => {
     window.requestAnimationFrame(() => {
       document.getElementById('workspace-details')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+  const scrollAssemblyHighlightsIntoView = () => {
+    window.requestAnimationFrame(() => {
+      document.getElementById('assembly-highlights')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }
   const selectWorkspaceClipForVideo = (videoName: string, currentGame: Game, currentReels: HighlightReels) => {
@@ -540,10 +550,23 @@ function App() {
     openVideoInWorkspace(item.videoName, item.openTarget, item.searchMoment)
   }
   const openVideoInWorkspace = (videoName: string, target?: DiscoverItem['openTarget'], searchMoment?: SearchMoment) => {
-    setSelectedSourceVideoName(videoName)
-    setSelectedSearchMoment(searchMoment || null)
-    if (searchMoment) setAssemblyMode('twelvelabs_enhanced')
-    if (target) {
+    const dashboardVideoName = workspaceVideoNames.includes(videoName) ? videoName : workspaceVideoNames[0]
+    if (!dashboardVideoName) {
+      setSelectedSourceVideoName(null)
+      setSelectedSearchMoment(null)
+      setPendingWorkspaceVideoName(null)
+      setSelectedEnhancedClipIndex(0)
+      setSelectedStandardClipIndex(0)
+      setFeaturedSignalCategory('best_plays')
+      navigate('workspace')
+      scrollWorkspaceDetailsIntoView()
+      return
+    }
+    const canUseRequestedVideo = dashboardVideoName === videoName
+    setSelectedSourceVideoName(dashboardVideoName)
+    setSelectedSearchMoment(canUseRequestedVideo ? searchMoment || null : null)
+    if (canUseRequestedVideo && searchMoment) setAssemblyMode('twelvelabs_enhanced')
+    if (target && canUseRequestedVideo) {
       suppressNextVideoReset.current = true
       if (target.categoryKey === 'standard_stats') {
         setSelectedStandardClipIndex(target.clipIndex)
@@ -557,8 +580,8 @@ function App() {
     } else {
       setSelectedEnhancedClipIndex(0)
       setSelectedStandardClipIndex(0)
-      setFeaturedSignalCategory(searchMoment ? 'standard_stats' : 'best_plays')
-      setPendingWorkspaceVideoName(videoName)
+      setFeaturedSignalCategory(canUseRequestedVideo && searchMoment ? 'standard_stats' : 'best_plays')
+      setPendingWorkspaceVideoName(canUseRequestedVideo ? dashboardVideoName : null)
     }
     navigate('workspace')
     scrollWorkspaceDetailsIntoView()
@@ -610,8 +633,34 @@ function App() {
     }
   }, [])
 
+  const setWorkspaceLaneBarNode = useCallback((node: HTMLElement | null) => {
+    setLaneBarNode(node)
+  }, [])
+
+  useEffect(() => {
+    if (!laneBarNode) {
+      setLaneBarHeight(0)
+      return
+    }
+
+    const updateLaneBarHeight = () => {
+      setLaneBarHeight(Math.ceil(laneBarNode.getBoundingClientRect().height))
+    }
+    updateLaneBarHeight()
+
+    const observer = new ResizeObserver(updateLaneBarHeight)
+    observer.observe(laneBarNode)
+    window.addEventListener('resize', updateLaneBarHeight)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateLaneBarHeight)
+    }
+  }, [laneBarNode])
+
   const stickyOffsetStyle = {
     '--sj-header-height': `${headerHeight}px`,
+    '--sj-lane-height': `${laneBarHeight}px`,
+    '--sj-explainability-top': `${headerHeight + laneBarHeight + 16}px`,
   } as CSSProperties
 
   return (
@@ -699,6 +748,15 @@ function App() {
           </div>
         )}
 
+        {view === 'workspace' && scopedReels && hasHighlightAnalysis && (
+          <WorkspaceLaneBar
+            measureRef={setWorkspaceLaneBarNode}
+            reels={scopedReels}
+            selectedCategory={selectedCategory}
+            onSelect={selectWorkspaceLane}
+          />
+        )}
+
         {view === 'discover' ? (
         <DiscoverPage
           game={selectedGame}
@@ -736,13 +794,10 @@ function App() {
             selectedStandardClipIndex={selectedStandardClipIndex}
             selectedSearchMoment={activeSearchMoment}
             assemblyMode={assemblyMode}
-            metadataLens={metadataLens}
             reelFormat={reelFormat}
             onOpenDiscover={() => navigate('discover')}
             onSourceVideoSelect={openVideoInWorkspace}
-            onCategoryChange={selectCategoryTab}
             onAssemblyModeChange={setAssemblyMode}
-            onMetadataLensChange={setMetadataLens}
             onReelFormatChange={setReelFormat}
             onSelectSignal={selectSignal}
             onSelectStandardClip={(index) => {
@@ -822,13 +877,10 @@ function ProducerCockpit({
   selectedStandardClipIndex,
   selectedSearchMoment,
   assemblyMode,
-  metadataLens,
   reelFormat,
   onOpenDiscover,
   onSourceVideoSelect,
-  onCategoryChange,
   onAssemblyModeChange,
-  onMetadataLensChange,
   onReelFormatChange,
   onSelectSignal,
   onSelectStandardClip,
@@ -848,13 +900,10 @@ function ProducerCockpit({
   selectedStandardClipIndex: number
   selectedSearchMoment: SearchMoment | null
   assemblyMode: AssemblyModeKey
-  metadataLens: LensKey
   reelFormat: ReelFormatKey
   onOpenDiscover: () => void
   onSourceVideoSelect: (videoName: string) => void
-  onCategoryChange: (category: CategoryKey) => void
   onAssemblyModeChange: (mode: AssemblyModeKey) => void
-  onMetadataLensChange: (lens: LensKey) => void
   onReelFormatChange: (format: ReelFormatKey) => void
   onSelectSignal: (categoryKey: MapCategoryKey, index: number) => void
   onSelectStandardClip: (index: number) => void
@@ -870,10 +919,6 @@ function ProducerCockpit({
   const handleAssemblyModeChange = (mode: AssemblyModeKey) => {
     onAssemblyModeChange(mode)
   }
-  const handleCategoryChange = (category: CategoryKey) => {
-    onCategoryChange(category)
-    if (assemblyMode === 'wsc_baseline') onAssemblyModeChange('hyper_personalized')
-  }
 
   return (
     <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-6 px-6 py-6">
@@ -888,31 +933,17 @@ function ProducerCockpit({
         onOpenDiscover={onOpenDiscover}
       />
 
-      {reels && <AnalysisSummaryPanel reels={reels} />}
-
       <WorkspaceModeBar
         mode={assemblyMode}
         onModeChange={handleAssemblyModeChange}
       />
-
-      {reels && hasHighlightAnalysis && (
-        <WorkspaceLaneBar
-          reels={reels}
-          selectedCategory={selectedCategory}
-          onSelect={handleCategoryChange}
-        />
-      )}
 
       {reels && !hasHighlightAnalysis && <PegasusIndexNotice game={selectedGame} />}
 
       <div
         className={[
           'grid min-w-0 gap-6 xl:items-start',
-          showExplainabilityRail
-            ? explainRailCollapsed
-              ? 'xl:grid-cols-[minmax(0,1fr)_56px]'
-              : 'xl:grid-cols-[minmax(0,1fr)_380px]'
-            : '',
+          showExplainabilityRail && !explainRailCollapsed ? 'xl:grid-cols-[minmax(0,1fr)_380px]' : '',
         ].join(' ')}
       >
         <section className="flex min-w-0 flex-col gap-6">
@@ -944,21 +975,22 @@ function ProducerCockpit({
           )}
 
           {showProductionTools && selectedGame && reels && (
-            <section className="flex min-w-0 flex-col gap-4">
-              <ProductionSection icon="play-next" title="Sequence Preview" detail="Stitched source ranges">
-                <div className="grid min-w-0 gap-6 2xl:grid-cols-[minmax(0,0.98fr)_minmax(380px,1.02fr)] 2xl:items-start">
+            <section id="assembly-highlights" className="flex min-w-0 scroll-mt-[calc(var(--sj-explainability-top)+24px)] flex-col gap-4">
+              <ProductionSection icon="play-next" title="Assembly Highlights" detail="Semantic scenes stitched together">
+                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-6">
                   <ReelSequencePlayer
                     variant="sidecar"
                     game={selectedGame}
                     reels={reels}
                     mode={assemblyMode}
                     categoryKey={selectedCategory}
+                    selectedLaneKey={assemblyMode === 'wsc_baseline' ? 'standard_stats' : selectedCategory}
+                    selectedClipIndex={assemblyMode === 'wsc_baseline' ? selectedStandardClipIndex : selectedEnhancedClipIndex}
+                    onSelect={onSelectSignal}
                   />
                   <SignalMap
                     variant="sidecar"
                     reels={reels}
-                    lens={metadataLens}
-                    onLensChange={onMetadataLensChange}
                     selectedCategory={selectedCategory}
                     selectedEnhancedIndex={selectedEnhancedClipIndex}
                     selectedStandardIndex={selectedStandardClipIndex}
@@ -986,9 +1018,16 @@ function ProducerCockpit({
         {showExplainabilityRail && (
           <aside
             className={[
-              'order-first flex min-w-0 flex-col gap-6 xl:sticky xl:top-[calc(var(--sj-header-height)+24px)] xl:order-none xl:self-start',
-              explainRailCollapsed ? 'items-end xl:items-center' : '',
+              'flex min-w-0 flex-col gap-6',
+              explainRailCollapsed
+                ? 'pointer-events-none fixed right-0 z-50 items-end'
+                : 'order-first xl:sticky xl:order-none xl:self-start',
             ].join(' ')}
+            style={{
+              top: explainRailCollapsed
+                ? 'calc(var(--sj-explainability-top) + 8px)'
+                : 'var(--sj-explainability-top)',
+            }}
           >
             <WorkspaceExplainabilityRail
               collapsed={explainRailCollapsed}
@@ -1007,24 +1046,6 @@ function ProducerCockpit({
   )
 }
 
-function AnalysisSummaryPanel({ reels }: { reels: HighlightReels }) {
-  return (
-    <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="bg-card px-5 py-4">
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <StrandIcon name="document-list" className="h-4 w-4 shrink-0 text-accent" />
-            <h2 className="truncate text-base font-semibold text-text-primary">Analysis Summary</h2>
-          </div>
-          <p className="mt-3 text-sm leading-6 text-text-secondary">
-            {displayAnalysisSummary(reels.match_summary)}
-          </p>
-        </div>
-      </div>
-    </section>
-  )
-}
-
 function WorkspaceModeBar({
   mode,
   onModeChange,
@@ -1037,7 +1058,7 @@ function WorkspaceModeBar({
     <section className="flex min-w-0 flex-col gap-3 px-1 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-center gap-2.5">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent bg-accent-light text-brand-charcoal">
-          <StrandIcon name={activeMode.icon} className="h-4 w-4" />
+          <ModeGlyph mode={activeMode.key} icon={activeMode.icon} className={activeMode.key === 'twelvelabs_enhanced' ? 'h-5 w-7' : 'h-4 w-4'} />
         </span>
         <div className="min-w-0">
           <h2 className="truncate text-base font-semibold text-text-primary">{activeMode.label}</h2>
@@ -1058,7 +1079,7 @@ function WorkspaceModeBar({
             ].join(' ')}
             title={`${option.label} · ${option.detail}`}
           >
-            <StrandIcon name={option.icon} className="h-3.5 w-3.5 shrink-0" />
+            <ModeGlyph mode={option.key} icon={option.icon} className={option.key === 'twelvelabs_enhanced' ? 'h-4 w-5 shrink-0' : 'h-3.5 w-3.5 shrink-0'} />
             <span className="min-w-0 truncate">{option.label}</span>
           </button>
         ))}
@@ -1067,11 +1088,28 @@ function WorkspaceModeBar({
   )
 }
 
+function ModeGlyph({
+  mode,
+  icon,
+  className,
+}: {
+  mode: AssemblyModeKey
+  icon: string
+  className?: string
+}) {
+  if (mode === 'twelvelabs_enhanced') {
+    return <span className={['inline-flex text-current [&>svg]:h-full [&>svg]:w-full', className || 'h-4 w-5'].join(' ')} dangerouslySetInnerHTML={{ __html: logoMark }} />
+  }
+  return <StrandIcon name={icon} className={className} />
+}
+
 function WorkspaceLaneBar({
+  measureRef,
   reels,
   selectedCategory,
   onSelect,
 }: {
+  measureRef?: (node: HTMLElement | null) => void
   reels: HighlightReels
   selectedCategory: CategoryKey
   onSelect: (category: CategoryKey) => void
@@ -1081,10 +1119,11 @@ function WorkspaceLaneBar({
   const activeColor = signalColors[selectedCategory]
   return (
     <section
-      className="sticky top-[var(--sj-header-height)] z-40 rounded-md border bg-surface px-3 py-2 shadow-[0_8px_18px_rgba(29,28,27,0.08)]"
+      ref={measureRef}
+      className="sticky top-[var(--sj-header-height)] z-40 w-full border-y border-x-0 bg-surface px-4 py-2 shadow-[0_8px_18px_rgba(29,28,27,0.08)] sm:px-6"
       style={{ borderColor: activeColor.border }}
     >
-      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-2">
           <span
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
@@ -1159,7 +1198,7 @@ function ProductionSection({
   children: ReactNode
 }) {
   return (
-    <section className="border-t border-border-light pt-4">
+    <section className="min-w-0 border-t border-border-light pt-4">
       <div className="flex min-w-0 items-center gap-2 px-1">
         <StrandIcon name={icon} className="h-4 w-4 shrink-0 text-accent" />
         <div className="min-w-0">
@@ -1221,7 +1260,7 @@ function SplitComparisonStage({
   const rightClip = assemblyMode === 'wsc_baseline' ? standardClip : enhancedClip
 
   return (
-    <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.06)] xl:max-h-[calc(100vh-156px)] xl:overflow-y-auto">
+    <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.06)] xl:max-h-[calc(100vh-var(--sj-explainability-top)-24px)] xl:overflow-y-auto">
       <div className="grid gap-4 border-b border-border-light bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary">Split-View Player</p>
@@ -1355,19 +1394,12 @@ function ComparisonPlayer({
           onSelect={onTimelineSelect}
         />
       )}
-      <div className="grid gap-3 p-4 md:grid-cols-[minmax(0,1fr)_160px]">
+      <div className="grid gap-3 p-4">
         <div className="min-w-0 rounded-md border border-border-light bg-card p-3">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{metaLabel}</p>
           <p className="mt-2 line-clamp-3 text-sm font-semibold leading-5 text-text-primary">
             {description || 'No grounded clip description returned yet.'}
           </p>
-        </div>
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-1">
-          <Detail label="Video" value={sourceName || 'Unmapped'} />
-          <Detail
-            label={searchMoment ? 'Source' : 'Confidence'}
-            value={searchMoment ? searchMoment.sourceLabel || 'Marengo' : confidenceLabel(clip?.confidence || 0)}
-          />
         </div>
       </div>
     </article>
@@ -1383,6 +1415,7 @@ type SequenceClip = {
   startTime: string
   endTime: string
   laneKey: MapCategoryKey
+  sourceIndex: number
 }
 
 function ReelSequencePlayer({
@@ -1391,39 +1424,85 @@ function ReelSequencePlayer({
   reels,
   mode,
   categoryKey,
+  selectedLaneKey,
+  selectedClipIndex,
+  onSelect,
 }: {
   variant?: 'standard' | 'sidecar'
   game: Game
   reels: HighlightReels
   mode: AssemblyModeKey
   categoryKey: CategoryKey
+  selectedLaneKey: MapCategoryKey
+  selectedClipIndex: number
+  onSelect?: (categoryKey: MapCategoryKey, index: number) => void
 }) {
   const [activeIndex, setActiveIndex] = useState(0)
+  const clipButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const pointerSelectHandledRef = useRef(false)
   const sequenceClips = useMemo(() => {
-    const sourceCategory = mode === 'wsc_baseline' ? reels.standard_stats : reels[categoryKey]
-    const laneKey: MapCategoryKey = mode === 'wsc_baseline' ? 'standard_stats' : categoryKey
-    return sourceCategory.clips
-      .map((clip, index): SequenceClip | null => {
-        const sourceName = videoNameForClip(game, clip)
-        if (!sourceName) return null
-        return {
-          id: `${mode}-${categoryKey}-${index}-${clip.start_time}`,
-          title: sequenceClipTitle(clip, sourceCategory.title, mode, categoryKey),
-          shortTitle: sequenceClipShortTitle(laneKey),
-          detail: clip.description,
-          sourceName,
-          startTime: clip.start_time,
-          endTime: clip.end_time,
-          laneKey,
-        }
-      })
-      .filter((clip): clip is SequenceClip => Boolean(clip))
-  }, [categoryKey, game, mode, reels])
+    const sequenceCategories = mode === 'wsc_baseline'
+      ? [{ key: 'standard_stats' as MapCategoryKey, title: reels.standard_stats.title, clips: reels.standard_stats.clips }]
+      : categories.map((category) => ({
+        key: category.key as MapCategoryKey,
+        title: category.label,
+        clips: reels[category.key].clips,
+      }))
+
+    const laneOrder: Record<MapCategoryKey, number> = {
+      standard_stats: 0,
+      best_plays: 1,
+      emotional_moments: 2,
+      fan_experience: 3,
+      behind_the_scenes: 4,
+    }
+
+    return sequenceCategories.flatMap((sourceCategory) =>
+      sourceCategory.clips
+        .map((clip, index): SequenceClip | null => {
+          const sourceName = videoNameForClip(game, clip)
+          if (!sourceName) return null
+          return {
+            id: `${mode}-${sourceCategory.key}-${index}-${clip.start_time}`,
+            title: sequenceClipTitle(clip, sourceCategory.title, mode, sourceCategory.key),
+            shortTitle: sequenceClipShortTitle(sourceCategory.key),
+            detail: clip.description,
+            sourceName,
+            startTime: clip.start_time,
+            endTime: clip.end_time,
+            laneKey: sourceCategory.key,
+            sourceIndex: index,
+          }
+        })
+        .filter((clip): clip is SequenceClip => Boolean(clip)),
+    ).sort((left, right) =>
+      secondsFromTime(left.startTime) - secondsFromTime(right.startTime) ||
+      secondsFromTime(left.endTime) - secondsFromTime(right.endTime) ||
+      laneOrder[left.laneKey] - laneOrder[right.laneKey],
+    )
+  }, [game, mode, reels])
   const activeClip = sequenceClips[activeIndex] || sequenceClips[0]
 
   useEffect(() => {
-    setActiveIndex(0)
-  }, [mode, categoryKey])
+    const selectedSequenceClipIndex = sequenceClips.findIndex((clip) =>
+      clip.laneKey === selectedLaneKey && clip.sourceIndex === selectedClipIndex,
+    )
+    if (selectedSequenceClipIndex >= 0) {
+      setActiveIndex(selectedSequenceClipIndex)
+      return
+    }
+    if (mode === 'wsc_baseline') {
+      setActiveIndex(0)
+      return
+    }
+    const firstCategoryClipIndex = sequenceClips.findIndex((clip) => clip.laneKey === categoryKey)
+    setActiveIndex(firstCategoryClipIndex >= 0 ? firstCategoryClipIndex : 0)
+  }, [categoryKey, mode, selectedClipIndex, selectedLaneKey, sequenceClips])
+
+  useEffect(() => {
+    if (!activeClip) return
+    clipButtonRefs.current[activeClip.id]?.scrollIntoView({ block: 'nearest' })
+  }, [activeClip])
 
   if (!activeClip) {
     return (
@@ -1438,93 +1517,157 @@ function ReelSequencePlayer({
   const endSeconds = secondsFromTime(activeClip.endTime)
   const compact = variant === 'sidecar'
   const progress = ((activeIndex + 1) / Math.max(sequenceClips.length, 1)) * 100
+  const activeClipColor = signalColors[activeClip.laneKey]
+  const selectSequenceClip = (index: number, clip: SequenceClip) => {
+    setActiveIndex(index)
+    onSelect?.(clip.laneKey, clip.sourceIndex)
+  }
 
   return (
-    <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+    <section className="w-full max-w-full min-w-0 overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
       <div className="grid gap-4 bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <StrandIcon name="play-next" className="h-4 w-4 text-accent" />
-            <h2 className="text-base font-semibold text-text-primary">Reel Sequence Player</h2>
+            <h2 className="text-base font-semibold text-text-primary">Assembly Highlights</h2>
           </div>
-          {!compact && <p className="mt-1 text-sm text-text-secondary">Simulated stitched playback by jumping between grounded source ranges.</p>}
+          {!compact && <p className="mt-1 text-sm text-text-secondary">Semantic scenes stitched into one source-guided sequence.</p>}
         </div>
         <span className="text-sm font-semibold text-text-tertiary">{activeIndex + 1} / {sequenceClips.length}</span>
       </div>
       <div className="h-1 bg-border-light">
         <span className="block h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
       </div>
-      <div className={compact ? 'grid' : 'grid lg:grid-cols-[minmax(0,1.2fr)_360px]'}>
-        <div className="aspect-video bg-card">
-          <TwelveLabsVideoPlayer
-            key={`${streamInfoUrl}-${activeClip.id}`}
-            streamInfoUrl={streamInfoUrl}
-            startSeconds={startSeconds}
-            endSeconds={endSeconds}
-            posterUrl={thumbnailForVideoName(game, activeClip.sourceName)}
-            onDuration={() => undefined}
-            onRangeComplete={() => setActiveIndex((current) => (current + 1) % sequenceClips.length)}
-          />
-        </div>
-        <div className="border-t border-border-light bg-surface px-4 py-3">
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Now playing</p>
-              <h3 className="mt-1 truncate text-sm font-semibold text-text-primary">{activeClip.title}</h3>
-              <p className="mt-1 line-clamp-2 text-sm leading-5 text-text-secondary">{activeClip.detail}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-2 sm:min-w-[220px]">
-              <div className="rounded-md border border-border-light bg-card px-3 py-2">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Range</p>
-                <p className="mt-1 font-mono text-xs font-semibold text-text-primary">{activeClip.startTime} - {activeClip.endTime}</p>
+      <div className={compact ? 'grid w-full min-w-0 items-start [@media(min-width:720px)]:grid-cols-[minmax(220px,0.82fr)_minmax(0,1.38fr)]' : 'grid w-full min-w-0 items-start lg:grid-cols-[minmax(0,1.2fr)_360px]'}>
+        <div className="flex min-w-0 flex-col bg-surface">
+          <div className="m-3 aspect-video min-w-0 overflow-hidden rounded-md bg-card">
+            <TwelveLabsVideoPlayer
+              key={`${streamInfoUrl}-${activeClip.id}`}
+              streamInfoUrl={streamInfoUrl}
+              startSeconds={startSeconds}
+              endSeconds={endSeconds}
+              posterUrl={thumbnailForVideoName(game, activeClip.sourceName)}
+              onDuration={() => undefined}
+              onRangeComplete={() => setActiveIndex((current) => (current + 1) % sequenceClips.length)}
+            />
+          </div>
+          <div className="min-w-0 border-t border-border-light px-4 py-3">
+            <div className="grid gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Now playing</p>
+                <h3 className="mt-1 truncate text-sm font-semibold text-text-primary">{activeClip.title}</h3>
+                <p className="mt-1 line-clamp-3 text-sm leading-5 text-text-secondary">{activeClip.detail}</p>
               </div>
-              <div className="rounded-md border border-border-light bg-card px-3 py-2">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Tag</p>
-                <p className="mt-1 truncate text-xs font-semibold text-text-primary">{activeClip.title}</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-md border border-border-light bg-card px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Range</p>
+                  <p className="mt-1 font-mono text-xs font-semibold text-text-primary">{activeClip.startTime} - {activeClip.endTime}</p>
+                </div>
+                <div className="rounded-md border border-border-light bg-card px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Tag</p>
+                  <p className="mt-1 truncate text-xs font-semibold text-text-primary">{activeClip.title}</p>
+                </div>
               </div>
             </div>
           </div>
+          <div className="border-t border-border-light px-4 py-3">
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Assembly</span>
+              <span
+                className="inline-flex max-w-[72px] truncate rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase"
+                style={{
+                  backgroundColor: activeClipColor.track,
+                  borderColor: activeClipColor.border,
+                  color: activeClipColor.text,
+                }}
+              >
+                {activeClip.shortTitle}
+              </span>
+            </div>
+            <div className="mt-2 flex items-end justify-between gap-2">
+              <span className="font-mono text-sm font-semibold text-text-primary">{activeIndex + 1}</span>
+              <span className="font-mono text-xs font-semibold text-text-tertiary">/ {sequenceClips.length}</span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-border-light">
+              <span className="block h-full rounded-full bg-accent" style={{ width: `${progress}%` }} />
+            </div>
+          </div>
         </div>
-        <div className={compact ? 'relative grid min-w-0 gap-2 border-t border-border-light p-3' : 'relative flex min-w-0 flex-col gap-2 border-t border-border-light p-3 lg:border-l lg:border-t-0'}>
-          <span className="pointer-events-none absolute bottom-4 left-[43px] top-4 w-px bg-border-light" />
+        <div className={compact ? 'relative grid min-w-0 gap-2 border-t border-border-light px-2 py-3 [@media(min-width:720px)]:max-h-[560px] [@media(min-width:720px)]:overflow-y-auto [@media(min-width:720px)]:border-l [@media(min-width:720px)]:border-t-0' : 'relative flex min-w-0 flex-col gap-2 border-t border-border-light px-3 py-4 lg:border-l lg:border-t-0'}>
+          <span className="pointer-events-none absolute bottom-5 left-[36px] top-5 z-0 w-px bg-border" aria-hidden="true" />
           {sequenceClips.map((clip, index) => {
             const active = index === activeIndex
+            const selectedLane = mode === 'wsc_baseline' || clip.laneKey === categoryKey
+            const muted = !active && !selectedLane
             const color = signalColors[clip.laneKey]
+            const laneIcon = mapLanes.find((lane) => lane.key === clip.laneKey)?.icon || 'play-boxed'
             return (
               <button
                 key={clip.id}
+                ref={(node) => {
+                  clipButtonRefs.current[clip.id] = node
+                }}
                 type="button"
-                onClick={() => setActiveIndex(index)}
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  pointerSelectHandledRef.current = true
+                  selectSequenceClip(index, clip)
+                }}
+                onClick={() => {
+                  if (pointerSelectHandledRef.current) {
+                    pointerSelectHandledRef.current = false
+                    return
+                  }
+                  selectSequenceClip(index, clip)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    selectSequenceClip(index, clip)
+                  }
+                }}
                 className={[
-                  'relative grid min-w-0 grid-cols-[64px_minmax(0,1fr)_96px] items-center gap-3 rounded-md border px-3 py-2.5 text-left',
+                  'relative z-10 grid min-w-0 grid-cols-[40px_minmax(0,1fr)_42px] items-center gap-2 rounded-md border px-2 py-2.5 text-left transition-colors',
                   active
-                    ? 'border-accent bg-accent-light text-brand-charcoal'
-                    : 'border-border-light bg-card text-text-secondary hover:border-accent hover:bg-accent-light',
+                    ? 'border-accent bg-accent-light text-brand-charcoal shadow-[0_8px_22px_rgba(0,220,130,0.12)]'
+                    : selectedLane
+                      ? 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light'
+                      : 'border-border-light bg-surface text-text-tertiary hover:border-border hover:bg-card',
                 ].join(' ')}
               >
-                <span className="relative flex min-w-0 items-center gap-2">
+                <span className="relative z-10 flex min-w-0 flex-col items-center gap-1">
                   <span
                     className={[
-                      'relative z-10 h-3 w-3 shrink-0 rounded-full border-2',
-                      active ? 'shadow-[0_0_0_3px_rgba(0,220,130,0.2)]' : '',
+                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border text-[10px] font-bold leading-none',
+                      active ? 'shadow-[0_0_0_3px_rgba(0,220,130,0.18)]' : '',
+                      muted ? 'opacity-50' : '',
                     ].join(' ')}
-                    style={{ backgroundColor: color.bg, borderColor: color.border }}
-                  />
-                  <span className="font-mono text-xs font-semibold">{formatSeconds(secondsFromTime(clip.startTime))}</span>
+                    style={{
+                      backgroundColor: active ? color.bg : color.track,
+                      borderColor: color.border,
+                      color: active ? color.text : color.border,
+                    }}
+                  >
+                    {index + 1}
+                  </span>
+                  <span className={['font-mono text-[11px] font-semibold text-text-tertiary', muted ? 'opacity-60' : ''].join(' ')}>
+                    {formatSeconds(secondsFromTime(clip.startTime))}
+                  </span>
                 </span>
-                <span className="min-w-0 text-sm font-semibold leading-5 text-text-primary">
+                <span className={['relative z-10 min-w-0 text-sm font-semibold leading-5', muted ? 'text-text-tertiary' : 'text-text-primary'].join(' ')}>
                   <span className="line-clamp-2">{clip.detail || `${clip.startTime} - ${clip.endTime}`}</span>
                 </span>
                 <span
-                  className="inline-flex max-w-full justify-self-end truncate rounded-md border px-2 py-1 text-right text-[10px] font-semibold uppercase tracking-[0.06em]"
+                  className={['relative z-10 inline-flex h-8 w-8 items-center justify-center justify-self-end rounded-md border', muted ? 'opacity-50' : ''].join(' ')}
                   style={{
                     backgroundColor: color.track,
                     borderColor: color.border,
                     color: color.text,
                   }}
                   title={clip.title}
+                  aria-label={clip.title}
                 >
-                  {clip.shortTitle}
+                  <StrandIcon name={laneIcon} className="h-4 w-4" />
                 </span>
               </button>
             )
@@ -1891,7 +2034,7 @@ function WorkspaceExplainabilityRail({
 
   if (collapsed) {
     return (
-      <section className="w-fit">
+      <section className="pointer-events-auto">
         <button
           type="button"
           onPointerDown={(event) => {
@@ -1904,7 +2047,7 @@ function WorkspaceExplainabilityRail({
               onToggleCollapse()
             }
           }}
-          className="inline-flex h-10 min-w-0 items-center justify-center gap-2 rounded-md border border-border bg-surface px-3 text-text-secondary shadow-[0_6px_18px_rgba(29,28,27,0.06)] transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal focus:outline-none focus:ring-2 focus:ring-accent/30 xl:h-11 xl:w-11 xl:px-0"
+          className="group inline-flex min-h-[118px] w-10 flex-col items-center justify-center gap-2 rounded-l-md border border-r-0 border-border bg-surface px-1 py-3 text-text-secondary shadow-[0_10px_28px_rgba(29,28,27,0.12)] transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal focus:outline-none focus:ring-2 focus:ring-accent/30"
           aria-expanded="false"
           aria-label="Expand explainability sidebar"
           title="Expand explainability"
@@ -1912,10 +2055,9 @@ function WorkspaceExplainabilityRail({
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border border-accent bg-accent-light text-brand-charcoal">
             <StrandIcon name="vision" className="h-4 w-4" />
           </span>
-          <span className="min-w-0 truncate text-xs font-semibold uppercase tracking-[0.08em] xl:sr-only">
+          <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] font-semibold uppercase tracking-[0.08em]">
             Explainability
           </span>
-          <StrandIcon name="expand" className="h-3.5 w-3.5 shrink-0 text-text-secondary xl:hidden" />
         </button>
       </section>
     )
@@ -1923,7 +2065,7 @@ function WorkspaceExplainabilityRail({
 
   return (
     <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.06)] xl:max-h-[calc(100vh-156px)] xl:overflow-y-auto">
-      <div className="border-b border-border-light bg-card px-4 py-4">
+      <div className="px-4 py-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
             <StrandIcon name="vision" className="h-4 w-4 shrink-0 text-accent" />
@@ -1953,35 +2095,45 @@ function WorkspaceExplainabilityRail({
         <p className="mt-1 text-sm leading-5 text-text-secondary">
           Selected clip evidence stays pinned while you move through Workspace.
         </p>
-      </div>
-
-      <div className="grid gap-3 border-b border-border-light p-4">
-        <div className="grid grid-cols-2 gap-2">
-          <Detail label="Mode" value={modeLabel} />
-          <Detail label="Lane" value={mode === 'wsc_baseline' ? 'Event Feed' : lane.label} />
+        <div className="mt-3 flex flex-wrap gap-2">
+          <span className="inline-flex min-w-0 items-center rounded-sm border border-border-light bg-card px-2.5 py-1 text-xs font-semibold text-text-secondary">
+            {modeLabel}
+          </span>
+          <span className="inline-flex min-w-0 items-center rounded-sm border border-accent/50 bg-accent-light px-2.5 py-1 text-xs font-semibold text-brand-charcoal">
+            {mode === 'wsc_baseline' ? 'Event Feed' : lane.label}
+          </span>
         </div>
-        <div className="rounded-md border border-accent/60 bg-accent-light px-3 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-charcoal">Active evidence</p>
+
+        <div className="mt-4 rounded-md border border-accent/45 bg-accent-light/70 px-3 py-3 shadow-[0_1px_0_rgba(0,220,130,0.08)]">
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <p className="inline-flex min-w-0 items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-charcoal">
+              <span className="h-2 w-2 shrink-0 rounded-full bg-accent shadow-[0_0_0_3px_rgba(0,220,130,0.14)]" />
+              <span className="truncate">Active evidence</span>
+            </p>
+            <span className="shrink-0 rounded-sm border border-accent/30 bg-surface/85 px-2 py-1 font-mono text-[11px] font-semibold text-text-secondary">
+              {selectedRange}
+            </span>
+          </div>
           <p className="mt-1 line-clamp-2 text-sm font-semibold leading-5 text-text-primary">
             {selectedClip?.description || activeVideoName || 'Select a clip from the player or discovery map'}
           </p>
-          <p className="mt-2 font-mono text-xs font-semibold text-text-secondary">{selectedRange}</p>
         </div>
       </div>
 
-      <div className="flex flex-col gap-4 p-4">
+      <div className="border-t border-border-light px-4">
         <ReasonBlock title="Stats trigger" clip={standardClip} expectedSource="stats" />
         <ReasonBlock title="TwelveLabs signal" clip={enhancedClip} expectedSource="semantic" />
         {category?.assembly_notes.length ? (
-          <div className="border-t border-border-light pt-4">
+          <div className="border-t border-border-light py-4">
             <h3 className="text-sm font-semibold text-text-primary">Assembly Notes</h3>
-            <div className="mt-3 flex flex-col gap-2">
+            <ul className="mt-3 grid gap-2">
               {category.assembly_notes.map((note, index) => (
-                <p key={`${note}-${index}`} className="rounded-md bg-card px-3 py-2 text-sm leading-5 text-text-secondary">
-                  {note}
-                </p>
+                <li key={`${note}-${index}`} className="grid grid-cols-[1rem_minmax(0,1fr)] gap-2 text-sm leading-5 text-text-secondary">
+                  <span className="mt-2 h-1.5 w-1.5 rounded-full bg-accent" />
+                  <span>{note}</span>
+                </li>
               ))}
-            </div>
+            </ul>
           </div>
         ) : null}
       </div>
@@ -3172,11 +3324,20 @@ function TwelveLabsVideoPlayer({
     let disposed = false
     let hls: Hls | null = null
     let handleMetadata: (() => void) | null = null
+    let handleReadyFrame: (() => void) | null = null
     let handleTimeUpdate: (() => void) | null = null
     let handlePlay: (() => void) | null = null
     let handlePause: (() => void) | null = null
     let rangeCompleted = false
+    let readyFrame = false
+    let warmingFirstFrame = false
+    let mutedBeforeWarm = muted
+    let readinessPoll: number | null = null
     const controller = new AbortController()
+    const startLoadAt = Math.max(0, startSeconds)
+    const segmentBufferLength = segmentRange
+      ? clamp(((endSeconds && endSeconds > startLoadAt ? endSeconds : startLoadAt + 12) - startLoadAt) + 8, 12, 36)
+      : 36
 
     setStatus('loading')
     setMessage('Resolving TwelveLabs stream...')
@@ -3198,10 +3359,42 @@ function TwelveLabsVideoPlayer({
         if (!manifestUrl) {
           throw new Error('TwelveLabs stream response did not include a secure HLS manifest')
         }
-        setMessage('Loading TwelveLabs HLS preview...')
+        preconnectManifestOrigin(manifestUrl)
+        setMessage('Loading TwelveLabs HLS stream...')
         const playWhenReady = () => {
           if (!autoPlay || disposed) return
           video.play().catch(() => undefined)
+        }
+        const warmFirstFrame = () => {
+          if (autoPlay || disposed || variant === 'minimal') return
+          mutedBeforeWarm = video.muted
+          warmingFirstFrame = true
+          video.muted = true
+          video.play()
+            .then(() => {
+              if (disposed || autoPlay || !warmingFirstFrame) return
+              warmingFirstFrame = false
+              video.pause()
+              video.muted = mutedBeforeWarm
+            })
+            .catch(() => {
+              warmingFirstFrame = false
+              if (!disposed) video.muted = mutedBeforeWarm
+            })
+        }
+        const finishWarmup = () => {
+          if (!warmingFirstFrame || autoPlay || disposed) return
+          warmingFirstFrame = false
+          video.pause()
+          video.muted = mutedBeforeWarm
+        }
+        const markReady = () => {
+          if (disposed || readyFrame) return
+          readyFrame = true
+          setStatus('ready')
+          setMessage('')
+          playWhenReady()
+          finishWarmup()
         }
 
         handleMetadata = () => {
@@ -3209,15 +3402,18 @@ function TwelveLabsVideoPlayer({
           const duration = Number.isFinite(video.duration) ? video.duration : 0
           setDurationSeconds(duration)
           onDuration?.(duration)
-          video.currentTime = clamp(startSeconds, 0, Math.max(duration, startSeconds))
+          video.currentTime = clamp(startLoadAt, 0, Math.max(duration, startLoadAt))
           setCurrentSeconds(video.currentTime)
-          setStatus('ready')
-          setMessage('')
-          playWhenReady()
+          setMessage('Opening TwelveLabs stream...')
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) markReady()
+        }
+        handleReadyFrame = () => {
+          markReady()
         }
         handleTimeUpdate = () => {
           if (disposed) return
           setCurrentSeconds(video.currentTime)
+          if (!readyFrame && video.currentTime > 0) markReady()
           if (rangeCompleted || !endSeconds || endSeconds <= startSeconds) return
           if (video.currentTime >= endSeconds - 0.15) {
             rangeCompleted = true
@@ -3242,26 +3438,45 @@ function TwelveLabsVideoPlayer({
           if (!disposed) setPlaying(false)
         }
         video.addEventListener('loadedmetadata', handleMetadata)
+        video.addEventListener('loadeddata', handleReadyFrame)
+        video.addEventListener('canplay', handleReadyFrame)
         video.addEventListener('timeupdate', handleTimeUpdate)
         video.addEventListener('play', handlePlay)
         video.addEventListener('pause', handlePause)
+        readinessPoll = window.setInterval(() => {
+          if (disposed || readyFrame) return
+          if (video.readyState >= 2 || video.currentTime > 0) markReady()
+        }, 250)
 
         if (video.canPlayType('application/vnd.apple.mpegurl')) {
           video.src = manifestUrl
           video.load()
+          warmFirstFrame()
           playWhenReady()
           return
         }
 
         if (Hls.isSupported()) {
-          hls = new Hls()
+          hls = new Hls({
+            autoStartLoad: false,
+            startPosition: startLoadAt,
+            maxBufferLength: segmentBufferLength,
+            maxMaxBufferLength: Math.max(segmentBufferLength, 45),
+            backBufferLength: 0,
+            lowLatencyMode: true,
+          })
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (data.fatal && !disposed) {
               setStatus('error')
               setMessage('TwelveLabs HLS stream could not be played in this browser')
             }
           })
-          hls.on(Hls.Events.MANIFEST_PARSED, playWhenReady)
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (disposed) return
+            hls?.startLoad(startLoadAt)
+            warmFirstFrame()
+            playWhenReady()
+          })
           hls.loadSource(manifestUrl)
           hls.attachMedia(video)
           return
@@ -3278,7 +3493,12 @@ function TwelveLabsVideoPlayer({
     return () => {
       disposed = true
       controller.abort()
+      if (readinessPoll !== null) window.clearInterval(readinessPoll)
       if (handleMetadata) video.removeEventListener('loadedmetadata', handleMetadata)
+      if (handleReadyFrame) {
+        video.removeEventListener('loadeddata', handleReadyFrame)
+        video.removeEventListener('canplay', handleReadyFrame)
+      }
       if (handleTimeUpdate) video.removeEventListener('timeupdate', handleTimeUpdate)
       if (handlePlay) video.removeEventListener('play', handlePlay)
       if (handlePause) video.removeEventListener('pause', handlePause)
@@ -3344,14 +3564,14 @@ function TwelveLabsVideoPlayer({
   }, [durationSeconds, endSeconds, segmentRange, startSeconds, status])
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full min-w-0">
       <video
         ref={videoRef}
-        className={['h-full w-full accent-accent', fit === 'cover' ? 'object-cover' : 'object-contain'].join(' ')}
+        className={['h-full w-full min-w-0 accent-accent', fit === 'cover' ? 'object-cover' : 'object-contain'].join(' ')}
         controls={!segmentRange}
         muted={muted}
         playsInline
-        preload="metadata"
+        preload="auto"
         poster={posterUrl}
       />
       {segmentRange && showSegmentControls && (
@@ -3580,6 +3800,15 @@ function StatusStrip({
             Discover Videos
           </button>
         </div>
+        <div className="border-t border-border-light bg-card px-5 py-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <StrandIcon name="document-list" className="h-4 w-4 shrink-0 text-accent" />
+            <h3 className="truncate text-base font-semibold text-text-primary">Analysis Summary</h3>
+          </div>
+          <p className="mt-2 max-w-5xl text-sm leading-6 text-text-secondary">
+            {displayAnalysisSummary(reels.match_summary)}
+          </p>
+        </div>
       </section>
     )
   }
@@ -3620,8 +3849,6 @@ function PegasusIndexNotice({ game }: { game: Game | null }) {
 function SignalMap({
   variant = 'standard',
   reels,
-  lens,
-  onLensChange,
   selectedCategory,
   selectedEnhancedIndex,
   selectedStandardIndex,
@@ -3629,13 +3856,14 @@ function SignalMap({
 }: {
   variant?: 'standard' | 'sidecar'
   reels: HighlightReels
-  lens: LensKey
-  onLensChange: (lens: LensKey) => void
   selectedCategory: CategoryKey
   selectedEnhancedIndex: number
   selectedStandardIndex: number
   onSelect: (categoryKey: MapCategoryKey, index: number) => void
 }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const pointerToggleHandledRef = useRef(false)
+  const toggleCollapsed = () => setCollapsed((value) => !value)
   const nodes = mapLanes.flatMap((lane) =>
     reels[lane.key].clips.map((clip, index) => ({
       lane,
@@ -3647,7 +3875,6 @@ function SignalMap({
   )
   const maxTime = Math.max(1, ...nodes.map((node) => node.end))
   const semanticCount = nodes.filter((node) => node.clip.source_type !== 'stats').length
-  const referenceCount = new Set(nodes.map((node) => node.clip.video_reference)).size
   const confidenceValues = nodes.map((node) => node.clip.confidence).filter(hasUsableConfidence)
   const avgConfidence = confidenceValues.length
     ? String(Math.round((confidenceValues.reduce((total, confidence) => total + confidence, 0) / confidenceValues.length) * 100))
@@ -3660,74 +3887,63 @@ function SignalMap({
     references.map((reference, index) => [reference, `V${index + 1}`]),
   )
   const compact = variant === 'sidecar'
-  const mapLens: LensKey = lens === 'confidence' ? 'category' : lens
+  const mapLens: LensKey = 'category'
 
   return (
     <section className="rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.05)]">
-      <div className={['grid gap-4 border-b border-border-light', compact ? 'px-4 py-4' : 'px-5 py-5 lg:grid-cols-[1fr_360px]'].join(' ')}>
-        <div className="min-w-0">
+      <div
+        className={[
+          'flex flex-wrap items-center justify-between gap-3',
+          collapsed ? '' : 'border-b border-border-light',
+          compact ? 'px-4 py-3' : 'px-5 py-4',
+        ].join(' ')}
+      >
+        <div className="flex min-w-0 items-center gap-3">
           <div className="flex items-center gap-2">
             <StrandIcon name="neural-network" className="h-4 w-4 text-brand-charcoal" />
             <h2 className="text-base font-semibold text-text-primary">Meta Discovery Map</h2>
           </div>
-          {!compact && (
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
-              {semanticCount} semantic or hybrid clips mapped against {referenceCount} indexed video references.
-            </p>
+          {!collapsed && (
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <MapMetricPill label="Lift" value={String(semanticCount)} />
+              <MapMetricPill label="Conf." value={avgConfidence} />
+            </div>
           )}
-          <div className="mt-4 flex flex-wrap gap-2">
-            {lensOptions.map((option) => (
-              <button
-                key={option.key}
-                type="button"
-                onClick={() => onLensChange(option.key)}
-                className={[
-                  'inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold transition-colors',
-                  mapLens === option.key
-                    ? 'border-accent bg-accent-light text-brand-charcoal'
-                    : 'border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light',
-                ].join(' ')}
-              >
-                <StrandIcon name={option.icon} className="h-4 w-4" />
-                {option.label}
-              </button>
-            ))}
-          </div>
         </div>
-        <div className={['grid grid-cols-3', compact ? 'gap-3' : 'gap-4'].join(' ')}>
-          <CompactMetric label="Semantic lift" value={String(semanticCount)} />
-          <CompactMetric label="Confidence" value={avgConfidence} />
-          <CompactMetric label="References" value={String(referenceCount)} />
+        <div className="flex min-w-0 items-center gap-3 sm:justify-end">
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              event.preventDefault()
+              pointerToggleHandledRef.current = true
+              toggleCollapsed()
+            }}
+            onClick={() => {
+              if (pointerToggleHandledRef.current) {
+                pointerToggleHandledRef.current = false
+                return
+              }
+              toggleCollapsed()
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                toggleCollapsed()
+              }
+            }}
+            className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-xs font-semibold text-text-secondary transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? 'Expand Meta Discovery Map' : 'Collapse Meta Discovery Map'}
+            title={collapsed ? 'Expand map' : 'Collapse map'}
+          >
+            <StrandIcon name={collapsed ? 'expand' : 'collapse'} className="h-4 w-4" />
+            <span>{collapsed ? 'Show' : 'Hide'}</span>
+          </button>
         </div>
       </div>
 
-      <div className={compact ? 'p-4' : 'overflow-x-auto p-5'}>
+      {!collapsed && <div className={compact ? 'px-4 py-3' : 'overflow-x-auto px-5 py-4'}>
         <div className={compact ? 'min-w-0' : 'min-w-[860px]'}>
-          <div className={['mb-5 flex items-end gap-1 rounded-md border border-border bg-card px-2 py-1.5', compact ? 'h-8' : 'h-9'].join(' ')}>
-            {nodes.map((node) => {
-              const selected = isSelectedSignal(node.lane.key, node.index, selectedCategory, selectedEnhancedIndex, selectedStandardIndex)
-              const color = signalColor(node.lane.key, node.clip, mapLens, referenceColorMap)
-              return (
-                <button
-                  key={`${node.lane.key}-${node.index}-${node.clip.start_time}-dna`}
-                  type="button"
-                  aria-label={`${node.lane.label} ${node.clip.start_time}, confidence ${confidenceLabel(node.clip.confidence)}`}
-                  title={`${node.lane.label} · Confidence ${confidenceLabel(node.clip.confidence)} · ${node.clip.start_time}-${node.clip.end_time}`}
-                  onClick={() => onSelect(node.lane.key, node.index)}
-                  className={[
-                    'h-full min-w-[10px] flex-1 rounded-sm border transition-transform hover:-translate-y-0.5',
-                    selected ? 'ring-2 ring-accent ring-offset-2 ring-offset-card' : '',
-                  ].join(' ')}
-                  style={{
-                    backgroundColor: color.bg,
-                    borderColor: color.border,
-                    opacity: signalOpacity(node.clip.confidence, 0.42),
-                  }}
-                />
-              )
-            })}
-          </div>
-
           <div className="flex flex-col gap-3.5">
             {mapLanes.map((lane) => {
               const laneNodes = nodes.filter((node) => node.lane.key === lane.key)
@@ -3750,6 +3966,16 @@ function SignalMap({
                         <button
                           key={`${lane.key}-${node.index}-${node.clip.start_time}`}
                           type="button"
+                          onPointerDown={(event) => {
+                            event.preventDefault()
+                            onSelect(lane.key, node.index)
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              onSelect(lane.key, node.index)
+                            }
+                          }}
                           onClick={() => onSelect(lane.key, node.index)}
                           aria-label={`${lane.label} ${node.clip.start_time}, confidence ${confidenceLabel(node.clip.confidence)}. ${node.clip.description}`}
                           title={`${lane.label} · Confidence ${confidenceLabel(node.clip.confidence)} · ${node.clip.start_time}-${node.clip.end_time}`}
@@ -3784,7 +4010,7 @@ function SignalMap({
             <span className="text-right">{formatSeconds(maxTime)}</span>
           </div>
         </div>
-      </div>
+      </div>}
     </section>
   )
 }
@@ -3889,7 +4115,6 @@ function FeaturedClipPanel({
               <>
                 <div className="grid grid-cols-2 gap-3">
                   <Detail label="Timecode" value={clipRangeLabel} />
-                  <Detail label="Video" value={sourceName || searchMoment.videoName} />
                   <Detail label="Source" value={searchMoment.sourceLabel || 'Marengo search'} />
                   <Detail label="Reference" value={searchMoment.videoReference} />
                 </div>
@@ -3920,15 +4145,11 @@ function FeaturedClipPanel({
                   )}
                   <p className="mt-2 text-sm leading-5 text-text-secondary">{effectiveClip.selection_reason}</p>
                   <EvidenceStack clip={effectiveClip} />
-                  {!hasUsableConfidence(effectiveClip.confidence) && (
-                    <p className="mt-2 text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Confidence not returned for this clip</p>
-                  )}
                 </div>
               </>
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-3">
-                  <Detail label="Video" value={sourceName || 'Source video'} />
                   <Detail label="Sport" value={game?.sport || 'Sports'} />
                 </div>
                 <div className="rounded-md border border-border-light bg-card p-3">
@@ -4025,42 +4246,73 @@ function ReelBuilder({
 }) {
   const formatSpec = reelFormats.find((item) => item.key === format) || reelFormats[0]
   const activeCategory = categories.find((item) => item.key === categoryKey) || categories[0]
+  const activeColor = signalColors[categoryKey]
+  const firstClip = category.clips[0]
+  const lastClip = category.clips[category.clips.length - 1]
+  const reelRange = firstClip && lastClip ? `${firstClip.start_time} - ${lastClip.start_time}` : 'No clips'
   return (
     <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="grid gap-4 border-b border-border-light bg-card px-5 py-4 xl:grid-cols-[minmax(220px,0.42fr)_minmax(0,0.58fr)] xl:items-start">
-        <div className="min-w-0 lg:max-w-xl">
-          <div className="flex items-center gap-2">
-            <StrandIcon name="play-boxed" className="h-4 w-4 text-accent" />
-            <h2 className="text-base font-semibold text-text-primary">Tag Reels</h2>
-          </div>
-          <p className="mt-1 truncate text-sm font-medium text-text-secondary">{videoName}</p>
-          <p className="mt-2 inline-flex h-7 max-w-full items-center gap-1.5 rounded-sm border border-border-light bg-surface px-2 text-xs font-semibold text-text-secondary">
-            <StrandIcon name={activeCategory.icon} className="h-3.5 w-3.5 shrink-0 text-accent" />
-            <span className="truncate">{activeCategory.label}</span>
-          </p>
-        </div>
-        <div className="grid min-w-0 gap-3">
-          <fieldset className="min-w-0">
-            <legend className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Format</legend>
-            <div className="grid min-w-0 grid-cols-2 gap-1.5 sm:grid-cols-4">
-              {reelFormats.map((option) => (
-                <button
-                  key={option.key}
-                  type="button"
-                  onClick={() => onFormatChange(option.key)}
-                  className={[
-                    'inline-flex h-9 min-w-0 items-center justify-center rounded-md border px-2 text-center text-xs font-semibold leading-tight transition-colors',
-                    format === option.key
-                      ? 'border-accent bg-accent-light text-brand-charcoal shadow-[0_1px_4px_rgba(0,220,130,0.14)]'
-                      : 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light',
-                  ].join(' ')}
-                  title={`${option.label} · ${option.detail}`}
+      <div className="grid gap-4 border-b border-border-light bg-surface px-5 py-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)] xl:items-end">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-start gap-3">
+            <span
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border"
+              style={{
+                backgroundColor: activeColor.bg,
+                borderColor: activeColor.border,
+                color: activeColor.text,
+              }}
+            >
+              <StrandIcon name={activeCategory.icon} className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h2 className="truncate text-base font-semibold text-text-primary">Tag Reels</h2>
+                <span
+                  className="inline-flex h-6 max-w-full items-center gap-1.5 rounded-md border px-2 text-xs font-semibold"
+                  style={{
+                    backgroundColor: activeColor.track,
+                    borderColor: activeColor.border,
+                    color: activeColor.text,
+                  }}
                 >
-                  <span className="min-w-0 truncate">{option.label}</span>
-                </button>
-              ))}
+                  <span className="truncate">{activeCategory.label}</span>
+                </span>
+              </div>
+              <p className="mt-1 truncate text-sm font-medium text-text-secondary">{videoName}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
+                <span>{category.clips.length} clips</span>
+                <span className="h-1 w-1 rounded-full bg-border" />
+                <span>{formatSpec.label}</span>
+                <span className="h-1 w-1 rounded-full bg-border" />
+                <span className="normal-case tracking-normal">{reelRange}</span>
+              </div>
             </div>
-          </fieldset>
+          </div>
+        </div>
+        <div className="min-w-0">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Format</span>
+            <span className="text-xs font-semibold text-text-secondary">{formatSpec.detail}</span>
+          </div>
+          <div className="grid min-w-0 grid-cols-4 overflow-hidden rounded-md border border-border-light bg-card p-0.5" aria-label="Reel format" role="group">
+            {reelFormats.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => onFormatChange(option.key)}
+                className={[
+                  'h-8 min-w-0 rounded-sm px-2 text-center text-xs font-semibold transition-colors',
+                  format === option.key
+                    ? 'bg-accent-light text-brand-charcoal ring-1 ring-accent'
+                    : 'text-text-secondary hover:bg-surface hover:text-brand-charcoal',
+                ].join(' ')}
+                title={`${option.label} · ${option.detail}`}
+              >
+                <span className="truncate">{option.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -4218,7 +4470,7 @@ function ReasonBlock({
 }) {
   const aligned = clip?.source_type === expectedSource || clip?.source_type === 'stats_semantic'
   return (
-    <div className="rounded-md border border-border-light bg-surface p-3">
+    <div className="border-t border-border-light py-4 first:border-t-0">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
         {clip && (
@@ -4228,16 +4480,51 @@ function ReasonBlock({
         )}
       </div>
       {clip ? (
-        <div className="mt-3 flex flex-col gap-3">
+        <div className="mt-2">
           <p className="text-sm font-semibold text-text-primary">{clip.explainability_label}</p>
-          {clip.evidence_summary && <p className="text-sm leading-5 text-text-primary">{clip.evidence_summary}</p>}
-          <p className="text-sm leading-5 text-text-secondary">{clip.selection_reason}</p>
-          <EvidenceStack clip={clip} compact />
-          <Detail label="Confidence" value={confidenceLabel(clip.confidence)} />
+          {clip.evidence_summary && <p className="mt-2 text-sm leading-5 text-text-primary">{clip.evidence_summary}</p>}
+          <p className="mt-2 text-sm leading-5 text-text-secondary">{clip.selection_reason}</p>
+          <EvidenceTrail clip={clip} />
         </div>
       ) : (
         <p className="mt-3 text-sm text-text-tertiary">No clip selected</p>
       )}
+    </div>
+  )
+}
+
+function EvidenceTrail({ clip }: { clip: Clip }) {
+  const evidenceRows = [
+    { label: 'Visual', values: clip.visual_evidence || [] },
+    { label: 'Audio', values: clip.audio_evidence || [] },
+    { label: 'Transcript', values: clip.transcript_evidence || [] },
+  ].filter((row) => row.values.length)
+  const contextRows = [
+    clip.timeline_rationale ? { label: 'Timing', value: clip.timeline_rationale } : null,
+    clip.editorial_use ? { label: 'Edit', value: clip.editorial_use } : null,
+  ].filter(Boolean) as { label: string; value: string }[]
+  if (!evidenceRows.length && !contextRows.length) return null
+
+  return (
+    <div className="mt-3 grid gap-2">
+      {evidenceRows.map((row) => (
+        <div key={row.label} className="grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] gap-3">
+          <p className="pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{row.label}</p>
+          <div className="flex min-w-0 flex-wrap gap-1.5">
+            {row.values.slice(0, 4).map((value, index) => (
+              <span key={`${row.label}-${index}`} className="min-w-0 max-w-full rounded-sm bg-card px-2 py-1 text-xs font-medium leading-4 text-text-secondary">
+                {value}
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+      {contextRows.map((row) => (
+        <div key={row.label} className="grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] gap-3">
+          <p className="pt-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{row.label}</p>
+          <p className="min-w-0 text-sm leading-5 text-text-secondary">{row.value}</p>
+        </div>
+      ))}
     </div>
   )
 }
@@ -4282,6 +4569,15 @@ function CompactMetric({ label, value }: { label: string; value: string }) {
   )
 }
 
+function MapMetricPill({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border-light bg-card px-2 text-xs font-semibold text-text-secondary">
+      <span className="uppercase tracking-[0.08em] text-text-tertiary">{label}</span>
+      <span className="font-mono text-sm text-text-primary">{value}</span>
+    </span>
+  )
+}
+
 function Notice({ tone, icon, text }: { tone: 'neutral' | 'error'; icon: string; text: string }) {
   const classes =
     tone === 'error'
@@ -4323,7 +4619,7 @@ function sourceLabel(sourceType: Clip['source_type']) {
   return 'Stats'
 }
 
-function sequenceClipTitle(clip: Clip, fallbackTitle: string, mode: AssemblyModeKey, categoryKey: CategoryKey) {
+function sequenceClipTitle(clip: Clip, fallbackTitle: string, mode: AssemblyModeKey, categoryKey: MapCategoryKey) {
   const laneKey: MapCategoryKey = mode === 'wsc_baseline' ? 'standard_stats' : categoryKey
   const laneTitles: Record<MapCategoryKey, string> = {
     standard_stats: 'Event Moment',
@@ -4622,11 +4918,7 @@ function uniqueVideoNames(sourceVideos: string[]) {
 
 function workspaceMappedVideoNames(game: Game) {
   const sourceVideos = uniqueVideoNames(game.source_videos || [])
-  return [...sourceVideos].sort((left, right) => {
-    const leftRank = workspaceMappedIndexId(game, left) ? 0 : 1
-    const rightRank = workspaceMappedIndexId(game, right) ? 0 : 1
-    return leftRank - rightRank || sourceVideos.indexOf(left) - sourceVideos.indexOf(right)
-  })
+  return sourceVideos.filter((videoName) => Boolean(workspaceMappedIndexId(game, videoName)))
 }
 
 function workspaceMappedIndexId(game: Game, videoName: string) {
@@ -4835,6 +5127,28 @@ function secureHttpsUrl(value: string) {
     return url.protocol === 'https:' ? url.toString() : null
   } catch {
     return null
+  }
+}
+
+function preconnectManifestOrigin(manifestUrl: string) {
+  if (typeof document === 'undefined') return
+  try {
+    const origin = new URL(manifestUrl).origin
+    if (warmedManifestOrigins.has(origin)) return
+    warmedManifestOrigins.add(origin)
+
+    const preconnect = document.createElement('link')
+    preconnect.rel = 'preconnect'
+    preconnect.href = origin
+    preconnect.crossOrigin = 'anonymous'
+    document.head.appendChild(preconnect)
+
+    const dnsPrefetch = document.createElement('link')
+    dnsPrefetch.rel = 'dns-prefetch'
+    dnsPrefetch.href = origin
+    document.head.appendChild(dnsPrefetch)
+  } catch {
+    // Playback validation surfaces malformed stream URLs to the user.
   }
 }
 
