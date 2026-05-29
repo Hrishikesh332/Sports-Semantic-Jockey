@@ -16,6 +16,8 @@ CHUNK_UPLOAD_TIMEOUT_SECONDS = int(os.environ.get("TWELVELABS_CHUNK_UPLOAD_TIMEO
 MULTIPART_STATUS_ATTEMPTS = int(os.environ.get("TWELVELABS_MULTIPART_STATUS_ATTEMPTS", "60"))
 MULTIPART_STATUS_INTERVAL_SECONDS = int(os.environ.get("TWELVELABS_MULTIPART_STATUS_INTERVAL_SECONDS", "10"))
 PRESIGNED_URL_BATCH_SIZE = int(os.environ.get("TWELVELABS_PRESIGNED_URL_BATCH_SIZE", "50"))
+CHUNK_UPLOAD_RETRY_ATTEMPTS = max(1, int(os.environ.get("TWELVELABS_CHUNK_UPLOAD_RETRY_ATTEMPTS", "4")))
+CHUNK_UPLOAD_RETRY_INTERVAL_SECONDS = float(os.environ.get("TWELVELABS_CHUNK_UPLOAD_RETRY_INTERVAL_SECONDS", "2"))
 ANALYZE_RETRY_ATTEMPTS = max(1, int(os.environ.get("TWELVELABS_ANALYZE_RETRY_ATTEMPTS", "2")))
 ANALYZE_RETRY_INTERVAL_SECONDS = float(os.environ.get("TWELVELABS_ANALYZE_RETRY_INTERVAL_SECONDS", "5"))
 
@@ -209,13 +211,17 @@ def upload_asset_multipart(
                 "enable_thumbnail": True,
             },
         )
+        sanitize_multipart_session(session)
         multipart_state["session"] = session
         multipart_state["completed_chunks"] = {}
         persist_state(on_state_change)
         if progress:
             progress(f"created multipart upload session {session['upload_id']} for {filename}")
-    elif progress:
-        progress(f"resuming multipart upload session {session['upload_id']} for {filename}")
+    else:
+        if sanitize_multipart_session(session):
+            persist_state(on_state_change)
+        if progress:
+            progress(f"resuming multipart upload session {session['upload_id']} for {filename}")
 
     upload_id = session["upload_id"]
     asset_id = session["asset_id"]
@@ -277,15 +283,27 @@ def request_presigned_urls(upload_id, start, count):
 def upload_chunk(stream, chunk_size, chunk_index, chunk_length, url, upload_headers):
     stream.seek((chunk_index - 1) * chunk_size)
     chunk = stream.read(chunk_length)
-    try:
-        response = requests.put(
-            url,
-            data=chunk,
-            headers=upload_headers,
-            timeout=(30, CHUNK_UPLOAD_TIMEOUT_SECONDS),
-        )
-    except requests.RequestException as exc:
-        raise ApiError(str(exc), 502) from exc
+    response = None
+    for attempt in range(1, CHUNK_UPLOAD_RETRY_ATTEMPTS + 1):
+        try:
+            response = requests.put(
+                url,
+                data=chunk,
+                headers=upload_headers,
+                timeout=(30, CHUNK_UPLOAD_TIMEOUT_SECONDS),
+            )
+        except requests.RequestException as exc:
+            if attempt < CHUNK_UPLOAD_RETRY_ATTEMPTS:
+                time.sleep(CHUNK_UPLOAD_RETRY_INTERVAL_SECONDS * attempt)
+                continue
+            raise ApiError(str(exc), 502) from exc
+        if response.status_code < 500:
+            break
+        if attempt < CHUNK_UPLOAD_RETRY_ATTEMPTS:
+            time.sleep(CHUNK_UPLOAD_RETRY_INTERVAL_SECONDS * attempt)
+
+    if response is None:
+        raise ApiError("chunk upload failed before response", 502)
     if response.status_code >= 400:
         raise ApiError(response.text, response.status_code)
     etag = response.headers.get("ETag") or response.headers.get("etag")
@@ -332,6 +350,13 @@ def stream_size(stream):
 def persist_state(on_state_change):
     if on_state_change:
         on_state_change()
+
+
+def sanitize_multipart_session(session):
+    if isinstance(session, dict) and "upload_urls" in session:
+        session.pop("upload_urls", None)
+        return True
+    return False
 
 
 def parse_response(response):

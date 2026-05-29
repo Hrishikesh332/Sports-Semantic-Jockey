@@ -16,3 +16,5 @@ data/videos/*
 
 data/reels/*
 !data/reels/.gitkeep
+
+videosss/

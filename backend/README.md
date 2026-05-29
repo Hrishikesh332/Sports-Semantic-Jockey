@@ -369,23 +369,123 @@ The frontend Workspace sends `video_name`.
 
 ### `POST /games/<tag>/upload`
 
-Uploads a video into the selected game workflow. The backend saves the file under
-`data/videos/` for local playback and uploads it once as a TwelveLabs asset. The
-response returns immediately with `status: "indexing"`; a background worker waits
-until the asset is ready, then sends the same `asset_id` to both the existing
-game knowledge store and the configured `INDEX_ID`.
+Uploads one video into an existing game workspace. This is the preferred app
+endpoint for adding a video because it handles all three backend-side steps:
+saving local playback media, uploading the asset to TwelveLabs, and scheduling
+knowledge-base plus index registration.
+
+Prerequisites:
+
+1. `TWELVELABS_API_KEY` must be set.
+2. `INDEX_ID` or the game's `marengo_index_id` must be set.
+3. The game tag must already exist and include a `knowledge_store_id`. Create it
+   with `POST /games` or provide it through `DEFAULT_GAME_REGISTRATIONS_JSON`.
+
+Request:
+
+```bash
+curl -X POST "http://127.0.0.1:5000/games/sports/upload" \
+  -F "method=direct" \
+  -F "file=@/absolute/path/to/video.mp4"
+```
 
 Form fields:
 
-```text
-method=direct
-file=<video file>
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `method` | string | yes | Must be `direct`. This tells the backend to accept a direct multipart file upload. |
+| `file` | file | yes | MP4 or another TwelveLabs-supported video file. |
+
+Immediate response:
+
+```json
+{
+  "status": "indexing",
+  "video_name": "video.mp4",
+  "asset_id": "6a...",
+  "knowledge_store_id": "ks_...",
+  "index_configured": true,
+  "created_search_index": false,
+  "message": "Upload accepted. The index and knowledge-base item will be ready in a few minutes.",
+  "game": {}
+}
 ```
 
-Returns the updated app-facing game plus the TwelveLabs knowledge-store item and
-indexed-asset creation responses. The returned status is `indexing` because both
-knowledge-store item indexing and index processing continue asynchronously after
-TwelveLabs accepts the requests.
+`status: "indexing"` means the upload was accepted. The backend has already
+saved the video in `backend/data/videos/` and uploaded it as a TwelveLabs asset.
+A background worker then waits for the asset to become ready and sends the same
+`asset_id` to:
+
+- `POST /knowledge-stores/<knowledge_store_id>/items`
+- `POST /indexes/<INDEX_ID>/indexed-assets`
+
+After those background steps complete, the backend updates
+`backend/data/games/<tag>.json` with:
+
+- `source_videos`
+- `video_asset_ids`
+- `marengo_video_ids`
+- `video_reference_map`
+
+Verification:
+
+```bash
+curl "http://127.0.0.1:5000/games/sports"
+curl "http://127.0.0.1:5000/games/sports/index-videos"
+```
+
+Use `/games/<tag>/index-videos` when the UI needs the actual videos currently
+present in the configured TwelveLabs index. This avoids relying on local-only
+video mappings.
+
+Large files:
+
+The endpoint uploads the submitted file as-is. TwelveLabs can accept multipart
+asset uploads, but video processing/indexing can reject media above the current
+TwelveLabs processing limit, roughly 2.1 GB. For very large files, prepare a
+smaller proxy MP4 first, or use the folder helper:
+
+```bash
+python3 backend/scripts/upload_videosss.py
+```
+
+That helper reads `backend/videosss/*.mp4`, creates upload-safe proxy files under
+`backend/data/videosss_prepared/` when needed, uploads each video, adds it to the
+existing Sports knowledge store, adds it to `INDEX_ID`, and saves resumable
+state in `backend/data/videosss_ingest_state.json`.
+
+Common failures:
+
+| Status | Meaning | Fix |
+|---|---|---|
+| `400 method must be direct` | Missing or wrong form field. | Send `-F "method=direct"`. |
+| `400 file is required` | No uploaded file. | Send `-F "file=@/absolute/path/video.mp4"`. |
+| `404 game not found` | The tag does not exist. | Register the game first with `POST /games`. |
+| `500 INDEX_ID is required` | No index is configured. | Set `INDEX_ID` or the game's `marengo_index_id`. |
+| `media_filesize_too_large` | TwelveLabs rejected processing after upload. | Compress/proxy the file below the processing limit and retry. |
+
+Advanced lower-level flow:
+
+Use this only when you want to manually control each TwelveLabs step instead of
+letting `/games/<tag>/upload` do it.
+
+1. Upload an asset:
+
+```text
+POST /assets
+```
+
+2. Add it to the configured index:
+
+```text
+POST /assets/<asset_id>/index
+```
+
+3. Add it to a knowledge store:
+
+```text
+POST /knowledge-stores/<store_id>/items
+```
 
 ### `POST /games/<tag>/jockey-chat`
 

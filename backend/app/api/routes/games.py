@@ -10,6 +10,7 @@ from app.services.games import (
     generate_game_highlight_reels,
     create_jockey_chat_response,
     get_game,
+    list_game_index_videos,
     list_games,
     public_game,
     register_game,
@@ -39,6 +40,11 @@ def create_game():
 @games_bp.get("/games/<tag>")
 def show_game(tag):
     return jsonify(public_game(get_game(tag)))
+
+
+@games_bp.get("/games/<tag>/index-videos")
+def show_game_index_videos(tag):
+    return jsonify(list_game_index_videos(tag))
 
 
 @games_bp.post("/games/<tag>/highlight-reels")

@@ -90,6 +90,29 @@ type PegasusResponseMetadata = {
   clip_counts?: Partial<Record<MapCategoryKey, number>>
 }
 
+type IndexVideo = {
+  id: string
+  index_id?: string
+  indexed_asset_id?: string | null
+  asset_id?: string | null
+  name: string
+  display_name: string
+  source_video_name?: string | null
+  status?: string | null
+  thumbnail_url?: string | null
+  duration_seconds?: number | null
+  selectable?: boolean
+  has_pegasus_metadata?: boolean
+  metadata_generated_at?: string | null
+  metadata_source_video_name?: string | null
+  metadata_clip_counts?: Partial<Record<MapCategoryKey, number>> | null
+}
+
+type IndexVideoResponse = {
+  index_id?: string
+  index_videos: IndexVideo[]
+}
+
 type DiscoverMatch = {
   id: string
   label: string
@@ -378,10 +401,13 @@ function App() {
   const [featuredSignalCategory, setFeaturedSignalCategory] = useState<MapCategoryKey>('best_plays')
   const [assemblyMode, setAssemblyMode] = useState<AssemblyModeKey>('twelvelabs_enhanced')
   const [reelsByTag, setReelsByTag] = useState<Record<string, HighlightReels>>({})
+  const [indexVideosByTag, setIndexVideosByTag] = useState<Record<string, IndexVideo[]>>({})
   const [gamesError, setGamesError] = useState('')
   const [reelsError, setReelsError] = useState('')
+  const [indexVideosError, setIndexVideosError] = useState('')
   const [loadingGames, setLoadingGames] = useState(true)
   const [loadingTag, setLoadingTag] = useState('')
+  const [loadingIndexVideosTag, setLoadingIndexVideosTag] = useState('')
   const [selectedSourceVideoName, setSelectedSourceVideoName] = useState<string | null>(null)
   const [pendingWorkspaceVideoName, setPendingWorkspaceVideoName] = useState<string | null>(null)
   const [selectedSearchMoment, setSelectedSearchMoment] = useState<SearchMoment | null>(null)
@@ -394,9 +420,13 @@ function App() {
     () => games.find((game) => game.tag === selectedTag) || null,
     [games, selectedTag],
   )
+  const workspaceIndexVideos = useMemo(
+    () => (selectedTag ? indexVideosByTag[selectedTag] || [] : []),
+    [indexVideosByTag, selectedTag],
+  )
   const workspaceVideoNames = useMemo(
-    () => (selectedGame ? workspaceMappedVideoNames(selectedGame) : []),
-    [selectedGame],
+    () => (selectedGame ? workspaceVideoNamesFromIndex(selectedGame, workspaceIndexVideos) : []),
+    [selectedGame, workspaceIndexVideos],
   )
   const activeVideoName = workspaceVideoNames.includes(selectedSourceVideoName || '')
     ? selectedSourceVideoName || undefined
@@ -418,6 +448,7 @@ function App() {
   const featuredTitle = featuredSignalCategory === 'standard_stats' ? 'Event Feed Baseline' : 'Pegasus Discovery Cut'
   const hasHighlightAnalysis = scopedReels ? hasHighlightClips(scopedReels) : false
   const isLoadingReels = Boolean(selectedReelsKey && loadingTag === selectedReelsKey)
+  const isLoadingIndexVideos = Boolean(selectedTag && loadingIndexVideosTag === selectedTag)
   const requestHighlightReels = useCallback((videoName?: string, options: HighlightReelRequestOptions = {}) => {
     if (!selectedTag) return
     const cacheKey = reelCacheKey(selectedTag, videoName)
@@ -430,7 +461,7 @@ function App() {
     fetchJson<HighlightReels>(`/games/${encodeURIComponent(selectedTag)}/highlight-reels`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(videoName ? { video_name: videoName } : {}),
+      body: JSON.stringify(videoName ? indexVideoRequestPayload(selectedGame, workspaceIndexVideos, videoName) : {}),
     })
       .then((body) => setReelsByTag((current) => ({ ...current, [cacheKey]: body })))
       .catch((error: Error) => {
@@ -440,7 +471,7 @@ function App() {
       .finally(() => {
         if (!options.silent) setLoadingTag((current) => (current === cacheKey ? '' : current))
       })
-  }, [reelsByTag, selectedTag])
+  }, [reelsByTag, selectedGame, selectedTag, workspaceIndexVideos])
 
   useEffect(() => {
     let active = true
@@ -460,6 +491,30 @@ function App() {
       active = false
     }
   }, [])
+
+  useEffect(() => {
+    if (!selectedTag || indexVideosByTag[selectedTag]) return
+    let active = true
+    setLoadingIndexVideosTag(selectedTag)
+    setIndexVideosError('')
+    fetchJson<IndexVideoResponse>(`/games/${encodeURIComponent(selectedTag)}/index-videos`)
+      .then((body) => {
+        if (!active) return
+        setIndexVideosByTag((current) => ({
+          ...current,
+          [selectedTag]: uniqueIndexVideos(body.index_videos || []),
+        }))
+      })
+      .catch((error: Error) => {
+        if (active) setIndexVideosError(error.message)
+      })
+      .finally(() => {
+        if (active) setLoadingIndexVideosTag((current) => (current === selectedTag ? '' : current))
+      })
+    return () => {
+      active = false
+    }
+  }, [indexVideosByTag, selectedTag])
 
   useEffect(() => {
     if (view !== 'workspace' || !activeVideoName) return
@@ -610,7 +665,12 @@ function App() {
         : [...current, updatedGame]
     })
     setSelectedTag((current) => current || updatedGame.tag)
-    if (preferredVideoName && workspaceMappedVideoNames(updatedGame).includes(preferredVideoName)) {
+    setIndexVideosByTag((current) => {
+      const next = { ...current }
+      delete next[updatedGame.tag]
+      return next
+    })
+    if (preferredVideoName && (updatedGame.source_videos || []).includes(preferredVideoName)) {
       setSelectedSourceVideoName(preferredVideoName)
     }
   }
@@ -784,7 +844,10 @@ function App() {
             gamesError={gamesError}
             reelsError={reelsError}
             isLoadingReels={isLoadingReels}
+            isLoadingIndexVideos={isLoadingIndexVideos}
+            indexVideosError={indexVideosError}
             selectedGame={selectedGame}
+            workspaceIndexVideos={workspaceIndexVideos}
             workspaceVideoNames={workspaceVideoNames}
             reels={scopedReels}
             hasHighlightAnalysis={hasHighlightAnalysis}
@@ -867,7 +930,10 @@ function ProducerCockpit({
   gamesError,
   reelsError,
   isLoadingReels,
+  isLoadingIndexVideos,
+  indexVideosError,
   selectedGame,
+  workspaceIndexVideos,
   workspaceVideoNames,
   reels,
   hasHighlightAnalysis,
@@ -890,7 +956,10 @@ function ProducerCockpit({
   gamesError: string
   reelsError: string
   isLoadingReels: boolean
+  isLoadingIndexVideos: boolean
+  indexVideosError: string
   selectedGame: Game | null
+  workspaceIndexVideos: IndexVideo[]
   workspaceVideoNames: string[]
   reels?: HighlightReels
   hasHighlightAnalysis: boolean
@@ -927,7 +996,10 @@ function ProducerCockpit({
         gamesError={gamesError}
         reelsError={reelsError}
         isLoadingReels={isLoadingReels}
+        isLoadingIndexVideos={isLoadingIndexVideos}
+        indexVideosError={indexVideosError}
         selectedGame={selectedGame}
+        workspaceVideoCount={workspaceIndexVideos.length}
         reels={reels}
         activeVideoName={activeVideoName}
         onOpenDiscover={onOpenDiscover}
@@ -968,8 +1040,10 @@ function ProducerCockpit({
           {selectedGame && (
             <WorkspaceVideoCarousel
               game={selectedGame}
+              videos={workspaceIndexVideos}
               videoNames={workspaceVideoNames}
               activeVideoName={activeVideoName}
+              loading={isLoadingIndexVideos}
               onSelect={onSourceVideoSelect}
             />
           )}
@@ -1538,7 +1612,7 @@ function ReelSequencePlayer({
       <div className="h-1 bg-border-light">
         <span className="block h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
       </div>
-      <div className={compact ? 'grid w-full min-w-0 items-start [@media(min-width:720px)]:grid-cols-[minmax(220px,0.82fr)_minmax(0,1.38fr)]' : 'grid w-full min-w-0 items-start lg:grid-cols-[minmax(0,1.2fr)_360px]'}>
+      <div className={compact ? 'grid w-full min-w-0 items-start [@media(min-width:720px)]:grid-cols-[minmax(340px,1.35fr)_minmax(260px,0.65fr)]' : 'grid w-full min-w-0 items-start lg:grid-cols-[minmax(0,1.2fr)_360px]'}>
         <div className="flex min-w-0 flex-col bg-surface">
           <div className="m-3 aspect-video min-w-0 overflow-hidden rounded-md bg-card">
             <TwelveLabsVideoPlayer
@@ -1593,8 +1667,8 @@ function ReelSequencePlayer({
             </div>
           </div>
         </div>
-        <div className={compact ? 'relative grid min-w-0 gap-2 border-t border-border-light px-2 py-3 [@media(min-width:720px)]:max-h-[560px] [@media(min-width:720px)]:overflow-y-auto [@media(min-width:720px)]:border-l [@media(min-width:720px)]:border-t-0' : 'relative flex min-w-0 flex-col gap-2 border-t border-border-light px-3 py-4 lg:border-l lg:border-t-0'}>
-          <span className="pointer-events-none absolute bottom-5 left-[36px] top-5 z-0 w-px bg-border" aria-hidden="true" />
+        <div className={compact ? 'relative grid min-w-0 gap-2 border-t border-border-light px-4 py-3 [@media(min-width:720px)]:max-h-[560px] [@media(min-width:720px)]:overflow-y-auto [@media(min-width:720px)]:border-l [@media(min-width:720px)]:border-t-0 [@media(min-width:720px)]:px-2' : 'relative flex min-w-0 flex-col gap-2 border-t border-border-light px-3 py-4 lg:border-l lg:border-t-0'}>
+          <span className="pointer-events-none absolute bottom-5 left-[44px] top-5 z-0 w-px bg-border [@media(min-width:720px)]:left-[36px]" aria-hidden="true" />
           {sequenceClips.map((clip, index) => {
             const active = index === activeIndex
             const selectedLane = mode === 'wsc_baseline' || clip.laneKey === categoryKey
@@ -2143,26 +2217,48 @@ function WorkspaceExplainabilityRail({
 
 function WorkspaceVideoCarousel({
   game,
+  videos,
   videoNames,
   activeVideoName,
+  loading,
   onSelect,
 }: {
   game: Game
+  videos: IndexVideo[]
   videoNames: string[]
   activeVideoName?: string
+  loading: boolean
   onSelect: (videoName: string) => void
 }) {
-  const uniqueVideos = useMemo(() => uniqueVideoNames(videoNames), [videoNames])
+  const uniqueVideos = useMemo(
+    () => (videos.length ? uniqueIndexVideos(videos) : videoNames.map(fallbackIndexVideo)),
+    [videoNames, videos],
+  )
   const loopVideos = useMemo(() => {
     if (uniqueVideos.length === 0) return []
     const minimumItems = Math.max(8, uniqueVideos.length)
     return Array.from({ length: minimumItems }, (_, index) => uniqueVideos[index % uniqueVideos.length])
   }, [uniqueVideos])
 
+  if (loading && uniqueVideos.length === 0) {
+    return (
+      <section className="overflow-hidden rounded-md border border-border bg-card px-5 py-4 shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+        <div className="flex items-center gap-3 text-sm font-semibold text-text-secondary">
+          <StrandIcon name="spinner" className="h-4 w-4 animate-spin text-accent" />
+          Loading indexed videos
+        </div>
+      </section>
+    )
+  }
+
   if (uniqueVideos.length === 0) return null
 
-  const renderVideoButton = (videoName: string, index: number, group: string) => {
+  const renderVideoButton = (video: IndexVideo, index: number, group: string) => {
+    const videoName = indexVideoWorkspaceName(game, video)
     const active = videoName === activeVideoName
+    const title = video.display_name || video.name || videoName
+    const subtitle = shortIndexId(video.indexed_asset_id || video.asset_id || video.id)
+    const poster = video.thumbnail_url || ''
     return (
       <button
         key={`${group}-${videoName}-${index}`}
@@ -2175,14 +2271,21 @@ function WorkspaceVideoCarousel({
         aria-label={`Open ${videoName}`}
         aria-current={active ? 'true' : undefined}
       >
-        <img
-          src={thumbnailForVideoName(game, videoName)}
-          alt=""
-          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-          loading="lazy"
-        />
+        {poster ? (
+          <img
+            src={poster}
+            alt=""
+            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+            loading="lazy"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center bg-surface">
+            <StrandIcon name="play-boxed" className="h-9 w-9 text-accent" />
+          </div>
+        )}
         <span className="absolute inset-x-0 bottom-0 bg-surface/92 p-3 shadow-[0_-8px_24px_rgba(29,28,27,0.08)] backdrop-blur-sm">
-          <span className="line-clamp-2 text-xs font-semibold leading-4 text-text-primary">{videoName}</span>
+          <span className="line-clamp-2 text-xs font-semibold leading-4 text-text-primary">{title}</span>
+          {subtitle ? <span className="mt-1 block truncate font-mono text-[10px] font-semibold text-text-tertiary">{subtitle}</span> : null}
         </span>
       </button>
     )
@@ -2193,10 +2296,10 @@ function WorkspaceVideoCarousel({
       <div className="workspace-video-carousel relative overflow-hidden py-4">
         <div className="workspace-video-carousel-track flex w-max gap-3 px-5">
           <div className="flex shrink-0 gap-3">
-            {loopVideos.map((videoName, index) => renderVideoButton(videoName, index, 'a'))}
+            {loopVideos.map((video, index) => renderVideoButton(video, index, 'a'))}
           </div>
           <div className="flex shrink-0 gap-3">
-            {loopVideos.map((videoName, index) => renderVideoButton(videoName, index, 'b'))}
+            {loopVideos.map((video, index) => renderVideoButton(video, index, 'b'))}
           </div>
         </div>
       </div>
@@ -3741,7 +3844,10 @@ function StatusStrip({
   gamesError,
   reelsError,
   isLoadingReels,
+  isLoadingIndexVideos,
+  indexVideosError,
   selectedGame,
+  workspaceVideoCount,
   reels,
   activeVideoName,
   onOpenDiscover,
@@ -3750,7 +3856,10 @@ function StatusStrip({
   gamesError: string
   reelsError: string
   isLoadingReels: boolean
+  isLoadingIndexVideos: boolean
+  indexVideosError: string
   selectedGame: Game | null
+  workspaceVideoCount: number
   reels?: HighlightReels
   activeVideoName?: string
   onOpenDiscover: () => void
@@ -3764,11 +3873,20 @@ function StatusStrip({
   if (!selectedGame) {
     return <Notice tone="neutral" icon="info" text="No analyzed game registrations returned by backend" />
   }
+  if (isLoadingIndexVideos && !activeVideoName) {
+    return <Notice tone="neutral" icon="spinner" text="Loading videos from the TwelveLabs index" />
+  }
+  if (indexVideosError && workspaceVideoCount === 0) {
+    return <Notice tone="error" icon="warning" text={`Index videos could not load: ${indexVideosError}`} />
+  }
+  if (!activeVideoName) {
+    return <Notice tone="neutral" icon="info" text="No indexed videos returned for this workspace" />
+  }
   if (reelsError) {
     return <Notice tone="error" icon="warning" text={reelsError} />
   }
   if (isLoadingReels) {
-    return <Notice tone="neutral" icon="spinner" text={`Loading analysis for ${selectedGame.label}`} />
+    return <Notice tone="neutral" icon="spinner" text={`Reading saved metadata for ${activeVideoName}`} />
   }
   if (reels) {
     const enhancedCount =
@@ -3812,7 +3930,7 @@ function StatusStrip({
       </section>
     )
   }
-  return <Notice tone="neutral" icon="hourglass" text="Waiting for Pegasus analysis" />
+  return <Notice tone="neutral" icon="hourglass" text="Select an indexed video to load its saved metadata" />
 }
 
 function WorkspaceFact({ icon, label, value }: { icon: string; label: string; value: string }) {
@@ -4916,13 +5034,66 @@ function uniqueVideoNames(sourceVideos: string[]) {
   return Array.from(new Set(sourceVideos.filter(Boolean)))
 }
 
-function workspaceMappedVideoNames(game: Game) {
-  const sourceVideos = uniqueVideoNames(game.source_videos || [])
-  return sourceVideos.filter((videoName) => Boolean(workspaceMappedIndexId(game, videoName)))
+function uniqueIndexVideos(videos: IndexVideo[]) {
+  const seen = new Set<string>()
+  const ordered = orderIndexVideosForMetadataFirst(videos)
+  return ordered.filter((video) => {
+    const key = cleanString(video.indexed_asset_id) || cleanString(video.asset_id) || cleanString(video.id) || cleanString(video.name)
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
-function workspaceMappedIndexId(game: Game, videoName: string) {
-  return game.marengo_video_ids?.[videoName]
+function orderIndexVideosForMetadataFirst(videos: IndexVideo[]) {
+  return [...videos].sort((left, right) => Number(Boolean(right.has_pegasus_metadata)) - Number(Boolean(left.has_pegasus_metadata)))
+}
+
+function workspaceVideoNamesFromIndex(game: Game, videos: IndexVideo[]) {
+  return uniqueVideoNames(uniqueIndexVideos(videos).map((video) => indexVideoWorkspaceName(game, video)))
+}
+
+function indexVideoRequestPayload(game: Game | null, videos: IndexVideo[], videoName: string) {
+  const video = game ? videos.find((item) => indexVideoWorkspaceName(game, item) === videoName) : undefined
+  return {
+    video_name: videoName,
+    indexed_asset_id: video?.indexed_asset_id || undefined,
+    asset_id: video?.asset_id || undefined,
+  }
+}
+
+function indexVideoWorkspaceName(_game: Game, video: IndexVideo) {
+  return (
+    cleanString(video.source_video_name)
+    || cleanString(video.metadata_source_video_name)
+    || cleanString(video.name)
+    || cleanString(video.display_name)
+    || cleanString(video.indexed_asset_id)
+    || cleanString(video.asset_id)
+    || cleanString(video.id)
+    || 'Indexed video'
+  )
+}
+
+function fallbackIndexVideo(videoName: string): IndexVideo {
+  return {
+    id: videoName,
+    name: videoName,
+    display_name: videoName,
+    source_video_name: videoName,
+    selectable: true,
+  }
+}
+
+function shortIndexId(value?: string | null) {
+  const cleanValue = cleanString(value)
+  if (!cleanValue) return ''
+  if (cleanValue.length <= 12) return cleanValue
+  return `${cleanValue.slice(0, 6)}...${cleanValue.slice(-4)}`
+}
+
+function cleanString(value?: string | null) {
+  return typeof value === 'string' && value.trim() ? value.trim() : ''
 }
 
 function clipSelectionForVideo(game: Game, reels: HighlightReels, videoName: string): { category: MapCategoryKey; index: number } | null {
