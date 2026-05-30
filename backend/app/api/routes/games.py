@@ -1,4 +1,4 @@
-from flask import Blueprint, Response, jsonify, request, send_file, send_from_directory
+from flask import Blueprint, Response, jsonify, redirect, request, send_file, send_from_directory
 
 from app.core.errors import ApiError
 from app.core.validation import json_body, uploaded_file
@@ -15,6 +15,8 @@ from app.services.games import (
     public_game,
     register_game,
     placeholder_thumbnail_svg,
+    persist_remote_thumbnail,
+    registered_indexed_thumbnail_url,
     registered_thumbnail_path_or_none,
     registered_video_path,
     search_game_videos,
@@ -120,5 +122,11 @@ def show_game_reel_thumbnail(tag, video_name):
 def show_game_thumbnail(tag, video_name):
     path = registered_thumbnail_path_or_none(tag, video_name)
     if path:
-        return send_from_directory(THUMBNAILS_DIR, path.name)
+        return send_from_directory(THUMBNAILS_DIR, path.name, max_age=86400)
+    remote_url = registered_indexed_thumbnail_url(tag, video_name)
+    if remote_url:
+        cached_path = persist_remote_thumbnail(video_name, remote_url)
+        if cached_path:
+            return send_from_directory(THUMBNAILS_DIR, cached_path.name, max_age=86400)
+        return redirect(remote_url)
     return Response(placeholder_thumbnail_svg(tag, video_name), mimetype="image/svg+xml")

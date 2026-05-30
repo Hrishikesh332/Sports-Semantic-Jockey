@@ -241,6 +241,9 @@ type JockeyManifestClip = {
   jockey_rationale: string
   highlight_potential: number
   source_asset_id?: string | null
+  thumbnail_url?: string | null
+  stream_info_path?: string | null
+  video_url?: string | null
 }
 
 type JockeyChatRequest = {
@@ -820,6 +823,7 @@ function App() {
         {view === 'discover' ? (
         <DiscoverPage
           game={selectedGame}
+          indexVideos={workspaceIndexVideos}
           loading={loadingGames}
           error={gamesError}
           onOpenInWorkspace={openSourceInWorkspace}
@@ -2002,9 +2006,9 @@ function JockeyClipShowcase({
       <div className={showSliderRow ? 'flex w-max snap-x gap-3' : 'grid grid-cols-[repeat(auto-fit,minmax(164px,196px))] gap-3'}>
         {clips.map((clip, index) => {
           const sourceName = jockeyClipVideoName(game, clip)
-          const streamInfoUrl = sourceName ? streamInfoForVideoName(game, sourceName) : null
+          const streamInfoUrl = jockeyClipStreamInfoUrl(game, clip)
           const downloadUrl = sourceName ? jockeyReelDownloadUrl(game, sourceName, clip, index) : null
-          const posterUrl = sourceName ? thumbnailForVideoName(game, sourceName) : undefined
+          const posterUrl = clip.thumbnail_url || (sourceName ? thumbnailForVideoName(game, sourceName) : undefined)
           const workspaceMoment = sourceName ? jockeyClipSearchMoment(sourceName, clip) : null
           const paddedRange = paddedRangeForClip(clip)
 
@@ -2872,11 +2876,13 @@ function UploadVideosModal({
 
 function DiscoverPage({
   game,
+  indexVideos,
   loading,
   error,
   onOpenInWorkspace,
 }: {
   game: Game | null
+  indexVideos: IndexVideo[]
   loading: boolean
   error: string
   onOpenInWorkspace: (item: DiscoverItem) => void
@@ -2894,8 +2900,8 @@ function DiscoverPage({
   const items = useMemo(() => {
     if (!game) return []
     if (normalizedQuery) return searchResponse ? searchResultItems(game, searchResponse) : []
-    return sourceVideoItems(game, sourceVideos)
-  }, [game, normalizedQuery, searchResponse, sourceVideos])
+    return sourceVideoItems(game, sourceVideos, indexVideos)
+  }, [game, indexVideos, normalizedQuery, searchResponse, sourceVideos])
   const resultLabel = normalizedQuery
     ? searchLoading
       ? 'Searching'
@@ -3378,6 +3384,7 @@ function VideoThumb({ poster, title }: { poster: string; title: string }) {
 
 function TwelveLabsVideoPlayer({
   streamInfoUrl,
+  manifestUrl,
   startSeconds,
   endSeconds,
   posterUrl,
@@ -3393,7 +3400,8 @@ function TwelveLabsVideoPlayer({
   showStatusOverlay = true,
   statusOverlayStyle = 'message',
 }: {
-  streamInfoUrl: string
+  streamInfoUrl?: string
+  manifestUrl?: string
   startSeconds: number
   endSeconds?: number
   posterUrl?: string
@@ -3443,7 +3451,7 @@ function TwelveLabsVideoPlayer({
       : 36
 
     setStatus('loading')
-    setMessage('Resolving TwelveLabs stream...')
+    setMessage(manifestUrl ? 'Loading TwelveLabs HLS stream...' : 'Resolving TwelveLabs stream...')
     setDurationSeconds(0)
     setCurrentSeconds(startSeconds)
     setPlaying(false)
@@ -3452,17 +3460,26 @@ function TwelveLabsVideoPlayer({
     video.removeAttribute('src')
     video.load()
 
-    fetchTwelveLabsStreamInfo(streamInfoUrl, controller.signal)
-      .then((stream) => {
+    const streamPromise = manifestUrl
+      ? Promise.resolve(manifestUrl)
+      : streamInfoUrl
+        ? fetchTwelveLabsStreamInfo(streamInfoUrl, controller.signal)
+            .then((stream) => {
+              if (stream.provider !== 'twelvelabs' || stream.type !== 'hls' || !stream.manifest_url) {
+                throw new Error('TwelveLabs stream response did not include a playable HLS manifest')
+              }
+              const resolvedManifestUrl = secureHttpsUrl(stream.manifest_url)
+              if (!resolvedManifestUrl) {
+                throw new Error('TwelveLabs stream response did not include a secure HLS manifest')
+              }
+              return resolvedManifestUrl
+            })
+        : Promise.reject(new Error('No TwelveLabs stream source was provided'))
+
+    streamPromise
+      .then((hlsManifestUrl) => {
         if (disposed) return
-        if (stream.provider !== 'twelvelabs' || stream.type !== 'hls' || !stream.manifest_url) {
-          throw new Error('TwelveLabs stream response did not include a playable HLS manifest')
-        }
-        const manifestUrl = secureHttpsUrl(stream.manifest_url)
-        if (!manifestUrl) {
-          throw new Error('TwelveLabs stream response did not include a secure HLS manifest')
-        }
-        preconnectManifestOrigin(manifestUrl)
+        preconnectManifestOrigin(hlsManifestUrl)
         setMessage('Loading TwelveLabs HLS stream...')
         const playWhenReady = () => {
           if (!autoPlay || disposed) return
@@ -3552,7 +3569,7 @@ function TwelveLabsVideoPlayer({
         }, 250)
 
         if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = manifestUrl
+          video.src = hlsManifestUrl
           video.load()
           warmFirstFrame()
           playWhenReady()
@@ -3580,7 +3597,7 @@ function TwelveLabsVideoPlayer({
             warmFirstFrame()
             playWhenReady()
           })
-          hls.loadSource(manifestUrl)
+          hls.loadSource(hlsManifestUrl)
           hls.attachMedia(video)
           return
         }
@@ -3610,7 +3627,7 @@ function TwelveLabsVideoPlayer({
       video.removeAttribute('src')
       video.load()
     }
-  }, [streamInfoUrl, startSeconds, endSeconds, onDuration, onRangeComplete])
+  }, [manifestUrl, streamInfoUrl, startSeconds, endSeconds, onDuration, onRangeComplete])
 
   useEffect(() => {
     const video = videoRef.current
@@ -5030,6 +5047,10 @@ function thumbnailForVideoName(game: Game, videoName: string) {
   return apiUrl(`/games/${encodeURIComponent(game.tag)}/thumbnail/${encodeURIComponent(videoName)}`)
 }
 
+function posterForVideoName(game: Game, videoName: string, _indexVideos: IndexVideo[] = []) {
+  return thumbnailForVideoName(game, videoName)
+}
+
 function uniqueVideoNames(sourceVideos: string[]) {
   return Array.from(new Set(sourceVideos.filter(Boolean)))
 }
@@ -5113,7 +5134,15 @@ function videoNameForClip(game: Game, clip: Clip) {
 }
 
 function jockeyClipVideoName(game: Game, clip: JockeyManifestClip) {
-  return clip.video_name || videoNameForReference(game, clip.video_reference)
+  const backendName = cleanString(clip.video_name)
+  if (backendName) return backendName
+  return videoNameForReference(game, clip.video_reference)
+}
+
+function jockeyClipStreamInfoUrl(game: Game, clip: JockeyManifestClip) {
+  if (clip.stream_info_path) return apiUrl(clip.stream_info_path)
+  const sourceName = jockeyClipVideoName(game, clip)
+  return sourceName ? streamInfoForVideoName(game, sourceName) : null
 }
 
 function jockeyClipSearchMoment(videoName: string, clip: JockeyManifestClip): SearchMoment {
@@ -5142,6 +5171,14 @@ function videoNameForReference(game: Game, reference: string) {
   const sourceVideos = game.source_videos || []
   const mapped = game.video_reference_map?.[reference]
   if (mapped) return mapped
+  if (reference.startsWith('ksi_')) {
+    const bareReference = reference.slice(4)
+    const bareMapped = game.video_reference_map?.[bareReference]
+    if (bareMapped) return bareMapped
+  } else {
+    const prefixedMapped = game.video_reference_map?.[`ksi_${reference}`]
+    if (prefixedMapped) return prefixedMapped
+  }
   if (sourceVideos.includes(reference)) return reference
 
   const assetMatch = Object.entries(game.video_asset_ids || {}).find(([, assetId]) => assetId === reference)?.[0]
@@ -5224,14 +5261,14 @@ function responseScore(result: MarengoSearchResult, index: number) {
     : 1 / (index + 1)
 }
 
-function sourceVideoItems(game: Game, sourceVideos: string[]): DiscoverItem[] {
+function sourceVideoItems(game: Game, sourceVideos: string[], indexVideos: IndexVideo[] = []): DiscoverItem[] {
   return Array.from(new Set(sourceVideos)).map((videoName, index) => ({
     id: `${game.tag}-${videoName}-${index}`,
     label: 'Source Video',
     title: videoName,
     subtitle: '',
     media: streamInfoForVideoName(game, videoName),
-    poster: thumbnailForVideoName(game, videoName),
+    poster: posterForVideoName(game, videoName, indexVideos),
     videoName,
     knowledgeStoreId: game.knowledge_store_id,
     clipCount: 0,

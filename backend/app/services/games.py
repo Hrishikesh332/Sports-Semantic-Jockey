@@ -10,6 +10,9 @@ from hashlib import sha256
 from copy import deepcopy
 from pathlib import Path
 from threading import Lock
+from urllib.parse import quote
+
+import requests
 
 from app.core.config import TWELVELABS_MODEL, TWELVELABS_PEGASUS_MODEL, default_game_registrations, twelvelabs_index_id
 from app.core.errors import ApiError
@@ -66,6 +69,9 @@ PEGASUS_SYNC_WINDOW_SECONDS = int(os.environ.get("PEGASUS_SYNC_WINDOW_SECONDS", 
 STREAM_INFO_CACHE_TTL_SECONDS = int(os.environ.get("SPORTS_STREAM_INFO_CACHE_TTL_SECONDS", "900"))
 STREAM_INFO_CACHE = {}
 STREAM_INFO_CACHE_LOCK = Lock()
+INDEX_VIDEOS_CACHE_TTL_SECONDS = int(os.environ.get("SPORTS_INDEX_VIDEOS_CACHE_TTL_SECONDS", "300"))
+INDEX_VIDEOS_CACHE = {}
+INDEX_VIDEOS_CACHE_LOCK = Lock()
 PEGASUS_METADATA_CACHE_SCHEMA_VERSION = 2
 PEGASUS_METADATA_VERIFY_ATTEMPTS = int(os.environ.get("PEGASUS_METADATA_VERIFY_ATTEMPTS", "3"))
 PEGASUS_METADATA_VERIFY_INTERVAL_SECONDS = float(os.environ.get("PEGASUS_METADATA_VERIFY_INTERVAL_SECONDS", "1"))
@@ -134,15 +140,39 @@ def list_games():
 
 def list_game_index_videos(tag):
     game = get_game(tag)
+    now = time.time()
+    with INDEX_VIDEOS_CACHE_LOCK:
+        cached = INDEX_VIDEOS_CACHE.get(tag)
+        if cached and cached.get("expires_at", 0) > now:
+            return dict(cached["payload"])
+
     index_id = configured_search_index_id(game)
     videos = [
         normalize_index_video(index_id, indexed_asset_with_user_metadata(index_id, indexed_asset))
         for indexed_asset in list_indexed_assets(index_id)
     ]
-    return {
+    payload = {
         "index_id": index_id,
         "index_videos": [video for video in videos if video.get("id")],
     }
+    if INDEX_VIDEOS_CACHE_TTL_SECONDS > 0:
+        with INDEX_VIDEOS_CACHE_LOCK:
+            INDEX_VIDEOS_CACHE[tag] = {
+                "expires_at": now + INDEX_VIDEOS_CACHE_TTL_SECONDS,
+                "payload": payload,
+            }
+    UPLOAD_BACKGROUND_EXECUTOR.submit(warm_missing_video_thumbnails, payload.get("index_videos", []))
+    return payload
+
+
+def warm_missing_video_thumbnails(index_videos):
+    for video in index_videos:
+        if not isinstance(video, dict):
+            continue
+        source_name = clean_optional_string(video.get("source_video_name")) or clean_optional_string(video.get("name"))
+        thumbnail_url = clean_optional_string(video.get("thumbnail_url"))
+        if source_name and thumbnail_url:
+            persist_remote_thumbnail(source_name, thumbnail_url)
 
 
 def get_game(tag):
@@ -194,13 +224,22 @@ def register_game(payload):
         game["wsc_baseline"] = payload["wsc_baseline"]
     GAMES_DIR.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(game, indent=2, ensure_ascii=False))
+    with INDEX_VIDEOS_CACHE_LOCK:
+        INDEX_VIDEOS_CACHE.pop(tag, None)
+    with STREAM_INFO_CACHE_LOCK:
+        for cache_key in [key for key in STREAM_INFO_CACHE if key[0] == tag]:
+            STREAM_INFO_CACHE.pop(cache_key, None)
     return game
 
 
 def upload_game_video(tag, uploaded_file):
     game = get_game(tag)
     search_index_id, created_index = ensure_game_search_index(game)
-    video_name = unique_uploaded_video_name(safe_uploaded_video_name(uploaded_file.filename))
+    requested_video_name = safe_uploaded_video_name(uploaded_file.filename)
+    video_name = unique_uploaded_video_name(requested_video_name)
+    upload_aliases = unique_preserving_order(
+        [alias for alias in (requested_video_name, Path(requested_video_name).name) if alias and alias != video_name]
+    )
     local_path = save_uploaded_game_video(uploaded_file, video_name)
 
     uploaded_asset = upload_asset_path(local_path)
@@ -213,6 +252,7 @@ def upload_game_video(tag, uploaded_file):
         video_name=video_name,
         asset_id=asset_id,
         search_index_id=search_index_id,
+        upload_aliases=upload_aliases,
     )
     queue_uploaded_video_indexing(
         tag=tag,
@@ -220,6 +260,7 @@ def upload_game_video(tag, uploaded_file):
         asset_id=asset_id,
         uploaded_asset=uploaded_asset,
         search_index_id=search_index_id,
+        upload_aliases=upload_aliases,
     )
     return {
         "status": "indexing",
@@ -234,7 +275,7 @@ def upload_game_video(tag, uploaded_file):
     }
 
 
-def queue_uploaded_video_indexing(tag, video_name, asset_id, uploaded_asset, search_index_id):
+def queue_uploaded_video_indexing(tag, video_name, asset_id, uploaded_asset, search_index_id, upload_aliases=None):
     UPLOAD_BACKGROUND_EXECUTOR.submit(
         finish_uploaded_video_indexing,
         tag,
@@ -242,10 +283,11 @@ def queue_uploaded_video_indexing(tag, video_name, asset_id, uploaded_asset, sea
         asset_id,
         uploaded_asset,
         search_index_id,
+        upload_aliases or [],
     )
 
 
-def finish_uploaded_video_indexing(tag, video_name, asset_id, uploaded_asset, search_index_id):
+def finish_uploaded_video_indexing(tag, video_name, asset_id, uploaded_asset, search_index_id, upload_aliases=None):
     try:
         wait_for_uploaded_asset_ready(asset_id, uploaded_asset)
         game = get_game(tag)
@@ -264,7 +306,9 @@ def finish_uploaded_video_indexing(tag, video_name, asset_id, uploaded_asset, se
             search_index_id=search_index_id,
             knowledge_store_item=knowledge_store_item,
             indexed_asset=indexed_asset,
+            upload_aliases=upload_aliases,
         )
+        cache_indexed_video_thumbnail(video_name, indexed_asset, search_index_id)
     except Exception:
         LOGGER.exception("Failed to finish upload indexing for %s (%s)", video_name, asset_id)
 
@@ -276,6 +320,7 @@ def update_uploaded_game_metadata(
     search_index_id,
     knowledge_store_item=None,
     indexed_asset=None,
+    upload_aliases=None,
 ):
     with UPLOAD_METADATA_LOCK:
         game = get_game(tag)
@@ -287,6 +332,7 @@ def update_uploaded_game_metadata(
                 search_index_id=search_index_id,
                 knowledge_store_item=knowledge_store_item,
                 indexed_asset=indexed_asset,
+                upload_aliases=upload_aliases,
             )
         )
 
@@ -382,7 +428,15 @@ def add_game_video_to_search_index(search_index_id, asset_id):
     )
 
 
-def uploaded_game_payload(game, video_name, asset_id, search_index_id, knowledge_store_item, indexed_asset):
+def uploaded_game_payload(
+    game,
+    video_name,
+    asset_id,
+    search_index_id,
+    knowledge_store_item,
+    indexed_asset,
+    upload_aliases=None,
+):
     source_videos = unique_preserving_order([*game.get("source_videos", []), video_name])
     video_reference_map = deepcopy(game.get("video_reference_map", {})) if isinstance(game.get("video_reference_map"), dict) else {}
     video_asset_ids = deepcopy(game.get("video_asset_ids", {})) if isinstance(game.get("video_asset_ids"), dict) else {}
@@ -394,9 +448,19 @@ def uploaded_game_payload(game, video_name, asset_id, search_index_id, knowledge
     if indexed_asset_id:
         search_video_ids[video_name] = indexed_asset_id
 
-    for reference in (video_name, asset_id, indexed_asset_id, knowledge_store_item_id):
+    references = [video_name, asset_id, indexed_asset_id, knowledge_store_item_id, *(upload_aliases or [])]
+    if isinstance(indexed_asset, dict):
+        references.extend(
+            [
+                indexed_asset_filename(indexed_asset),
+                indexed_asset_display_name(indexed_asset),
+            ]
+        )
+    for reference in references:
         if reference:
             video_reference_map[reference] = video_name
+    if knowledge_store_item_id and knowledge_store_item_id.startswith("ksi_"):
+        video_reference_map[knowledge_store_item_id.removeprefix("ksi_")] = video_name
 
     payload = {
         "tag": game["tag"],
@@ -1512,7 +1576,31 @@ def normalize_jockey_chat_clip(game, raw_clip, index):
         return None
 
     end_time = end_time or default_end_time(start_time)
-    video_name = video_name_for_reference(game, reference)
+    video_name = resolve_jockey_clip_video_name(game, raw_clip, reference)
+    stream_info_path = None
+    video_url = None
+    thumbnail_url = None
+    playback_asset_id = None
+    stream_target = video_name or reference
+    if stream_target:
+        path_target = video_name or reference
+        stream_info_path = f"/games/{game['tag']}/stream/{quote(path_target, safe='')}"
+        try:
+            stream_info = twelvelabs_stream_info(game["tag"], stream_target)
+            video_url = clean_optional_string(stream_info.get("manifest_url"))
+            playback_asset_id = clean_optional_string(stream_info.get("asset_id"))
+        except ApiError:
+            pass
+    if video_name:
+        thumbnail_url = registered_indexed_thumbnail_url(game["tag"], video_name)
+    elif reference:
+        index_id = configured_search_index_id(game)
+        if index_id:
+            indexed_asset = indexed_asset_for_reference(index_id, reference)
+            if indexed_asset:
+                thumbnail_url = indexed_asset_thumbnail_url(
+                    indexed_asset_with_user_metadata(index_id, indexed_asset)
+                )
     potential = raw_clip.get("highlight_potential")
     if not isinstance(potential, (int, float)):
         potential = 0
@@ -1528,8 +1616,28 @@ def normalize_jockey_chat_clip(game, raw_clip, index):
         "emotional_intensity": clean_optional_string(raw_clip.get("emotional_intensity")) or "unknown",
         "jockey_rationale": rationale,
         "highlight_potential": potential,
-        "source_asset_id": asset_id_for_video_name(game, video_name) if video_name else None,
+        "source_asset_id": playback_asset_id or asset_id_for_video_name(game, video_name),
+        "thumbnail_url": thumbnail_url,
+        "stream_info_path": stream_info_path,
+        "video_url": video_url,
     }
+
+
+def resolve_jockey_clip_video_name(game, raw_clip, reference):
+    video_name = video_name_for_reference(game, reference)
+    if video_name:
+        return video_name
+    if isinstance(raw_clip, dict):
+        for key in ("video_name", "asset_id", "indexed_asset_id", "filename", "source_video_name"):
+            candidate = clean_optional_string(raw_clip.get(key))
+            if not candidate:
+                continue
+            mapped = video_name_for_reference(game, candidate)
+            if mapped:
+                return mapped
+            if candidate in set(game.get("source_videos", [])):
+                return candidate
+    return None
 
 
 def validate_marengo_search_options(value):
@@ -1721,8 +1829,70 @@ def registered_thumbnail_path(tag, video_name):
 def registered_thumbnail_path_or_none(tag, video_name):
     game = get_game(tag)
     video_name = validate_registered_video_name(game, video_name, status_code=404)
+    for path in sorted(THUMBNAILS_DIR.glob(f"{video_name}.*")):
+        if path.is_file() and path.stat().st_size > 0:
+            return path
     path = thumbnail_path(video_name)
-    return path if path.exists() else None
+    return path if path.exists() and path.stat().st_size > 0 else None
+
+
+def registered_indexed_thumbnail_url(tag, video_name):
+    game = get_game(tag)
+    video_name = validate_registered_video_name(game, video_name, status_code=404)
+    index_id = configured_search_index_id(game)
+    indexed_asset_id = marengo_video_id_for_video_name(game, video_name)
+    indexed_asset = None
+    if indexed_asset_id:
+        try:
+            indexed_asset = twelvelabs_request_json("get", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
+        except ApiError:
+            indexed_asset = None
+    if not indexed_asset:
+        asset_id = asset_id_for_video_name(game, video_name)
+        if not asset_id:
+            return None
+        for candidate in list_indexed_assets(index_id):
+            if indexed_asset_asset_id(candidate) == asset_id:
+                indexed_asset = candidate
+                break
+    if not indexed_asset:
+        return None
+    return indexed_asset_thumbnail_url(indexed_asset_with_user_metadata(index_id, indexed_asset))
+
+
+def persist_remote_thumbnail(video_name, remote_url):
+    if not remote_url:
+        return None
+    THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+    for path in sorted(THUMBNAILS_DIR.glob(f"{video_name}.*")):
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    try:
+        response = requests.get(remote_url, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException:
+        return None
+    content_type = response.headers.get("Content-Type") or "image/jpeg"
+    extension = "jpg"
+    if "png" in content_type:
+        extension = "png"
+    elif "webp" in content_type:
+        extension = "webp"
+    path = THUMBNAILS_DIR / f"{video_name}.{extension}"
+    path.write_bytes(response.content)
+    return path
+
+
+def cache_indexed_video_thumbnail(video_name, indexed_asset=None, index_id=None):
+    remote_url = None
+    if isinstance(indexed_asset, dict):
+        remote_url = indexed_asset_thumbnail_url(indexed_asset)
+        if not remote_url and index_id:
+            remote_url = indexed_asset_thumbnail_url(
+                indexed_asset_with_user_metadata(index_id, indexed_asset)
+            )
+    if remote_url:
+        persist_remote_thumbnail(video_name, remote_url)
 
 
 def placeholder_thumbnail_svg(tag, video_name):
@@ -1747,18 +1917,21 @@ def twelvelabs_stream_info(tag, video_name):
     requested_video = clean_optional_string(video_name)
     if not requested_video:
         raise ApiError("video_name is required", 404)
+    resolved_video_name = None
     try:
         resolved_video_name = validate_registered_video_name(game, requested_video, status_code=404)
-        asset_id = twelvelabs_asset_id_for_video(game, resolved_video_name)
     except ApiError:
-        index_id = configured_search_index_id(game)
-        indexed_asset = indexed_asset_for_reference(index_id, requested_video)
-        if not indexed_asset:
-            raise ApiError("video is not available in the configured TwelveLabs index", 404)
-        asset_id = indexed_asset_asset_id(indexed_asset)
-        resolved_video_name = indexed_asset_workspace_video_name(indexed_asset, requested_video)
-    if not asset_id:
-        raise ApiError("TwelveLabs asset id not found for this video", 404)
+        resolved_video_name = None
+
+    asset_id, asset = resolve_playback_asset(game, resolved_video_name or requested_video, requested_video)
+    if not resolved_video_name:
+        resolved_video_name = indexed_asset_workspace_video_name(
+            {"asset": asset, "asset_id": asset_id},
+            requested_video,
+        )
+        if resolved_video_name not in game.get("source_videos", []):
+            resolved_video_name = requested_video
+
     cache_key = (tag, resolved_video_name, asset_id)
     now = time.time()
     with STREAM_INFO_CACHE_LOCK:
@@ -1766,7 +1939,6 @@ def twelvelabs_stream_info(tag, video_name):
         if cached and cached.get("expires_at", 0) > now:
             return dict(cached["stream_info"])
 
-    asset = twelvelabs_request_json("get", f"/assets/{asset_id}")
     hls = asset.get("hls") or {}
     manifest_url = hls.get("manifest_url")
     hls_status = hls.get("status")
@@ -1797,12 +1969,63 @@ def twelvelabs_stream_info(tag, video_name):
     return stream_info
 
 
-def twelvelabs_asset_id_for_video(game, video_name):
-    asset_ids = game.get("video_asset_ids", {})
-    if isinstance(asset_ids, dict) and asset_ids.get(video_name):
-        return asset_ids[video_name]
+def resolve_playback_asset(game, video_name, reference=None):
+    candidates = []
+    seen = set()
 
+    def add_candidate(asset_id):
+        if asset_id and asset_id not in seen:
+            seen.add(asset_id)
+            candidates.append(asset_id)
+
+    if video_name:
+        add_candidate(asset_id_for_video_name(game, video_name))
+        index_id = configured_search_index_id(game)
+        marengo_id = marengo_video_id_for_video_name(game, video_name)
+        if index_id and marengo_id:
+            try:
+                indexed_asset = twelvelabs_request_json(
+                    "get",
+                    f"/indexes/{index_id}/indexed-assets/{marengo_id}",
+                )
+                add_candidate(indexed_asset_asset_id(indexed_asset))
+            except ApiError:
+                pass
+
+    index_id = configured_search_index_id(game)
+    if index_id and reference:
+        indexed_asset = indexed_asset_for_reference(index_id, reference)
+        if indexed_asset:
+            add_candidate(indexed_asset_asset_id(indexed_asset))
+
+    last_error = None
+    for asset_id in candidates:
+        try:
+            asset = twelvelabs_request_json("get", f"/assets/{asset_id}")
+        except ApiError as exc:
+            last_error = exc
+            continue
+        hls = asset.get("hls") or {}
+        if hls.get("manifest_url") and hls.get("status") == "ready":
+            return asset_id, asset
+        last_error = ApiError(
+            {
+                "message": "TwelveLabs HLS stream is not ready for this video",
+                "asset_id": asset_id,
+                "asset_status": asset.get("status"),
+                "hls_status": hls.get("status") or "missing",
+            },
+            409,
+        )
+
+    if last_error:
+        raise last_error
     raise ApiError("TwelveLabs asset id not found for this video", 404)
+
+
+def twelvelabs_asset_id_for_video(game, video_name):
+    asset_id, _asset = resolve_playback_asset(game, video_name, video_name)
+    return asset_id
 
 
 def generated_reel_clip(tag, video_name, start, end, format_name, clip_name=None):
@@ -2036,6 +2259,14 @@ def video_name_for_reference(game, reference):
     reference_map = game.get("video_reference_map", {})
     if isinstance(reference_map, dict) and reference in reference_map:
         return reference_map[reference]
+    if reference.startswith("ksi_"):
+        bare_reference = reference.removeprefix("ksi_")
+        if isinstance(reference_map, dict) and bare_reference in reference_map:
+            return reference_map[bare_reference]
+    elif isinstance(reference_map, dict):
+        prefixed_reference = f"ksi_{reference}"
+        if prefixed_reference in reference_map:
+            return reference_map[prefixed_reference]
     if reference in source_videos:
         return reference
 
@@ -2055,20 +2286,44 @@ def video_name_for_reference(game, reference):
             if isinstance(marengo_video_id, str) and marengo_video_id.strip() and marengo_video_id in reference:
                 return video_name
 
+    index_id = configured_search_index_id(game)
+    if index_id:
+        indexed_asset = indexed_asset_for_reference(index_id, reference)
+        if indexed_asset:
+            asset_id = indexed_asset_asset_id(indexed_asset)
+            if isinstance(asset_map, dict) and asset_id:
+                for video_name, mapped_asset_id in asset_map.items():
+                    if mapped_asset_id == asset_id:
+                        return video_name
+            workspace_name = indexed_asset_workspace_video_name(indexed_asset, reference)
+            if workspace_name in source_videos:
+                return workspace_name
+            normalized_workspace = workspace_name.lower()
+            for video_name in source_videos:
+                if video_name.lower() == normalized_workspace:
+                    return video_name
+
     basename = Path(reference).name
     if basename in source_videos:
         return basename
 
     normalized_reference = reference.lower()
+    best_match = None
+    best_score = -1
     for video_name in source_videos:
         normalized_video = video_name.lower()
+        stem = Path(video_name).stem.lower()
         if normalized_reference == normalized_video:
             return video_name
+        score = 0
         if normalized_video in normalized_reference or normalized_reference in normalized_video:
-            return video_name
-        if Path(video_name).stem.lower() in normalized_reference:
-            return video_name
-    return None
+            score = max(len(normalized_video), len(normalized_reference))
+        elif stem in normalized_reference or normalized_reference in stem:
+            score = max(len(stem), len(normalized_reference)) - 1
+        if score > best_score:
+            best_score = score
+            best_match = video_name
+    return best_match
 
 
 def asset_id_for_video_name(game, video_name):
