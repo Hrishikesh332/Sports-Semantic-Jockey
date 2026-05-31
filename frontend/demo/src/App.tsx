@@ -65,7 +65,6 @@ type HighlightReels = {
 type CategoryKey = 'best_plays' | 'emotional_moments' | 'fan_experience' | 'behind_the_scenes'
 type MapCategoryKey = 'standard_stats' | CategoryKey
 type AssemblyModeKey = 'wsc_baseline' | 'twelvelabs_enhanced' | 'hyper_personalized'
-type LensKey = 'category' | 'confidence' | 'source_type' | 'video_reference'
 type ViewKey = 'discover' | 'workspace' | 'jockey' | 'overview'
 type ReelFormatKey = '9x16' | '16x9' | '1x1' | '4x5'
 type HighlightReelRequestOptions = { silent?: boolean }
@@ -619,14 +618,6 @@ const sourceColors: Record<Clip['source_type'], { bg: string; border: string; te
   semantic: { bg: '#6CD5FD', border: '#366B7F', text: '#366B7F', track: '#C4EEFE' },
   stats_semantic: { bg: '#00DC82', border: '#00B86E', text: '#1D1C1B', track: '#E8F5E9' },
 }
-
-const referencePalette = [
-  { bg: '#00DC82', border: '#00B86E', text: '#1D1C1B', track: '#E8F5E9' },
-  { bg: '#FABA17', border: '#7D5D0C', text: '#7D5D0C', track: '#FDE3A2' },
-  { bg: '#6CD5FD', border: '#366B7F', text: '#366B7F', track: '#C4EEFE' },
-  { bg: '#FFB0CD', border: '#805867', text: '#805867', track: '#FFDFEB' },
-  { bg: '#FFB592', border: '#805B49', text: '#805B49', track: '#FFD3BE' },
-]
 
 function viewFromPath(pathname: string): ViewKey {
   if (pathname.includes('discover')) return 'discover'
@@ -1654,6 +1645,17 @@ function ProducerCockpit({
             />
           )}
 
+          {!isSelectedClipMode && (
+            <EntityTrackingSection
+              game={selectedGame}
+              videoName={activeVideoName}
+              tracking={entityTracking}
+              loading={entityTrackingLoading}
+              error={entityTrackingError}
+              hasCachedMetadata={hasCachedEntityTrackingMetadata}
+            />
+          )}
+
           {showProductionTools && selectedGame && reels && (
             <section id="assembly-highlights" className="flex min-w-0 scroll-mt-[calc(var(--sj-explainability-top)+24px)] flex-col gap-4">
               <ProductionSection icon="play-next" title="Assembly Highlights" detail="Semantic scenes stitched together">
@@ -1666,14 +1668,6 @@ function ProducerCockpit({
                     categoryKey={selectedCategory}
                     selectedLaneKey={assemblyMode === 'wsc_baseline' ? 'standard_stats' : selectedCategory}
                     selectedClipIndex={assemblyMode === 'wsc_baseline' ? selectedStandardClipIndex : selectedEnhancedClipIndex}
-                    onSelect={onSelectSignal}
-                  />
-                  <SignalMap
-                    variant="sidecar"
-                    reels={reels}
-                    selectedCategory={selectedCategory}
-                    selectedEnhancedIndex={selectedEnhancedClipIndex}
-                    selectedStandardIndex={selectedStandardClipIndex}
                     onSelect={onSelectSignal}
                   />
                 </div>
@@ -4817,14 +4811,6 @@ function StatusStrip({
             error={selectedClipAnalysisError}
           />
         )}
-        {!selectedSearchMoment && (
-          <EntityTrackingSection
-            tracking={entityTracking}
-            loading={entityTrackingLoading}
-            error={entityTrackingError}
-            hasCachedMetadata={hasCachedEntityTrackingMetadata}
-          />
-        )}
       </section>
     )
   }
@@ -5341,11 +5327,15 @@ function SelectedClipAnalysisSaveButton({
 }
 
 function EntityTrackingSection({
+  game,
+  videoName,
   tracking,
   loading,
   error,
   hasCachedMetadata = false,
 }: {
+  game: Game | null
+  videoName?: string
   tracking?: EntityTrackingResponse
   loading: boolean
   error: string
@@ -5353,109 +5343,558 @@ function EntityTrackingSection({
 }) {
   const entities = tracking?.entities || []
   const relationships = tracking?.relationships || []
+  const appearanceCount = entities.reduce((total, entity) => total + entity.appearances.length, 0)
+  const [collapsed, setCollapsed] = useState(false)
+  const [previewMoment, setPreviewMoment] = useState<EntityMomentPreview | null>(null)
+
+  useEffect(() => {
+    setPreviewMoment(null)
+  }, [tracking?.video_name, videoName])
+
+  const toggleCollapsed = () => {
+    setCollapsed((value) => {
+      if (!value) setPreviewMoment(null)
+      return !value
+    })
+  }
+
   return (
-    <div className="border-t border-border-light bg-card px-5 py-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <section id="entity-tracking" className="overflow-hidden rounded-md border border-[#C8CBC6] bg-[#E6E7E4] shadow-[0_6px_18px_rgba(29,28,27,0.03)]">
+      <div className={['grid gap-4 bg-[#DCDDDA] px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start', collapsed ? '' : 'border-b border-[#C8CBC6]'].join(' ')}>
         <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <StrandIcon name="members" className="h-4 w-4 shrink-0 text-accent" />
-            <h3 className="truncate text-base font-semibold text-text-primary">Entity Tracking</h3>
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#BBBFB9] bg-[#CFD1CD] text-accent">
+              <StrandIcon name="entity-collection" className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-text-tertiary">Jockey entity map</p>
+              <h3 className="truncate text-base font-semibold text-text-primary">Entity Tracking</h3>
+            </div>
           </div>
           <p className="mt-1 max-w-4xl text-sm leading-6 text-text-secondary">
             {tracking?.summary || 'Jockey is extracting grounded players, teams, crowd groups, and interactions from this source.'}
           </p>
         </div>
-        {tracking && (
-          <span className="rounded-sm border border-border-light bg-surface px-2 py-1 font-mono text-[11px] font-semibold text-text-tertiary">
-            {entities.length} entities
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+          <span className="inline-flex h-8 items-center gap-1.5 rounded-sm border border-[#C8CBC6] bg-[#E6E7E4] px-2.5 text-xs font-semibold text-text-secondary">
+            <StrandIcon name={hasCachedMetadata ? 'checkmark' : 'spinner'} className={['h-3.5 w-3.5 text-accent', loading && !hasCachedMetadata ? 'animate-spin' : ''].join(' ')} />
+            {hasCachedMetadata ? 'Saved metadata' : loading ? 'Extracting' : 'Live analysis'}
           </span>
-        )}
+          {tracking && (
+            <span className="inline-flex h-8 items-center rounded-sm border border-[#BBBFB9] bg-[#CFD1CD] px-2.5 font-mono text-xs font-semibold text-[#444843]">
+              {entities.length} entities
+            </span>
+          )}
+          <button
+            type="button"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[#CFD1CD] px-2.5 text-xs font-semibold text-[#565B55] hover:bg-[#C1C4BF] hover:text-[#3F443E]"
+            aria-expanded={!collapsed}
+            aria-controls="entity-tracking-body"
+            onClick={toggleCollapsed}
+          >
+            <StrandIcon name={collapsed ? 'expand' : 'collapse'} className="h-3.5 w-3.5" />
+            {collapsed ? 'Show' : 'Hide'}
+          </button>
+        </div>
       </div>
 
-      {loading ? (
-        <div className="mt-4 inline-flex items-center gap-2 rounded-md border border-border-light bg-surface px-3 py-2 text-sm font-semibold text-text-secondary">
+      {!collapsed && (loading ? (
+        <div id="entity-tracking-body" className="m-5 inline-flex items-center gap-2 rounded-md border border-[#C8CBC6] bg-[#DCDDDA] px-3 py-2 text-sm font-semibold text-text-secondary">
           <StrandIcon name="spinner" className="h-4 w-4 animate-spin text-accent" />
           {hasCachedMetadata ? 'Loading saved entity tracks' : 'Jockey is building entity tracks'}
         </div>
       ) : error ? (
-        <div className="mt-4 rounded-md border border-error bg-error-light px-3 py-2 text-sm font-semibold text-error-dark">
+        <div id="entity-tracking-body" className="m-5 rounded-md border border-error bg-error-light px-3 py-2 text-sm font-semibold text-error-dark">
           {error}
         </div>
       ) : tracking ? (
-        <div className="mt-4 grid gap-4">
+        <div id="entity-tracking-body" className="grid gap-5 bg-[#E6E7E4] px-5 py-4">
+          <div className="grid divide-y divide-[#C8CBC6] rounded-sm border border-[#C8CBC6] bg-[#DCDDDA] md:grid-cols-3 md:divide-x md:divide-y-0">
+            <EntityTrackingMetric icon="members" label="Grounded entities" value={String(entities.length)} detail="Teams, players, officials, fan groups" />
+            <EntityTrackingMetric icon="hourglass" label="Tracked moments" value={String(appearanceCount)} detail="Timestamped appearances" />
+            <EntityTrackingMetric icon="neural-network" label="Interactions" value={String(relationships.length)} detail="Entity-to-entity links" />
+          </div>
+
           {entities.length ? (
-            <div className="grid gap-3 lg:grid-cols-2">
-              {entities.map((entity) => (
-                <article key={`${entity.name}-${entity.role}`} className="min-w-0 rounded-md border border-border-light bg-surface p-3">
-                  <div className="flex min-w-0 items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <h4 className="truncate text-sm font-semibold text-text-primary">{entity.name}</h4>
-                      <p className="mt-1 truncate text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">
-                        {entity.entity_type} / {entity.team_or_group} / {entity.role}
-                      </p>
-                    </div>
-                    <span className="rounded-sm border border-accent/30 bg-accent-light px-2 py-1 font-mono text-[11px] font-semibold text-brand-charcoal">
-                      {confidenceLabel(entity.confidence)}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm leading-5 text-text-secondary">{entity.description}</p>
-                  {entity.appearances.length ? (
-                    <div className="mt-3 grid gap-2">
-                      {entity.appearances.map((appearance) => (
-                        <div
-                          key={`${entity.name}-${appearance.start_time}-${appearance.end_time}-${appearance.action}`}
-                          className="grid gap-2 rounded-sm border border-border-light bg-card px-2 py-2 sm:grid-cols-[96px_minmax(0,1fr)]"
-                        >
-                          <span className="font-mono text-[11px] font-semibold text-text-tertiary">
-                            {appearance.start_time} - {appearance.end_time}
-                          </span>
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-text-primary">{appearance.action}</p>
-                            <p className="mt-1 text-xs leading-5 text-text-secondary">
-                              {appearance.emotion} / {appearance.context}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-            </div>
+            <section className="grid gap-3">
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <StrandIcon name="list" className="h-4 w-4 text-accent" />
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Entity evidence ledger</p>
+                </div>
+                <span className="rounded-sm bg-[#CFD1CD] px-2 py-1 text-[11px] font-semibold text-[#60645E]">
+                  {entities.length} entities / {appearanceCount} moments
+                </span>
+              </div>
+              <div className="divide-y divide-[#C8CBC6] rounded-sm border border-[#C8CBC6] bg-[#DCDDDA]">
+                {entities.map((entity) => (
+                  <EntityTrackCard
+                    key={`${videoName || 'source'}-${entity.name}-${entity.role}`}
+                    entity={entity}
+                    game={game}
+                    videoName={videoName}
+                    onOpenMoment={setPreviewMoment}
+                  />
+                ))}
+              </div>
+            </section>
           ) : (
             <p className="text-sm font-semibold text-text-tertiary">No grounded entity tracks were returned for this source.</p>
           )}
 
-          {relationships.length ? (
-            <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Interactions</p>
-              <div className="mt-2 grid gap-2">
-                {relationships.map((relationship) => (
-                  <div
-                    key={`${relationship.entity}-${relationship.related_entity}-${relationship.timestamp}-${relationship.description}`}
-                    className="grid gap-2 rounded-md border border-border-light bg-surface px-3 py-2 sm:grid-cols-[110px_minmax(0,1fr)]"
-                  >
-                    <span className="font-mono text-[11px] font-semibold text-text-tertiary">
-                      {relationship.timestamp || 'Observed'}
-                    </span>
-                    <p className="min-w-0 text-sm leading-5 text-text-secondary">
-                      <span className="font-semibold text-text-primary">{relationship.entity}</span>
-                      {' -> '}
-                      <span className="font-semibold text-text-primary">{relationship.related_entity}</span>
-                      {' / '}
-                      {relationship.interaction_type}: {relationship.description}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
+          <EntityInteractionMap
+            relationships={relationships}
+            game={game}
+            videoName={videoName}
+            onOpenMoment={setPreviewMoment}
+          />
         </div>
       ) : (
-        <p className="mt-4 text-sm font-semibold text-text-tertiary">Entity tracks will appear after Jockey analyzes the active source.</p>
-      )}
+        <p id="entity-tracking-body" className="px-5 py-4 text-sm font-semibold text-text-tertiary">Entity tracks will appear after Jockey analyzes the active source.</p>
+      ))}
+      {previewMoment ? (
+        <EntityMomentPreviewModal
+          game={game}
+          videoName={videoName}
+          moment={previewMoment}
+          onClose={() => setPreviewMoment(null)}
+        />
+      ) : null}
+    </section>
+  )
+}
+
+function EntityTrackingMetric({ icon, label, value, detail }: { icon: string; label: string; value: string; detail: string }) {
+  return (
+    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 px-3 py-3">
+      <span className="row-span-2 flex h-9 w-9 items-center justify-center rounded-sm bg-[#C8CBC6] text-[#565B55]">
+        <StrandIcon name={icon} className="h-4 w-4" />
+      </span>
+      <p className="font-mono text-xl font-bold leading-none text-text-primary">{value}</p>
+      <p className="mt-1 min-w-0 text-xs font-semibold leading-5 text-text-secondary">
+        <span className="uppercase tracking-[0.08em] text-text-tertiary">{label}</span>
+        {' · '}
+        {detail}
+      </p>
     </div>
   )
+}
+
+type EntityMomentRange = {
+  displayLabel: string
+  endSeconds: number
+  endTime?: string
+  startSeconds: number
+  startTime: string
+}
+
+type EntityMomentPreview = {
+  description: string
+  eyebrow: string
+  range: EntityMomentRange
+  subtitle: string
+  title: string
+}
+
+function EntityTrackCard({
+  entity,
+  game,
+  videoName,
+  onOpenMoment,
+}: {
+  entity: EntityTrack
+  game: Game | null
+  videoName?: string
+  onOpenMoment: (moment: EntityMomentPreview) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const appearances = entity.appearances.slice(0, 5)
+  const extraAppearances = entity.appearances.length - appearances.length
+  const entityBadges = Array.from(
+    new Set(
+      [entity.entity_type, entity.team_or_group, entity.role]
+        .map(entityTrackingDisplayLabel)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  )
+
+  useEffect(() => {
+    setExpanded(false)
+  }, [entity.name, entity.role, videoName])
+
+  return (
+    <article className="min-w-0 bg-transparent">
+      <div className="px-3 py-3">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <StrandIcon name={entityTypeIcon(entity.entity_type)} className="h-4 w-4 shrink-0 text-accent" />
+              <h4 className="truncate text-sm font-semibold text-text-primary">{entity.name}</h4>
+            </div>
+            {entityBadges.length ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {entityBadges.map((value) => (
+                  <span key={`${entity.name}-${value}`} className="rounded-sm bg-[#CFD1CD] px-1.5 py-0.5 text-[11px] font-semibold text-[#565B55]">
+                    {value}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+            <span className="rounded-sm bg-[#CFD1CD] px-2 py-1 font-mono text-[11px] font-semibold text-[#60645E]">
+              {entity.appearances.length} moments
+            </span>
+            <span className="rounded-sm bg-[#C1C4BF] px-2 py-1 font-mono text-[11px] font-semibold text-[#3F443E]">
+              {confidenceLabel(entity.confidence)}
+            </span>
+          </div>
+        </div>
+        <p className="mt-3 text-sm leading-5 text-text-secondary">{entity.description}</p>
+        <button
+          type="button"
+          className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md bg-[#CFD1CD] px-2.5 text-xs font-semibold text-[#565B55] hover:bg-[#C1C4BF] hover:text-[#3F443E]"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <StrandIcon name={expanded ? 'collapse' : 'expand'} className="h-3.5 w-3.5" />
+          {expanded ? 'Hide moments' : 'Show moments'}
+        </button>
+      </div>
+      {expanded && appearances.length ? (
+        <ol className="grid gap-0 border-t border-[#C8CBC6] bg-[#D5D7D3]">
+          {appearances.map((appearance) => {
+            const emotion = entityTrackingDisplayLabel(appearance.emotion)
+            const context = entityTrackingDisplayLabel(appearance.context)
+            const range = entityMomentRangeFromParts(appearance.start_time, appearance.end_time)
+            return (
+              <li
+                key={`${entity.name}-${appearance.start_time}-${appearance.end_time}-${appearance.action}`}
+                className="grid gap-3 border-b border-[#C8CBC6] px-3 py-2.5 last:border-b-0 sm:grid-cols-[132px_minmax(0,1fr)]"
+              >
+                <EntityMomentThumbnailButton
+                  game={game}
+                  videoName={videoName}
+                  range={range}
+                  title={`${entity.name} at ${range.displayLabel}`}
+                  onOpen={() => onOpenMoment({
+                    description: appearance.action,
+                    eyebrow: 'Entity evidence',
+                    range,
+                    subtitle: entity.name,
+                    title: appearance.action,
+                  })}
+                />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold leading-5 text-text-primary">{appearance.action}</p>
+                  {emotion || context ? (
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {emotion && (
+                        <span className="rounded-sm bg-[#C1C4BF] px-1.5 py-0.5 text-[11px] font-semibold text-[#3F443E]">
+                          {emotion}
+                        </span>
+                      )}
+                      {context && (
+                        <span className="rounded-sm bg-[#CFD1CD] px-1.5 py-0.5 text-[11px] font-semibold text-[#565B55]">
+                          {context}
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </li>
+            )
+          })}
+          {extraAppearances > 0 && (
+            <li className="px-3 py-2 text-xs font-semibold text-text-tertiary">
+              +{extraAppearances} more tracked moments
+            </li>
+          )}
+        </ol>
+      ) : null}
+    </article>
+  )
+}
+
+function EntityInteractionMap({
+  relationships,
+  game,
+  videoName,
+  onOpenMoment,
+}: {
+  relationships: EntityRelationship[]
+  game: Game | null
+  videoName?: string
+  onOpenMoment: (moment: EntityMomentPreview) => void
+}) {
+  if (!relationships.length) return null
+  return (
+    <section className="min-w-0">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <StrandIcon name="play-next" className="h-4 w-4 text-accent" />
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Interaction evidence timeline</p>
+        </div>
+        <span className="shrink-0 rounded-sm bg-[#CFD1CD] px-2 py-1 text-[11px] font-semibold text-[#60645E]">
+          {relationships.length} moments
+        </span>
+      </div>
+      <div className="relative mt-3 divide-y divide-[#C8CBC6] rounded-sm border border-[#C8CBC6] bg-[#DCDDDA]">
+        <span className="absolute bottom-3 left-[50px] top-3 hidden w-px bg-[#BFC2BD] sm:block" aria-hidden="true" />
+        {relationships.map((relationship, index) => {
+          const interactionType = entityTrackingDisplayLabel(relationship.interaction_type) || 'interaction'
+          const range = entityMomentRangeFromTimestamp(relationship.timestamp)
+          return (
+            <article
+              key={`${relationship.entity}-${relationship.related_entity}-${relationship.timestamp}-${relationship.description}`}
+              className="relative grid gap-3 px-3 py-2.5 sm:grid-cols-[132px_minmax(0,1fr)]"
+            >
+              <div className="flex min-w-0 items-start gap-2">
+                <span className="z-[1] mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#C1C4BF] font-mono text-[10px] font-bold text-[#3F443E]">
+                  {index + 1}
+                </span>
+                <EntityMomentThumbnailButton
+                  game={game}
+                  videoName={videoName}
+                  range={range}
+                  title={`${relationship.entity} ${interactionType} ${relationship.related_entity}`}
+                  compact
+                  onOpen={() => onOpenMoment({
+                    description: relationship.description,
+                    eyebrow: 'Interaction evidence',
+                    range,
+                    subtitle: `${relationship.entity} -> ${relationship.related_entity}`,
+                    title: interactionType,
+                  })}
+                />
+              </div>
+              <div className="min-w-0">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <span className="rounded-sm bg-[#CFD1CD] px-2 py-1 text-xs font-semibold text-[#3F443E]">
+                    {relationship.entity}
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-sm bg-[#C1C4BF] px-2 py-1 text-[11px] font-semibold text-[#3F443E]">
+                    <StrandIcon name="play-next" className="h-3 w-3 text-accent" />
+                    {interactionType}
+                  </span>
+                  <span className="rounded-sm bg-[#CFD1CD] px-2 py-1 text-xs font-semibold text-[#3F443E]">
+                    {relationship.related_entity}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm leading-5 text-text-secondary">{relationship.description}</p>
+              </div>
+            </article>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function EntityMomentThumbnailButton({
+  game,
+  videoName,
+  range,
+  title,
+  onOpen,
+  compact = false,
+}: {
+  game: Game | null
+  videoName?: string
+  range: EntityMomentRange
+  title: string
+  onOpen: () => void
+  compact?: boolean
+}) {
+  const canPreview = Boolean(game && videoName)
+  const posterUrl = game && videoName ? entityMomentThumbnailUrl(game, videoName, range.startTime) : ''
+  return (
+    <button
+      type="button"
+      disabled={!canPreview}
+      onClick={onOpen}
+      className={[
+        'group grid w-full min-w-0 gap-1.5 text-left',
+        canPreview ? 'cursor-pointer' : 'cursor-not-allowed opacity-65',
+      ].join(' ')}
+      aria-label={canPreview ? `Open ${title} at ${range.displayLabel}` : `${title} at ${range.displayLabel}`}
+      title={canPreview ? `Open at ${range.displayLabel}` : range.displayLabel}
+    >
+      <span className={['relative block overflow-hidden rounded-sm border border-[#BFC2BD] bg-[#CFD1CD]', compact ? 'aspect-[16/10]' : 'aspect-video'].join(' ')}>
+        {posterUrl ? (
+          <img src={posterUrl} alt="" className="h-full w-full object-cover transition-transform group-hover:scale-[1.03]" loading="lazy" />
+        ) : (
+          <span className="flex h-full w-full items-center justify-center text-text-tertiary">
+            <StrandIcon name="vision" className="h-4 w-4 text-accent" />
+          </span>
+        )}
+        <span className="absolute inset-0 flex items-center justify-center bg-black/10 opacity-0 transition-opacity group-hover:opacity-100">
+          <span className="flex h-7 w-7 items-center justify-center rounded-full border border-white/70 bg-black/45 text-white">
+            <StrandIcon name="play" className="h-3.5 w-3.5" />
+          </span>
+        </span>
+      </span>
+      <span className="truncate font-mono text-[11px] font-semibold text-text-tertiary">{range.displayLabel}</span>
+    </button>
+  )
+}
+
+function EntityMomentPreviewModal({
+  game,
+  videoName,
+  moment,
+  onClose,
+}: {
+  game: Game | null
+  videoName?: string
+  moment: EntityMomentPreview
+  onClose: () => void
+}) {
+  const streamInfoUrl = game && videoName ? streamInfoForVideoName(game, videoName) : null
+  const posterUrl = game && videoName ? entityMomentThumbnailUrl(game, videoName, moment.range.startTime) : undefined
+  const segmentRange: SegmentRange = {
+    startSeconds: moment.range.startSeconds,
+    endSeconds: moment.range.endSeconds,
+    startLabel: moment.range.startTime,
+    endLabel: moment.range.endTime,
+  }
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 px-4 py-5"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose()
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="entity-moment-preview-title"
+        className="flex max-h-[calc(100vh-40px)] w-full max-w-4xl flex-col overflow-hidden rounded-md border border-border bg-surface shadow-[0_24px_60px_rgba(0,0,0,0.3)]"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-border-light bg-card px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{moment.eyebrow}</p>
+            <h3 id="entity-moment-preview-title" className="mt-1 truncate text-base font-semibold text-text-primary">{moment.title}</h3>
+            <p className="mt-1 truncate text-sm font-medium text-text-secondary">{moment.subtitle}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="rounded-sm border border-border-light bg-surface px-2 py-1 font-mono text-[11px] font-semibold text-text-tertiary">
+              {moment.range.displayLabel}
+            </span>
+            <button
+              type="button"
+              className="flex h-8 w-8 items-center justify-center rounded-md border border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+              onClick={onClose}
+              aria-label="Close entity moment preview"
+              title="Close"
+            >
+              <StrandIcon name="close" className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 overflow-y-auto p-4">
+          <div className="overflow-hidden rounded-md border border-border-light bg-card">
+            <div className="aspect-video">
+              {streamInfoUrl ? (
+                <TwelveLabsVideoPlayer
+                  key={`${videoName}-${moment.range.startSeconds}-${moment.range.endSeconds}`}
+                  streamInfoUrl={streamInfoUrl}
+                  startSeconds={moment.range.startSeconds}
+                  endSeconds={moment.range.endSeconds}
+                  posterUrl={posterUrl}
+                  segmentRange={segmentRange}
+                  variant="minimal"
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-text-secondary">
+                  Timestamp playback is unavailable for this source.
+                </div>
+              )}
+            </div>
+          </div>
+          {moment.description ? (
+            <p className="mt-3 rounded-md border border-border-light bg-card px-3 py-2 text-sm leading-5 text-text-secondary">
+              {moment.description}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function entityMomentRangeFromTimestamp(timestamp?: string | null) {
+  const normalized = entityTrackingDisplayLabel(timestamp)?.replace(/[–—]/g, '-') || ''
+  const [startTime, endTime] = normalized.split(/\s*-\s*/).filter(Boolean)
+  return entityMomentRangeFromParts(startTime || '0:00', endTime)
+}
+
+function entityMomentRangeFromParts(startTime?: string | null, endTime?: string | null): EntityMomentRange {
+  const startLabel = entityTrackingDisplayLabel(startTime) || '0:00'
+  const endLabel = entityTrackingDisplayLabel(endTime)
+  const startSeconds = secondsFromTime(startLabel)
+  const explicitEndSeconds = endLabel ? secondsFromTime(endLabel) : 0
+  const endSeconds = explicitEndSeconds > startSeconds ? explicitEndSeconds : startSeconds + 8
+  return {
+    displayLabel: endLabel && explicitEndSeconds > startSeconds ? `${startLabel} - ${endLabel}` : startLabel,
+    endSeconds,
+    endTime: endLabel && explicitEndSeconds > startSeconds ? endLabel : undefined,
+    startSeconds,
+    startTime: startLabel,
+  }
+}
+
+function entityMomentThumbnailUrl(game: Game, videoName: string, startTime: string) {
+  const params = new URLSearchParams({
+    time: String(secondsFromTime(startTime)),
+    format: '16x9',
+  })
+  return apiUrl(`/games/${encodeURIComponent(game.tag)}/reel-thumbnail/${encodeURIComponent(videoName)}?${params.toString()}`)
+}
+
+const ENTITY_TRACKING_HIDDEN_LABELS = [
+  'na',
+  'n/a',
+  'none',
+  'null',
+  'unclear',
+  'unknown',
+  'unspecified',
+  'not applicable',
+  'not available',
+  'not clearly supported',
+  'not clearly visible',
+  'not provided',
+  'not supported',
+  'no clear evidence',
+  'no visual evidence',
+]
+
+function entityTrackingDisplayLabel(value?: string | null) {
+  const normalized = `${value ?? ''}`.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  const comparable = normalized.toLowerCase()
+  if (ENTITY_TRACKING_HIDDEN_LABELS.includes(comparable)) return ''
+  if (comparable.includes('not clearly supported')) return ''
+  return normalized
+}
+
+function entityTypeIcon(entityType: string) {
+  const normalized = entityType.toLowerCase()
+  if (normalized.includes('team')) return 'members'
+  if (normalized.includes('fan')) return 'flame'
+  if (normalized.includes('official') || normalized.includes('referee')) return 'checkmark'
+  return 'profile'
 }
 
 function TagRow({ label, values }: { label: string; values: string[] }) {
@@ -5489,170 +5928,6 @@ function AnalysisIndexNotice({ game }: { game: Game | null }) {
           </p>
         </div>
       </div>
-    </section>
-  )
-}
-
-function SignalMap({
-  variant = 'standard',
-  reels,
-  selectedCategory,
-  selectedEnhancedIndex,
-  selectedStandardIndex,
-  onSelect,
-}: {
-  variant?: 'standard' | 'sidecar'
-  reels: HighlightReels
-  selectedCategory: CategoryKey
-  selectedEnhancedIndex: number
-  selectedStandardIndex: number
-  onSelect: (categoryKey: MapCategoryKey, index: number) => void
-}) {
-  const [collapsed, setCollapsed] = useState(false)
-  const pointerToggleHandledRef = useRef(false)
-  const toggleCollapsed = () => setCollapsed((value) => !value)
-  const nodes = mapLanes.flatMap((lane) =>
-    reels[lane.key].clips.map((clip, index) => ({
-      lane,
-      clip,
-      index,
-      start: secondsFromTime(clip.start_time),
-      end: Math.max(secondsFromTime(clip.end_time), secondsFromTime(clip.start_time) + 1),
-    })),
-  )
-  const maxTime = Math.max(1, ...nodes.map((node) => node.end))
-  const references = Array.from(new Set(nodes.map((node) => node.clip.video_reference)))
-  const referenceColorMap = Object.fromEntries(
-    references.map((reference, index) => [reference, referencePalette[index % referencePalette.length]]),
-  )
-  const referenceLabelMap = Object.fromEntries(
-    references.map((reference, index) => [reference, `V${index + 1}`]),
-  )
-  const compact = variant === 'sidecar'
-  const mapLens: LensKey = 'category'
-  const laneGridClass = compact ? 'grid-cols-[86px_minmax(0,1fr)] gap-2' : 'grid-cols-[132px_minmax(0,1fr)] gap-4'
-
-  return (
-    <section className="rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.05)]">
-      <div
-        className={[
-          'flex flex-wrap items-center justify-between gap-3',
-          collapsed ? '' : 'border-b border-border-light',
-          compact ? 'px-4 py-3' : 'px-5 py-4',
-        ].join(' ')}
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex items-center gap-2">
-            <StrandIcon name="neural-network" className="h-4 w-4 text-brand-charcoal" />
-            <h2 className="text-base font-semibold text-text-primary">Meta Discovery Map</h2>
-          </div>
-        </div>
-        <div className="flex min-w-0 items-center gap-3 sm:justify-end">
-          <button
-            type="button"
-            onPointerDown={(event) => {
-              event.preventDefault()
-              pointerToggleHandledRef.current = true
-              toggleCollapsed()
-            }}
-            onClick={() => {
-              if (pointerToggleHandledRef.current) {
-                pointerToggleHandledRef.current = false
-                return
-              }
-              toggleCollapsed()
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                toggleCollapsed()
-              }
-            }}
-            className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-xs font-semibold text-text-secondary transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
-            aria-expanded={!collapsed}
-            aria-label={collapsed ? 'Expand Meta Discovery Map' : 'Collapse Meta Discovery Map'}
-            title={collapsed ? 'Expand map' : 'Collapse map'}
-          >
-            <StrandIcon name={collapsed ? 'expand' : 'collapse'} className="h-4 w-4" />
-            <span>{collapsed ? 'Show' : 'Hide'}</span>
-          </button>
-        </div>
-      </div>
-
-      {!collapsed && <div className={compact ? 'px-4 py-3' : 'overflow-x-auto px-5 py-4'}>
-        <div className={compact ? 'min-w-0' : 'min-w-[860px]'}>
-          <div className="flex flex-col gap-3.5">
-            {mapLanes.map((lane) => {
-              const laneNodes = nodes.filter((node) => node.lane.key === lane.key)
-              const laneTrackColor = mapLens === 'category' ? signalColors[lane.key].track : '#E8E7E5'
-              return (
-                <div key={lane.key} className={['grid items-center', laneGridClass].join(' ')}>
-                  <div className={['flex items-center gap-2 font-semibold text-text-secondary', compact ? 'text-xs' : 'text-sm'].join(' ')}>
-                    <StrandIcon name={lane.icon} className="h-4 w-4" />
-                    <span className="truncate">{lane.label}</span>
-                    <span className="ml-auto text-xs font-semibold text-text-tertiary">{laneNodes.length}</span>
-                  </div>
-                  <div className={['relative rounded-md border border-border-light bg-surface', compact ? 'h-10' : 'h-12'].join(' ')}>
-                    <div className="absolute inset-x-3 top-1/2 h-1 -translate-y-1/2 rounded-sm" style={{ backgroundColor: laneTrackColor }} />
-                    <div className="absolute inset-x-3 bottom-0 top-0">
-                      {laneNodes.map((node) => {
-                        const left = clamp((node.start / maxTime) * 100, 0, 97)
-                        const width = clamp(((node.end - node.start) / maxTime) * 100, 2.2, Math.min(18, 100 - left))
-                        const selected = isSelectedSignal(node.lane.key, node.index, selectedCategory, selectedEnhancedIndex, selectedStandardIndex)
-                        const color = signalColor(node.lane.key, node.clip, mapLens, referenceColorMap)
-                        return (
-                          <button
-                            key={`${lane.key}-${node.index}-${node.clip.start_time}`}
-                            type="button"
-                            onPointerDown={(event) => {
-                              event.preventDefault()
-                              onSelect(lane.key, node.index)
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault()
-                                onSelect(lane.key, node.index)
-                              }
-                            }}
-                            onClick={() => onSelect(lane.key, node.index)}
-                            aria-label={`${lane.label} ${node.clip.start_time}, confidence ${confidenceLabel(node.clip.confidence)}. ${node.clip.description}`}
-                            title={`${lane.label} · Confidence ${confidenceLabel(node.clip.confidence)} · ${node.clip.start_time}-${node.clip.end_time}`}
-                            className={[
-                              'absolute top-1/2 inline-flex -translate-y-1/2 items-center justify-center rounded-sm border font-mono font-bold leading-none shadow-[0_2px_6px_rgba(31,41,33,0.12)] transition-transform hover:scale-110',
-                              compact ? 'h-6 px-1.5 text-[9px]' : 'h-5 px-1 text-[10px]',
-                              selected ? 'z-10 ring-2 ring-accent ring-offset-2 ring-offset-surface' : '',
-                            ].join(' ')}
-                            style={{
-                              left: `${left}%`,
-                              width: `${width}%`,
-                              minWidth: compact ? 30 : 24,
-                              backgroundColor: color.bg,
-                              borderColor: color.border,
-                              color: color.text,
-                              opacity: signalOpacity(node.clip.confidence, 0.55),
-                            }}
-                          >
-                            {signalLabel(node.clip, mapLens, referenceLabelMap)}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          <div className={['mt-4 grid items-center', laneGridClass].join(' ')}>
-            <div aria-hidden="true" />
-            <div className="grid grid-cols-3 gap-2 px-3 text-xs font-semibold text-text-tertiary">
-              <span>0:00</span>
-              <span className="text-center">{formatSeconds(Math.round(maxTime / 2))}</span>
-              <span className="text-right">{formatSeconds(maxTime)}</span>
-            </div>
-          </div>
-        </div>
-      </div>}
     </section>
   )
 }
@@ -6341,26 +6616,6 @@ function scopeCategoryToVideo(game: Game, category: HighlightCategory, videoName
   }
 }
 
-function signalColor(
-  laneKey: MapCategoryKey,
-  clip: Clip,
-  lens: LensKey,
-  referenceColorMap: Record<string, { bg: string; border: string; text: string; track: string }>,
-) {
-  if (lens === 'source_type') return sourceColors[clip.source_type]
-  if (lens === 'video_reference') return referenceColorMap[clip.video_reference] || referencePalette[0]
-  if (lens === 'confidence') return confidenceColor(clip.confidence)
-  return signalColors[laneKey]
-}
-
-function confidenceColor(confidence: number) {
-  if (!hasUsableConfidence(confidence)) return { bg: '#9A9A9A', border: '#707070', text: '#5F5F5F', track: '#E8E7E5' }
-  if (confidence >= 0.96) return { bg: '#00DC82', border: '#00B86E', text: '#1D1C1B', track: '#E8F5E9' }
-  if (confidence >= 0.9) return { bg: '#60E21B', border: '#30710E', text: '#30710E', track: '#BFF3A4' }
-  if (confidence >= 0.82) return { bg: '#FABA17', border: '#7D5D0C', text: '#7D5D0C', track: '#FDE3A2' }
-  return { bg: '#FFB592', border: '#805B49', text: '#805B49', track: '#FFD3BE' }
-}
-
 function hasUsableConfidence(confidence: number) {
   return Number.isFinite(confidence) && confidence > 0
 }
@@ -6509,16 +6764,6 @@ function normalizeJockeyManifestClip(value: unknown, index: number): JockeyManif
     stream_info_path: typeof clip.stream_info_path === 'string' ? clip.stream_info_path : null,
     video_url: typeof clip.video_url === 'string' ? clip.video_url : null,
   }
-}
-
-function signalOpacity(confidence: number, minimum: number) {
-  return hasUsableConfidence(confidence) ? Math.max(minimum, confidence) : Math.max(minimum, 0.78)
-}
-
-function signalLabel(clip: Clip, lens: LensKey, referenceLabelMap: Record<string, string>) {
-  void lens
-  void referenceLabelMap
-  return confidenceLabel(clip.confidence)
 }
 
 function maxReelEndSeconds(reels: HighlightReels) {

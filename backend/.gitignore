@@ -5,6 +5,7 @@ __pycache__/
 .DS_Store
 
 logs/
+logs/dashboard_metadata_warm*.log
 
 more videos/
 
@@ -24,6 +25,7 @@ data/thumbnails/*
 data/videosss_prepared/
 data/videosss_ingest_state.json
 data/videosss_upload*.log
+data/dashboard_metadata_warm_state.json
 data/knowledge_base_video_ids.md
 
 # ffmpeg pass logs (compression / proxy generation)
