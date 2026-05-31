@@ -512,6 +512,7 @@ const marengoSearchPresets = [
   'fan going wild in the stands',
   'goalkeeper diving save',
   'coach sideline reaction',
+  'best play moment full emotion',
 ]
 
 const navItems: Array<{ key: ViewKey; label: string; icon: string }> = [
@@ -1645,17 +1646,6 @@ function ProducerCockpit({
             />
           )}
 
-          {!isSelectedClipMode && (
-            <EntityTrackingSection
-              game={selectedGame}
-              videoName={activeVideoName}
-              tracking={entityTracking}
-              loading={entityTrackingLoading}
-              error={entityTrackingError}
-              hasCachedMetadata={hasCachedEntityTrackingMetadata}
-            />
-          )}
-
           {showProductionTools && selectedGame && reels && (
             <section id="assembly-highlights" className="flex min-w-0 scroll-mt-[calc(var(--sj-explainability-top)+24px)] flex-col gap-4">
               <ProductionSection icon="play-next" title="Assembly Highlights" detail="Semantic scenes stitched together">
@@ -1672,7 +1662,21 @@ function ProducerCockpit({
                   />
                 </div>
               </ProductionSection>
+            </section>
+          )}
 
+          {!isSelectedClipMode && (
+            <EntityTrackingSection
+              game={selectedGame}
+              videoName={activeVideoName}
+              tracking={entityTracking}
+              loading={entityTrackingLoading}
+              error={entityTrackingError}
+            />
+          )}
+
+          {showProductionTools && selectedGame && reels && (
+            <section className="flex min-w-0 flex-col gap-4">
               <div className="grid min-w-0 gap-6 border-t border-border-light pt-4">
                 {activeVideoName && enhancedCategory && (
                   <ReelBuilder
@@ -5332,14 +5336,12 @@ function EntityTrackingSection({
   tracking,
   loading,
   error,
-  hasCachedMetadata = false,
 }: {
   game: Game | null
   videoName?: string
   tracking?: EntityTrackingResponse
   loading: boolean
   error: string
-  hasCachedMetadata?: boolean
 }) {
   const entities = tracking?.entities || []
   const relationships = tracking?.relationships || []
@@ -5359,11 +5361,11 @@ function EntityTrackingSection({
   }
 
   return (
-    <section id="entity-tracking" className="overflow-hidden rounded-md border border-[#C8CBC6] bg-[#E6E7E4] shadow-[0_6px_18px_rgba(29,28,27,0.03)]">
-      <div className={['grid gap-4 bg-[#DCDDDA] px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start', collapsed ? '' : 'border-b border-[#C8CBC6]'].join(' ')}>
+    <section id="entity-tracking" className="overflow-hidden rounded-md border border-border shadow-[0_6px_18px_rgba(29,28,27,0.03)]">
+      <div className={['grid gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start', collapsed ? '' : 'border-b border-border-light'].join(' ')}>
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[#BBBFB9] bg-[#CFD1CD] text-accent">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border text-accent">
               <StrandIcon name="entity-collection" className="h-4 w-4" />
             </span>
             <div className="min-w-0">
@@ -5376,18 +5378,14 @@ function EntityTrackingSection({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-          <span className="inline-flex h-8 items-center gap-1.5 rounded-sm border border-[#C8CBC6] bg-[#E6E7E4] px-2.5 text-xs font-semibold text-text-secondary">
-            <StrandIcon name={hasCachedMetadata ? 'checkmark' : 'spinner'} className={['h-3.5 w-3.5 text-accent', loading && !hasCachedMetadata ? 'animate-spin' : ''].join(' ')} />
-            {hasCachedMetadata ? 'Saved metadata' : loading ? 'Extracting' : 'Live analysis'}
-          </span>
           {tracking && (
-            <span className="inline-flex h-8 items-center rounded-sm border border-[#BBBFB9] bg-[#CFD1CD] px-2.5 font-mono text-xs font-semibold text-[#444843]">
+            <span className="inline-flex h-8 items-center rounded-sm border border-border px-2.5 font-mono text-xs font-semibold text-text-secondary">
               {entities.length} entities
             </span>
           )}
           <button
             type="button"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[#CFD1CD] px-2.5 text-xs font-semibold text-[#565B55] hover:bg-[#C1C4BF] hover:text-[#3F443E]"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
             aria-expanded={!collapsed}
             aria-controls="entity-tracking-body"
             onClick={toggleCollapsed}
@@ -5399,17 +5397,17 @@ function EntityTrackingSection({
       </div>
 
       {!collapsed && (loading ? (
-        <div id="entity-tracking-body" className="m-5 inline-flex items-center gap-2 rounded-md border border-[#C8CBC6] bg-[#DCDDDA] px-3 py-2 text-sm font-semibold text-text-secondary">
+        <div id="entity-tracking-body" className="m-5 inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-semibold text-text-secondary">
           <StrandIcon name="spinner" className="h-4 w-4 animate-spin text-accent" />
-          {hasCachedMetadata ? 'Loading saved entity tracks' : 'Jockey is building entity tracks'}
+          Loading entity tracks
         </div>
       ) : error ? (
         <div id="entity-tracking-body" className="m-5 rounded-md border border-error bg-error-light px-3 py-2 text-sm font-semibold text-error-dark">
           {error}
         </div>
       ) : tracking ? (
-        <div id="entity-tracking-body" className="grid gap-5 bg-[#E6E7E4] px-5 py-4">
-          <div className="grid divide-y divide-[#C8CBC6] rounded-sm border border-[#C8CBC6] bg-[#DCDDDA] md:grid-cols-3 md:divide-x md:divide-y-0">
+        <div id="entity-tracking-body" className="grid gap-5 px-5 py-4">
+          <div className="grid divide-y divide-border-light rounded-sm border border-border md:grid-cols-3 md:divide-x md:divide-y-0">
             <EntityTrackingMetric icon="members" label="Grounded entities" value={String(entities.length)} detail="Teams, players, officials, fan groups" />
             <EntityTrackingMetric icon="hourglass" label="Tracked moments" value={String(appearanceCount)} detail="Timestamped appearances" />
             <EntityTrackingMetric icon="neural-network" label="Interactions" value={String(relationships.length)} detail="Entity-to-entity links" />
@@ -5422,11 +5420,11 @@ function EntityTrackingSection({
                   <StrandIcon name="list" className="h-4 w-4 text-accent" />
                   <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Entity evidence ledger</p>
                 </div>
-                <span className="rounded-sm bg-[#CFD1CD] px-2 py-1 text-[11px] font-semibold text-[#60645E]">
+                <span className="rounded-sm border border-border px-2 py-1 text-[11px] font-semibold text-text-secondary">
                   {entities.length} entities / {appearanceCount} moments
                 </span>
               </div>
-              <div className="divide-y divide-[#C8CBC6] rounded-sm border border-[#C8CBC6] bg-[#DCDDDA]">
+              <div className="divide-y divide-border-light rounded-sm border border-border">
                 {entities.map((entity) => (
                   <EntityTrackCard
                     key={`${videoName || 'source'}-${entity.name}-${entity.role}`}
@@ -5467,7 +5465,7 @@ function EntityTrackingSection({
 function EntityTrackingMetric({ icon, label, value, detail }: { icon: string; label: string; value: string; detail: string }) {
   return (
     <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 px-3 py-3">
-      <span className="row-span-2 flex h-9 w-9 items-center justify-center rounded-sm bg-[#C8CBC6] text-[#565B55]">
+      <span className="row-span-2 flex h-9 w-9 items-center justify-center rounded-sm border border-border text-text-secondary">
         <StrandIcon name={icon} className="h-4 w-4" />
       </span>
       <p className="font-mono text-xl font-bold leading-none text-text-primary">{value}</p>
@@ -5534,35 +5532,37 @@ function EntityTrackCard({
             {entityBadges.length ? (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {entityBadges.map((value) => (
-                  <span key={`${entity.name}-${value}`} className="rounded-sm bg-[#CFD1CD] px-1.5 py-0.5 text-[11px] font-semibold text-[#565B55]">
+                  <span key={`${entity.name}-${value}`} className="rounded-sm border border-border px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
                     {value}
                   </span>
                 ))}
               </div>
             ) : null}
           </div>
-          <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
-            <span className="rounded-sm bg-[#CFD1CD] px-2 py-1 font-mono text-[11px] font-semibold text-[#60645E]">
-              {entity.appearances.length} moments
-            </span>
-            <span className="rounded-sm bg-[#C1C4BF] px-2 py-1 font-mono text-[11px] font-semibold text-[#3F443E]">
-              {confidenceLabel(entity.confidence)}
-            </span>
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <div className="flex flex-wrap justify-end gap-1.5">
+              <span className="rounded-sm border border-border px-2 py-1 font-mono text-[11px] font-semibold text-text-secondary">
+                {entity.appearances.length} moments
+              </span>
+              <span className="rounded-sm border border-border px-2 py-1 font-mono text-[11px] font-semibold text-text-secondary">
+                {confidenceLabel(entity.confidence)}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((value) => !value)}
+            >
+              <StrandIcon name={expanded ? 'collapse' : 'expand'} className="h-3.5 w-3.5" />
+              {expanded ? 'Hide moments' : 'Show moments'}
+            </button>
           </div>
         </div>
         <p className="mt-3 text-sm leading-5 text-text-secondary">{entity.description}</p>
-        <button
-          type="button"
-          className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md bg-[#CFD1CD] px-2.5 text-xs font-semibold text-[#565B55] hover:bg-[#C1C4BF] hover:text-[#3F443E]"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <StrandIcon name={expanded ? 'collapse' : 'expand'} className="h-3.5 w-3.5" />
-          {expanded ? 'Hide moments' : 'Show moments'}
-        </button>
       </div>
       {expanded && appearances.length ? (
-        <ol className="grid gap-0 border-t border-[#C8CBC6] bg-[#D5D7D3]">
+        <ol className="grid gap-0 border-t border-border-light">
           {appearances.map((appearance) => {
             const emotion = entityTrackingDisplayLabel(appearance.emotion)
             const context = entityTrackingDisplayLabel(appearance.context)
@@ -5570,7 +5570,7 @@ function EntityTrackCard({
             return (
               <li
                 key={`${entity.name}-${appearance.start_time}-${appearance.end_time}-${appearance.action}`}
-                className="grid gap-3 border-b border-[#C8CBC6] px-3 py-2.5 last:border-b-0 sm:grid-cols-[132px_minmax(0,1fr)]"
+                className="grid gap-3 border-b border-border-light px-3 py-2.5 last:border-b-0 sm:grid-cols-[132px_minmax(0,1fr)]"
               >
                 <EntityMomentThumbnailButton
                   game={game}
@@ -5590,12 +5590,12 @@ function EntityTrackCard({
                   {emotion || context ? (
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       {emotion && (
-                        <span className="rounded-sm bg-[#C1C4BF] px-1.5 py-0.5 text-[11px] font-semibold text-[#3F443E]">
+                        <span className="rounded-sm border border-border px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
                           {emotion}
                         </span>
                       )}
                       {context && (
-                        <span className="rounded-sm bg-[#CFD1CD] px-1.5 py-0.5 text-[11px] font-semibold text-[#565B55]">
+                        <span className="rounded-sm border border-border px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
                           {context}
                         </span>
                       )}
@@ -5635,12 +5635,12 @@ function EntityInteractionMap({
           <StrandIcon name="play-next" className="h-4 w-4 text-accent" />
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Interaction evidence timeline</p>
         </div>
-        <span className="shrink-0 rounded-sm bg-[#CFD1CD] px-2 py-1 text-[11px] font-semibold text-[#60645E]">
+        <span className="shrink-0 rounded-sm border border-border px-2 py-1 text-[11px] font-semibold text-text-secondary">
           {relationships.length} moments
         </span>
       </div>
-      <div className="relative mt-3 divide-y divide-[#C8CBC6] rounded-sm border border-[#C8CBC6] bg-[#DCDDDA]">
-        <span className="absolute bottom-3 left-[50px] top-3 hidden w-px bg-[#BFC2BD] sm:block" aria-hidden="true" />
+      <div className="relative mt-3 divide-y divide-border-light rounded-sm border border-border">
+        <span className="absolute bottom-3 left-[50px] top-3 hidden w-px bg-border-light sm:block" aria-hidden="true" />
         {relationships.map((relationship, index) => {
           const interactionType = entityTrackingDisplayLabel(relationship.interaction_type) || 'interaction'
           const range = entityMomentRangeFromTimestamp(relationship.timestamp)
@@ -5650,7 +5650,7 @@ function EntityInteractionMap({
               className="relative grid gap-3 px-3 py-2.5 sm:grid-cols-[132px_minmax(0,1fr)]"
             >
               <div className="flex min-w-0 items-start gap-2">
-                <span className="z-[1] mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#C1C4BF] font-mono text-[10px] font-bold text-[#3F443E]">
+                <span className="z-[1] mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border font-mono text-[10px] font-bold text-text-secondary">
                   {index + 1}
                 </span>
                 <EntityMomentThumbnailButton
@@ -5670,14 +5670,14 @@ function EntityInteractionMap({
               </div>
               <div className="min-w-0">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                  <span className="rounded-sm bg-[#CFD1CD] px-2 py-1 text-xs font-semibold text-[#3F443E]">
+                  <span className="rounded-sm border border-border px-2 py-1 text-xs font-semibold text-text-secondary">
                     {relationship.entity}
                   </span>
-                  <span className="inline-flex items-center gap-1 rounded-sm bg-[#C1C4BF] px-2 py-1 text-[11px] font-semibold text-[#3F443E]">
+                  <span className="inline-flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-[11px] font-semibold text-text-secondary">
                     <StrandIcon name="play-next" className="h-3 w-3 text-accent" />
                     {interactionType}
                   </span>
-                  <span className="rounded-sm bg-[#CFD1CD] px-2 py-1 text-xs font-semibold text-[#3F443E]">
+                  <span className="rounded-sm border border-border px-2 py-1 text-xs font-semibold text-text-secondary">
                     {relationship.related_entity}
                   </span>
                 </div>
@@ -5720,7 +5720,7 @@ function EntityMomentThumbnailButton({
       aria-label={canPreview ? `Open ${title} at ${range.displayLabel}` : `${title} at ${range.displayLabel}`}
       title={canPreview ? `Open at ${range.displayLabel}` : range.displayLabel}
     >
-      <span className={['relative block overflow-hidden rounded-sm border border-[#BFC2BD] bg-[#CFD1CD]', compact ? 'aspect-[16/10]' : 'aspect-video'].join(' ')}>
+      <span className={['relative block overflow-hidden rounded-sm border border-border', compact ? 'aspect-[16/10]' : 'aspect-video'].join(' ')}>
         {posterUrl ? (
           <img src={posterUrl} alt="" className="h-full w-full object-cover transition-transform group-hover:scale-[1.03]" loading="lazy" />
         ) : (
