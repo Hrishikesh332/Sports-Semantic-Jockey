@@ -19,7 +19,21 @@ from app.core.errors import ApiError
 from app.integrations.twelvelabs import request_form as twelvelabs_request_form
 from app.integrations.twelvelabs import request_json as twelvelabs_request_json
 from app.integrations.twelvelabs import upload_asset_path
-from app.services.highlights import generate_pegasus_highlight_reels
+from app.services.highlights import generate_highlight_reels, generate_pegasus_highlight_reels
+from app.services.jockey_workspace_metadata import (
+    append_saved_clip_analysis,
+    find_saved_clip_analysis,
+    jockey_entity_tracking_from_indexed_asset,
+    jockey_entity_tracking_with_provenance,
+    jockey_highlight_reels_from_indexed_asset,
+    jockey_highlight_reels_with_provenance,
+    load_cached_video_dashboard,
+    parse_entity_tracking_summary_from_metadata,
+    parse_highlight_reels_summary_from_metadata,
+    parse_workspace_summary_from_metadata,
+    store_jockey_entity_tracking,
+    store_jockey_highlight_reels,
+)
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -53,7 +67,7 @@ HIGHLIGHT_CATEGORY_KEYS = [
 ]
 MARENGO_SEARCH_FILTER_QUERIES = {
     "semantic": "emotional visual reaction crowd atmosphere celebration contextual meaning",
-    "standard_stats": "scoring play game action official event scoreboard moment",
+    "standard_stats": "score scoreboard official statistic result race status penalty card foul timeout substitution",
     "best_plays": "decisive play goal save scoring chance momentum swing highlight",
     "emotional_moments": "player emotion celebration frustration relief heartbreak fist pump tears",
     "fan_experience": "crowd roar fans cheering stadium atmosphere visible fan reaction",
@@ -72,7 +86,7 @@ STREAM_INFO_CACHE_LOCK = Lock()
 INDEX_VIDEOS_CACHE_TTL_SECONDS = int(os.environ.get("SPORTS_INDEX_VIDEOS_CACHE_TTL_SECONDS", "300"))
 INDEX_VIDEOS_CACHE = {}
 INDEX_VIDEOS_CACHE_LOCK = Lock()
-PEGASUS_METADATA_CACHE_SCHEMA_VERSION = 2
+PEGASUS_METADATA_CACHE_SCHEMA_VERSION = 4
 PEGASUS_METADATA_VERIFY_ATTEMPTS = int(os.environ.get("PEGASUS_METADATA_VERIFY_ATTEMPTS", "3"))
 PEGASUS_METADATA_VERIFY_INTERVAL_SECONDS = float(os.environ.get("PEGASUS_METADATA_VERIFY_INTERVAL_SECONDS", "1"))
 PEGASUS_REELS_METADATA_FIELD = "sports_jockey_pegasus_reels_v2"
@@ -100,6 +114,7 @@ JOCKEY_CHAT_SCHEMA = {
                     "moment_type": {"type": "string"},
                     "emotional_intensity": {"type": "string"},
                     "jockey_rationale": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0.01, "maximum": 1},
                     "highlight_potential": {"type": "number", "minimum": 0, "maximum": 1},
                 },
                 "required": [
@@ -109,6 +124,7 @@ JOCKEY_CHAT_SCHEMA = {
                     "moment_type",
                     "emotional_intensity",
                     "jockey_rationale",
+                    "confidence",
                     "highlight_potential",
                 ],
                 "additionalProperties": False,
@@ -116,6 +132,115 @@ JOCKEY_CHAT_SCHEMA = {
         },
     },
     "required": ["narrative_summary", "clips"],
+    "additionalProperties": False,
+}
+SELECTED_CLIP_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "description": {"type": "string"},
+        "emotional_tone": {"type": "string"},
+        "key_action": {"type": "string"},
+        "participants": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "role": {"type": "string"},
+                    "team_or_group": {"type": "string"},
+                    "evidence": {"type": "string"},
+                },
+                "required": ["name", "role", "team_or_group", "evidence"],
+                "additionalProperties": False,
+            },
+        },
+        "moment_types": {"type": "array", "items": {"type": "string"}},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "score_context": {"type": "string"},
+        "visual_evidence": {"type": "array", "items": {"type": "string"}},
+        "audio_evidence": {"type": "array", "items": {"type": "string"}},
+        "transcript_evidence": {"type": "array", "items": {"type": "string"}},
+        "producer_summary": {"type": "string"},
+        "story_arc": {"type": "string"},
+        "editorial_use": {"type": "string"},
+        "recommended_formats": {"type": "array", "items": {"type": "string"}},
+        "clip_boundary_notes": {"type": "string"},
+        "rights_safety_notes": {"type": "string"},
+        "confidence": {"type": "number"},
+    },
+    "required": [
+        "description",
+        "emotional_tone",
+        "key_action",
+        "participants",
+        "moment_types",
+        "tags",
+        "score_context",
+        "visual_evidence",
+        "audio_evidence",
+        "transcript_evidence",
+        "producer_summary",
+        "story_arc",
+        "editorial_use",
+        "recommended_formats",
+        "clip_boundary_notes",
+        "rights_safety_notes",
+        "confidence",
+    ],
+    "additionalProperties": False,
+}
+ENTITY_TRACKING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "entity_type": {"type": "string"},
+                    "team_or_group": {"type": "string"},
+                    "role": {"type": "string"},
+                    "description": {"type": "string"},
+                    "confidence": {"type": "number"},
+                    "appearances": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "start_time": {"type": "string"},
+                                "end_time": {"type": "string"},
+                                "action": {"type": "string"},
+                                "emotion": {"type": "string"},
+                                "context": {"type": "string"},
+                            },
+                            "required": ["start_time", "end_time", "action", "emotion", "context"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["name", "entity_type", "team_or_group", "role", "description", "confidence", "appearances"],
+                "additionalProperties": False,
+            },
+        },
+        "relationships": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "entity": {"type": "string"},
+                    "related_entity": {"type": "string"},
+                    "timestamp": {"type": "string"},
+                    "interaction_type": {"type": "string"},
+                    "description": {"type": "string"},
+                },
+                "required": ["entity", "related_entity", "timestamp", "interaction_type", "description"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["summary", "entities", "relationships"],
     "additionalProperties": False,
 }
 GAME_DEBUG_FIELDS = {
@@ -163,6 +288,346 @@ def list_game_index_videos(tag):
             }
     UPLOAD_BACKGROUND_EXECUTOR.submit(warm_missing_video_thumbnails, payload.get("index_videos", []))
     return payload
+
+
+def invalidate_index_videos_cache(tag):
+    with INDEX_VIDEOS_CACHE_LOCK:
+        INDEX_VIDEOS_CACHE.pop(tag, None)
+
+
+def list_game_discover_videos(tag):
+    game = get_game(tag)
+    index_payload = list_game_index_videos(tag)
+    index_lookup = {}
+    for video in index_payload.get("index_videos", []):
+        if not isinstance(video, dict):
+            continue
+        for key in (
+            clean_optional_string(video.get("source_video_name")),
+            clean_optional_string(video.get("metadata_source_video_name")),
+            clean_optional_string(video.get("name")),
+            clean_optional_string(video.get("display_name")),
+        ):
+            if key:
+                index_lookup.setdefault(key, video)
+
+    discover_videos = []
+    seen_names = set()
+    source_order = {name: index for index, name in enumerate(game.get("source_videos", []))}
+    for indexed in index_payload.get("index_videos", []):
+        if not isinstance(indexed, dict):
+            continue
+        video_name = discover_video_name_for_indexed(game, indexed)
+        if not video_name or video_name in seen_names:
+            continue
+        playback = discover_video_playback_status(game, tag, video_name, indexed)
+        if not playback.get("discoverable"):
+            continue
+        discover_videos.append(build_discover_video_entry(game, tag, video_name, indexed, playback))
+        seen_names.add(video_name)
+
+    discover_videos.sort(key=lambda entry: source_order.get(entry["video_name"], 10_000))
+
+    pending_videos = []
+    for video_name in game.get("source_videos", []):
+        if video_name in seen_names:
+            continue
+        indexed = index_lookup.get(video_name)
+        playback = discover_video_playback_status(game, tag, video_name, indexed)
+        if playback.get("stale_registration") or playback.get("repair_available"):
+            pending_videos.append(build_discover_video_entry(game, tag, video_name, indexed, playback))
+
+    UPLOAD_BACKGROUND_EXECUTOR.submit(warm_missing_game_thumbnails, tag, index_lookup)
+    return {"videos": discover_videos, "pending_videos": pending_videos}
+
+
+def discover_video_name_for_indexed(game, indexed):
+    if not isinstance(indexed, dict):
+        return None
+    source_videos = set(game.get("source_videos", []))
+    for key in (
+        clean_optional_string(indexed.get("metadata_source_video_name")),
+        clean_optional_string(indexed.get("source_video_name")),
+        clean_optional_string(indexed.get("name")),
+        clean_optional_string(indexed.get("display_name")),
+        clean_optional_string(indexed.get("indexed_asset_id")),
+        clean_optional_string(indexed.get("asset_id")),
+    ):
+        if not key:
+            continue
+        resolved = video_name_for_reference(game, key)
+        if resolved and resolved in source_videos:
+            return resolved
+        if key in source_videos:
+            return key
+    return None
+
+
+def build_discover_video_entry(game, tag, video_name, indexed, playback):
+    thumbnail_url = playback.get("thumbnail_url")
+    local_thumbnail = registered_thumbnail_path_or_none(tag, video_name)
+    return {
+        "video_name": video_name,
+        "thumbnail_url": thumbnail_url,
+        "thumbnail_path": (
+            None
+            if thumbnail_url
+            else f"/games/{tag}/thumbnail/{quote(video_name, safe='')}"
+        ),
+        "stream_info_path": f"/games/{tag}/stream/{quote(video_name, safe='')}",
+        "indexed": bool(indexed),
+        "in_live_index": bool(indexed),
+        "playback_ready": playback.get("playback_ready", False),
+        "discoverable": playback.get("discoverable", False),
+        "stale_registration": playback.get("stale_registration", False),
+        "repair_available": playback.get("repair_available", False),
+        "status": playback.get("status") or (clean_optional_string(indexed.get("status")) if indexed else "registered"),
+        "has_local_thumbnail": bool(local_thumbnail),
+        "indexed_asset_id": playback.get("indexed_asset_id"),
+        "asset_id": playback.get("asset_id"),
+    }
+
+
+def discover_video_playback_status(game, tag, video_name, indexed=None):
+    indexed = indexed if isinstance(indexed, dict) else {}
+    registered_asset_id = asset_id_for_video_name(game, video_name)
+    indexed_asset_id = clean_optional_string(indexed.get("indexed_asset_id"))
+    indexed_asset = clean_optional_string(indexed.get("asset_id"))
+    thumbnail_url = clean_optional_string(indexed.get("thumbnail_url"))
+    status = clean_optional_string(indexed.get("status")) or "registered"
+    local_video = video_path(video_name)
+
+    if indexed:
+        playback_ready = status == "ready" and bool(indexed_asset)
+        return {
+            "playback_ready": playback_ready,
+            "discoverable": playback_ready,
+            "stale_registration": False,
+            "repair_available": False,
+            "thumbnail_url": thumbnail_url,
+            "asset_id": indexed_asset or registered_asset_id,
+            "indexed_asset_id": indexed_asset_id,
+            "status": status,
+        }
+
+    stale_registration = bool(registered_asset_id or marengo_video_id_for_video_name(game, video_name))
+    if registered_asset_id:
+        stale_registration = not twelvelabs_asset_is_playable(registered_asset_id)
+    elif video_name in game.get("source_videos", []) and local_video.exists():
+        stale_registration = True
+    return {
+        "playback_ready": False,
+        "discoverable": False,
+        "stale_registration": stale_registration,
+        "repair_available": stale_registration and local_video.exists(),
+        "thumbnail_url": None,
+        "asset_id": registered_asset_id,
+        "indexed_asset_id": marengo_video_id_for_video_name(game, video_name),
+        "status": "not_indexed" if stale_registration and not registered_asset_id else ("stale" if stale_registration else "registered"),
+    }
+
+
+def twelvelabs_asset_exists(asset_id):
+    asset_id = clean_optional_string(asset_id)
+    if not asset_id:
+        return False
+    try:
+        twelvelabs_request_json("get", f"/assets/{asset_id}")
+    except ApiError:
+        return False
+    return True
+
+
+def twelvelabs_asset_is_playable(asset_id):
+    asset_id = clean_optional_string(asset_id)
+    if not asset_id:
+        return False
+    try:
+        asset = twelvelabs_request_json("get", f"/assets/{asset_id}")
+    except ApiError:
+        return False
+    hls = asset.get("hls") or {}
+    return bool(hls.get("manifest_url") and hls.get("status") == "ready")
+
+
+def queue_game_video_repair(tag, video_name):
+    game = get_game(tag)
+    video_name = validate_registered_video_name(game, video_name, status_code=404)
+    if not video_path(video_name).exists():
+        raise ApiError(f"Local video file not found for {video_name}", 404)
+    UPLOAD_BACKGROUND_EXECUTOR.submit(_run_video_repair, tag, video_name)
+    return {
+        "status": "repairing",
+        "video_name": video_name,
+        "message": "Re-uploading the local video to TwelveLabs and refreshing the index.",
+    }
+
+
+def _run_video_repair(tag, video_name):
+    try:
+        repair_game_video(tag, video_name)
+    except Exception as exc:
+        print(f"[repair] failed for {video_name}: {exc}", flush=True)
+
+
+def cleanup_remote_video_bindings(game, video_name):
+    knowledge_store_id = clean_optional_string(game.get("knowledge_store_id"))
+    search_index_id = clean_optional_string(game.get("marengo_index_id"))
+    video_reference_map = game.get("video_reference_map", {}) if isinstance(game.get("video_reference_map"), dict) else {}
+    asset_id = clean_optional_string(game.get("video_asset_ids", {}).get(video_name))
+    indexed_asset_id = clean_optional_string(game.get("marengo_video_ids", {}).get(video_name))
+
+    knowledge_item_ids = set()
+    for key, value in video_reference_map.items():
+        if value != video_name:
+            continue
+        key = clean_optional_string(key)
+        if key and key.startswith("ksi_"):
+            knowledge_item_ids.add(key)
+
+    if knowledge_store_id and asset_id:
+        for item in list_knowledge_store_items(knowledge_store_id):
+            if not isinstance(item, dict):
+                continue
+            item_asset_id = clean_optional_string(item.get("asset_id"))
+            item_id = clean_optional_string(item.get("_id") or item.get("id"))
+            if item_asset_id == asset_id and item_id:
+                knowledge_item_ids.add(item_id)
+
+    for item_id in knowledge_item_ids:
+        delete_knowledge_store_item(knowledge_store_id, item_id)
+
+    if search_index_id and indexed_asset_id:
+        delete_indexed_asset(search_index_id, indexed_asset_id)
+
+
+def list_knowledge_store_items(knowledge_store_id):
+    try:
+        payload = twelvelabs_request_json("get", f"/knowledge-stores/{knowledge_store_id}/items")
+    except ApiError:
+        return []
+    items = payload.get("data") if isinstance(payload, dict) else payload
+    return items if isinstance(items, list) else []
+
+
+def delete_knowledge_store_item(knowledge_store_id, item_id):
+    knowledge_store_id = clean_optional_string(knowledge_store_id)
+    item_id = clean_optional_string(item_id)
+    if not knowledge_store_id or not item_id:
+        return
+    if not item_id.startswith("ksi_"):
+        item_id = f"ksi_{item_id}"
+    try:
+        twelvelabs_request_json("delete", f"/knowledge-stores/{knowledge_store_id}/items/{item_id}")
+    except ApiError as exc:
+        if exc.status_code != 404:
+            print(f"[cleanup] failed to delete knowledge store item {item_id}: {exc}", flush=True)
+
+
+def delete_indexed_asset(search_index_id, indexed_asset_id):
+    search_index_id = clean_optional_string(search_index_id)
+    indexed_asset_id = clean_optional_string(indexed_asset_id)
+    if not search_index_id or not indexed_asset_id:
+        return
+    try:
+        twelvelabs_request_json(
+            "delete",
+            f"/indexes/{search_index_id}/indexed-assets/{indexed_asset_id}",
+        )
+    except ApiError as exc:
+        if exc.status_code != 404:
+            print(f"[cleanup] failed to delete indexed asset {indexed_asset_id}: {exc}", flush=True)
+
+
+def clear_stale_video_bindings(tag, video_name):
+    with UPLOAD_METADATA_LOCK:
+        game = get_game(tag)
+        cleanup_remote_video_bindings(game, video_name)
+        video_reference_map = deepcopy(game.get("video_reference_map", {})) if isinstance(game.get("video_reference_map"), dict) else {}
+        video_asset_ids = deepcopy(game.get("video_asset_ids", {})) if isinstance(game.get("video_asset_ids"), dict) else {}
+        marengo_video_ids = deepcopy(game.get("marengo_video_ids", {})) if isinstance(game.get("marengo_video_ids"), dict) else {}
+
+        video_asset_ids.pop(video_name, None)
+        marengo_video_ids.pop(video_name, None)
+        pruned_reference_map = {
+            key: value
+            for key, value in video_reference_map.items()
+            if value != video_name or key == video_name
+        }
+
+        register_game(
+            {
+                "tag": game["tag"],
+                "label": game["label"],
+                "sport": game["sport"],
+                "knowledge_store_id": game["knowledge_store_id"],
+                "source_videos": game.get("source_videos", []),
+                "video_reference_map": pruned_reference_map,
+                "video_asset_ids": video_asset_ids,
+                "marengo_index_id": game.get("marengo_index_id"),
+                "marengo_video_ids": marengo_video_ids,
+            }
+        )
+
+
+def repair_game_video(tag, video_name):
+    game = get_game(tag)
+    video_name = validate_registered_video_name(game, video_name, status_code=404)
+    path = video_path(video_name)
+    if not path.exists():
+        raise ApiError(f"Local video file not found for {video_name}", 404)
+
+    clear_stale_video_bindings(tag, video_name)
+    game = get_game(tag)
+    search_index_id, created_index = ensure_game_search_index(game)
+    uploaded_asset = upload_asset_path(path)
+    asset_id = response_id(uploaded_asset)
+    if not asset_id:
+        raise ApiError("TwelveLabs upload response did not include an asset id", 502)
+
+    wait_for_uploaded_asset_ready(asset_id, uploaded_asset)
+    knowledge_store_item = add_game_video_to_knowledge_store(game["knowledge_store_id"], asset_id)
+    indexed_asset = add_game_video_to_search_index(search_index_id, asset_id)
+    updated_game = update_uploaded_game_metadata(
+        tag=tag,
+        video_name=video_name,
+        asset_id=asset_id,
+        search_index_id=search_index_id,
+        knowledge_store_item=knowledge_store_item,
+        indexed_asset=indexed_asset,
+    )
+    cache_indexed_video_thumbnail(video_name, indexed_asset, search_index_id)
+    with INDEX_VIDEOS_CACHE_LOCK:
+        INDEX_VIDEOS_CACHE.pop(tag, None)
+    with STREAM_INFO_CACHE_LOCK:
+        for cache_key in [key for key in STREAM_INFO_CACHE if key[0] == tag]:
+            STREAM_INFO_CACHE.pop(cache_key, None)
+
+    playback = discover_video_playback_status(updated_game, tag, video_name, normalize_index_video(
+        search_index_id,
+        indexed_asset_with_user_metadata(search_index_id, indexed_asset),
+    ))
+    return {
+        "status": "ready",
+        "video_name": video_name,
+        "asset_id": asset_id,
+        "indexed_asset_id": response_id(indexed_asset),
+        "created_search_index": bool(created_index),
+        "playback_ready": playback.get("playback_ready", False),
+        "thumbnail_url": playback.get("thumbnail_url"),
+        "game": public_game(updated_game),
+    }
+
+
+def warm_missing_game_thumbnails(tag, indexed_lookup):
+    game = get_game(tag)
+    indexed_names = set(indexed_lookup.keys())
+    for video_name in game.get("source_videos", []):
+        if video_name in indexed_names or registered_thumbnail_path_or_none(tag, video_name):
+            continue
+        remote_url = registered_indexed_thumbnail_url(tag, video_name)
+        if remote_url:
+            persist_remote_thumbnail(video_name, remote_url)
 
 
 def warm_missing_video_thumbnails(index_videos):
@@ -645,43 +1110,161 @@ def window_pegasus_asset_contexts(contexts):
 def generate_game_highlight_reels(tag, payload=None):
     game = get_game(tag)
     payload = payload or {}
+    force_generate = bool(payload.get("force_generate") or payload.get("regenerate"))
+    include_entity_tracking = bool(payload.get("include_entity_tracking"))
     requested_video = payload.get("indexed_asset_id") or payload.get("asset_id") or payload.get("video_name") or payload.get("source_video")
     requested_source_video = payload.get("video_name") or payload.get("source_video")
     video_name = None
-    indexed_asset = None
-    asset_id = None
     index_id = configured_search_index_id(game)
     if requested_video:
         try:
             video_name = validate_registered_video_name(game, requested_source_video or requested_video)
-            asset_id = twelvelabs_asset_id_for_video(game, video_name)
         except ApiError:
             indexed_asset = indexed_asset_for_reference(index_id, requested_video)
             if not indexed_asset:
                 raise ApiError("video is not available in the configured TwelveLabs index", 404)
-            asset_id = indexed_asset_asset_id(indexed_asset)
             video_name = indexed_asset_workspace_video_name(indexed_asset, requested_source_video or requested_video)
 
     match_context = payload.get("match_context") or scoped_match_context(game, video_name)
     wsc_baseline = payload.get("wsc_baseline", game.get("wsc_baseline"))
-    if indexed_asset:
-        asset_contexts = pegasus_asset_contexts_for_index_asset(indexed_asset, video_name)
-        indexed_assets = [indexed_asset]
-    else:
-        asset_contexts = pegasus_asset_contexts_for_game(game, video_name)
-        indexed_assets = None
-    if not video_name or not asset_id:
-        raise ApiError("video_name is required for metadata-backed Workspace analysis", 400)
-    return pegasus_highlight_reels_from_index_metadata_or_generate(
-        game=game,
-        index_id=index_id,
-        video_name=video_name,
-        asset_id=asset_id,
-        asset_contexts=asset_contexts,
+
+    if video_name and not force_generate:
+        bundle = load_cached_video_dashboard(game, video_name)
+        if bundle and bundle.get("highlight_reels"):
+            cached = bundle["highlight_reels"]
+            highlight_reels = jockey_highlight_reels_with_provenance(
+                cached["reels"],
+                user_metadata=cached["metadata"],
+                index_id=bundle["index_id"],
+                indexed_asset_id=bundle["indexed_asset_id"],
+                asset_id=bundle["asset_id"],
+                video_name=video_name,
+                source="indexed_asset_user_metadata",
+            )
+            if not include_entity_tracking:
+                return highlight_reels
+
+            entity_tracking = None
+            cached_entity = bundle.get("entity_tracking")
+            if cached_entity:
+                entity_tracking = jockey_entity_tracking_with_provenance(
+                    cached_entity["tracking"],
+                    user_metadata=cached_entity["metadata"],
+                    index_id=bundle["index_id"],
+                    indexed_asset_id=bundle["indexed_asset_id"],
+                    asset_id=bundle["asset_id"],
+                    video_name=video_name,
+                    source="indexed_asset_user_metadata",
+                )
+            else:
+                entity_tracking = create_entity_tracking_response(
+                    tag,
+                    {
+                        **payload,
+                        "video_name": video_name,
+                        "include_entity_tracking": False,
+                    },
+                )
+
+            return {
+                "video_name": video_name,
+                "highlight_reels": highlight_reels,
+                "entity_tracking": entity_tracking,
+            }
+
+        asset_id = asset_id_for_video_name(game, video_name)
+        if asset_id:
+            indexed_assets = indexed_assets_for_video_metadata(game, index_id, asset_id, video_name)
+            for indexed_asset in indexed_assets:
+                cached = jockey_highlight_reels_from_indexed_asset(indexed_asset, video_name, asset_id)
+                if not cached:
+                    continue
+                indexed_asset_id = response_id(indexed_asset)
+                highlight_reels = jockey_highlight_reels_with_provenance(
+                    cached["reels"],
+                    user_metadata=cached["metadata"],
+                    index_id=index_id,
+                    indexed_asset_id=indexed_asset_id,
+                    asset_id=asset_id,
+                    video_name=video_name,
+                    source="indexed_asset_user_metadata",
+                )
+                if not include_entity_tracking:
+                    return highlight_reels
+                entity_tracking = create_entity_tracking_response(
+                    tag,
+                    {
+                        **payload,
+                        "video_name": video_name,
+                        "include_entity_tracking": False,
+                    },
+                )
+                return {
+                    "video_name": video_name,
+                    "highlight_reels": highlight_reels,
+                    "entity_tracking": entity_tracking,
+                }
+
+    reels = generate_highlight_reels(
+        game["knowledge_store_id"],
         match_context=match_context,
         wsc_baseline=wsc_baseline,
-        indexed_assets=indexed_assets,
     )
+
+    highlight_reels = None
+    if video_name:
+        asset_id = asset_id_for_video_name(game, video_name)
+        if asset_id:
+            indexed_assets = indexed_assets_for_video_metadata(game, index_id, asset_id, video_name)
+            indexed_asset = indexed_asset_for_generated_metadata(game, index_id, asset_id, video_name, indexed_assets)
+            indexed_asset_id = response_id(indexed_asset)
+            if indexed_asset_id:
+                user_metadata = store_jockey_highlight_reels(
+                    index_id,
+                    indexed_asset_id,
+                    asset_id,
+                    video_name,
+                    reels,
+                    match_context=match_context,
+                    wsc_baseline=wsc_baseline,
+                )
+                invalidate_index_videos_cache(tag)
+                merged_metadata = indexed_asset_user_metadata(indexed_asset)
+                if isinstance(user_metadata, dict):
+                    merged_metadata = {**merged_metadata, **user_metadata}
+                highlight_reels = jockey_highlight_reels_with_provenance(
+                    reels,
+                    user_metadata=merged_metadata,
+                    index_id=index_id,
+                    indexed_asset_id=indexed_asset_id,
+                    asset_id=asset_id,
+                    video_name=video_name,
+                    source="generated_and_stored_to_user_metadata",
+                )
+
+    if not highlight_reels:
+        highlight_reels = jockey_highlight_reels_with_provenance(
+            reels,
+            video_name=video_name,
+            source="jockey_knowledge_store",
+        )
+
+    if not include_entity_tracking or not video_name:
+        return highlight_reels
+
+    entity_tracking = create_entity_tracking_response(
+        tag,
+        {
+            **payload,
+            "video_name": video_name,
+            "include_entity_tracking": False,
+        },
+    )
+    return {
+        "video_name": video_name,
+        "highlight_reels": highlight_reels,
+        "entity_tracking": entity_tracking,
+    }
 
 
 def pegasus_highlight_reels_from_index_metadata_or_generate(
@@ -787,6 +1370,9 @@ def pegasus_metadata_context_hash(index_id, video_name, asset_id, asset_contexts
 
 def pegasus_reels_from_indexed_asset_metadata(indexed_asset, context_hash, asset_id, strict=True):
     metadata = indexed_asset_user_metadata(indexed_asset)
+    detailed_response = parse_json_object(metadata.get(PEGASUS_DETAILED_RESPONSE_METADATA_FIELD))
+    if detailed_response.get("schema_version") != PEGASUS_METADATA_CACHE_SCHEMA_VERSION:
+        return None
     if strict and metadata.get(PEGASUS_REELS_ASSET_ID_METADATA_FIELD) != asset_id:
         return None
     if strict and metadata.get(PEGASUS_REELS_HASH_METADATA_FIELD) != context_hash:
@@ -796,13 +1382,11 @@ def pegasus_reels_from_indexed_asset_metadata(indexed_asset, context_hash, asset
         return None
     raw_reels = metadata.get(PEGASUS_REELS_METADATA_FIELD)
     if not isinstance(raw_reels, str) or not raw_reels.strip():
-        detailed_response = parse_json_object(metadata.get(PEGASUS_DETAILED_RESPONSE_METADATA_FIELD))
         reels = detailed_response.get("response") if isinstance(detailed_response.get("response"), dict) else None
         return reels if is_complete_highlight_reels(reels) else None
     try:
         reels = json.loads(raw_reels)
     except json.JSONDecodeError:
-        detailed_response = parse_json_object(metadata.get(PEGASUS_DETAILED_RESPONSE_METADATA_FIELD))
         reels = detailed_response.get("response") if isinstance(detailed_response.get("response"), dict) else None
         return reels if is_complete_highlight_reels(reels) else None
     return reels if is_complete_highlight_reels(reels) else None
@@ -1093,6 +1677,11 @@ def normalize_index_video(index_id, indexed_asset):
     detailed_response = parse_json_object(metadata.get(PEGASUS_DETAILED_RESPONSE_METADATA_FIELD))
     clip_counts = detailed_response.get("clip_counts") if isinstance(detailed_response.get("clip_counts"), dict) else None
     metadata_source = clean_optional_string(metadata.get(PEGASUS_REELS_SOURCE_VIDEO_METADATA_FIELD))
+    workspace_summary = parse_workspace_summary_from_metadata(metadata)
+    workspace_counts = workspace_summary.get("counts") if isinstance(workspace_summary, dict) else None
+    highlight_summary = parse_highlight_reels_summary_from_metadata(metadata)
+    highlight_clip_counts = highlight_summary.get("clip_counts") if isinstance(highlight_summary, dict) else None
+    entity_tracking_summary = parse_entity_tracking_summary_from_metadata(metadata)
     display_name = metadata_source or filename or indexed_asset_display_name(indexed_asset) or indexed_asset_id or asset_id or "Indexed video"
     return {
         "id": indexed_asset_id or asset_id or display_name,
@@ -1110,6 +1699,15 @@ def normalize_index_video(index_id, indexed_asset):
             metadata.get(PEGASUS_REELS_METADATA_FIELD)
             or metadata.get(PEGASUS_DETAILED_RESPONSE_METADATA_FIELD)
         ),
+        "has_jockey_highlight_metadata": bool(highlight_summary),
+        "jockey_highlight_generated_at": clean_optional_string(highlight_summary.get("generated_at")) if highlight_summary else None,
+        "jockey_highlight_clip_counts": highlight_clip_counts,
+        "has_jockey_entity_tracking_metadata": bool(entity_tracking_summary),
+        "jockey_entity_tracking_generated_at": clean_optional_string(entity_tracking_summary.get("generated_at")) if entity_tracking_summary else None,
+        "jockey_entity_tracking_entity_count": entity_tracking_summary.get("entity_count") if entity_tracking_summary else None,
+        "has_jockey_workspace_metadata": bool(workspace_summary),
+        "jockey_workspace_updated_at": clean_optional_string(workspace_summary.get("updated_at")) if workspace_summary else None,
+        "jockey_workspace_counts": workspace_counts,
         "metadata_generated_at": clean_optional_string(metadata.get(PEGASUS_REELS_GENERATED_AT_METADATA_FIELD)),
         "metadata_source_video_name": metadata_source,
         "metadata_clip_counts": clip_counts,
@@ -1432,17 +2030,597 @@ def search_game_videos_with_marengo(game, query, limit, filter_key, video_name, 
     return normalize_marengo_search(game, query, result, limit, search_options, group_by)
 
 
+def create_selected_clip_analysis(tag, payload=None):
+    game = get_game(tag)
+    payload = payload or {}
+    force_generate = bool(payload.get("force_generate") or payload.get("regenerate"))
+    requested_video_name = required_payload_string(payload, "video_name")
+    video_reference = clean_optional_string(payload.get("video_reference"))
+    video_name = (
+        video_name_for_reference(game, requested_video_name)
+        or video_name_for_reference(game, video_reference)
+        or requested_video_name
+    )
+    start_time = required_payload_string(payload, "start_time")
+    start_seconds = seconds_from_timecode(start_time)
+    if start_seconds is None:
+        raise ApiError("start_time must be a timecode like M:SS or H:MM:SS", 400)
+    end_time = clean_optional_string(payload.get("end_time")) or timecode_from_seconds(start_seconds + 12)
+    end_seconds = seconds_from_timecode(end_time)
+    if end_seconds is None or end_seconds <= start_seconds:
+        end_seconds = start_seconds + 12
+        end_time = timecode_from_seconds(end_seconds)
+
+    query = clean_optional_string(payload.get("query"))
+    search_context = {
+        "title": clean_optional_string(payload.get("title")),
+        "query": query,
+        "description": clean_optional_string(payload.get("description")),
+        "relevance": clean_optional_string(payload.get("relevance")),
+        "start_time": start_time,
+        "end_time": end_time,
+        "video_reference": video_reference,
+    }
+
+    if not force_generate:
+        cached = find_saved_clip_analysis(
+            tag,
+            video_name,
+            start_time,
+            end_time,
+            query=query or search_context.get("title"),
+        )
+        if cached and isinstance(cached.get("analysis"), dict):
+            cached_item = cached.get("item") if isinstance(cached.get("item"), dict) else {}
+            return selected_clip_analysis_with_provenance(
+                cached["analysis"],
+                source="indexed_asset_user_metadata",
+                from_user_metadata=True,
+                saved_at=clean_optional_string(cached_item.get("saved_at")),
+                stored_to_user_metadata=True,
+                duplicate=True,
+                workspace_item_id=clean_optional_string(cached_item.get("id")),
+            )
+
+    clip_padding_before = 2
+    clip_padding_after = 4
+    analyze_start = max(0, start_seconds - clip_padding_before)
+    analyze_end = end_seconds + clip_padding_after
+    asset_id = asset_id_for_selected_clip_analysis(game, video_name, video_reference, payload)
+    if not asset_id:
+        raise ApiError(
+            {
+                "message": "Selected clip analysis requires a TwelveLabs asset id from the Marengo result",
+                "video_name": video_name,
+                "video_reference": video_reference,
+            },
+            404,
+        )
+    prompt = selected_clip_analysis_prompt(
+        game=game,
+        video_name=video_name,
+        video_reference=video_reference,
+        start_time=start_time,
+        end_time=end_time,
+        query=query,
+        marengo_description=clean_optional_string(payload.get("description")),
+        marengo_relevance=clean_optional_string(payload.get("relevance")),
+    )
+    result = twelvelabs_request_json(
+        "post",
+        "/analyze",
+        {
+            "model_name": TWELVELABS_PEGASUS_MODEL,
+            "video": {
+                "type": "asset_id",
+                "asset_id": asset_id,
+            },
+            "start_time": float(analyze_start),
+            "end_time": float(analyze_end),
+            "prompt": prompt,
+            "temperature": 0.2,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": SELECTED_CLIP_ANALYSIS_SCHEMA,
+            },
+            "max_tokens": 3200,
+        },
+    )
+    analysis = parse_selected_clip_analysis_json(result)
+    normalized = normalize_selected_clip_analysis(
+        game=game,
+        video_name=video_name,
+        start_time=start_time,
+        end_time=end_time,
+        asset_id=asset_id,
+        video_reference=video_reference,
+        analyze_start=analyze_start,
+        analyze_end=analyze_end,
+        result=result,
+        analysis=analysis,
+    )
+
+    stored_to_user_metadata = False
+    duplicate = False
+    workspace_item_id = None
+    saved_at = None
+    try:
+        store_result = append_saved_clip_analysis(
+            tag,
+            video_name,
+            {
+                "analysis": normalized,
+                "search_context": search_context,
+            },
+        )
+        if isinstance(store_result, dict):
+            stored_to_user_metadata = True
+            duplicate = bool(store_result.get("duplicate"))
+            stored_item = store_result.get("item") if isinstance(store_result.get("item"), dict) else {}
+            workspace_item_id = clean_optional_string(stored_item.get("id"))
+            saved_at = clean_optional_string(stored_item.get("saved_at"))
+            invalidate_index_videos_cache(tag)
+    except ApiError:
+        raise
+    except Exception as error:
+        logging.getLogger(__name__).warning(
+            "Selected clip analysis generated but could not be stored to user metadata: %s",
+            error,
+        )
+
+    return selected_clip_analysis_with_provenance(
+        normalized,
+        source="generated_and_stored_to_user_metadata" if stored_to_user_metadata else "pegasus_clip_analysis",
+        from_user_metadata=False,
+        saved_at=saved_at,
+        stored_to_user_metadata=stored_to_user_metadata,
+        duplicate=duplicate,
+        workspace_item_id=workspace_item_id,
+    )
+
+
+def selected_clip_analysis_with_provenance(
+    analysis,
+    *,
+    source,
+    from_user_metadata=False,
+    saved_at=None,
+    stored_to_user_metadata=False,
+    duplicate=False,
+    workspace_item_id=None,
+):
+    if not isinstance(analysis, dict):
+        raise ApiError("Selected clip analysis payload was not an object", 502)
+    response = dict(analysis)
+    response["_jockey_metadata"] = {
+        "source": source,
+        "from_user_metadata": from_user_metadata,
+        "saved_at": saved_at,
+        "stored_to_user_metadata": stored_to_user_metadata,
+        "duplicate": duplicate,
+        "workspace_item_id": workspace_item_id,
+    }
+    return response
+
+
+def asset_id_for_selected_clip_analysis(game, video_name, video_reference, payload):
+    for key in ("asset_id", "source_asset_id"):
+        asset_id = clean_optional_string(payload.get(key))
+        if asset_id:
+            return asset_id
+
+    mapped_asset_id = asset_id_for_video_name(game, video_name)
+    if mapped_asset_id:
+        return mapped_asset_id
+
+    index_id = configured_search_index_id(game)
+    if not index_id:
+        return None
+    references = [
+        video_reference,
+        payload.get("indexed_asset_id"),
+        payload.get("indexed_assetId"),
+        payload.get("video_reference"),
+        payload.get("video_name"),
+    ]
+    for reference in references:
+        clean_reference = clean_optional_string(reference)
+        if not clean_reference:
+            continue
+        indexed_asset = indexed_asset_for_reference(index_id, clean_reference)
+        if indexed_asset:
+            asset_id = indexed_asset_asset_id(indexed_asset)
+            if asset_id:
+                return asset_id
+    return None
+
+
+def selected_clip_analysis_prompt(
+    game,
+    video_name,
+    start_time,
+    end_time,
+    query=None,
+    marengo_description=None,
+    marengo_relevance=None,
+    video_reference=None,
+):
+    parts = [
+        "Analyze this single Marengo-retrieved sports clip with Pegasus 1.5.",
+        "Return JSON only using the provided schema.",
+        f"Game context: {game['label']} ({game['sport']}).",
+        f"Source video: {video_name}.",
+        f"Selected playable clip range: {start_time} - {end_time}.",
+        "Focus on the selected clip. Use nearby padded context only to understand the moment boundaries.",
+        "Generate producer-ready structured metadata: description, emotional_tone, key_action, participants, moment_types, tags, score_context, producer_summary, story_arc, editorial_use, recommended_formats, clip_boundary_notes, rights_safety_notes, evidence lists, and confidence.",
+        "participants should include named people, teams, crowd groups, officials, bench, or coaches only when supported; otherwise use grounded generic labels such as home crowd, teammates, coaching staff, or broadcast booth.",
+        "recommended_formats should describe useful edit surfaces such as 9:16 social reel, 16:9 recap, 1:1 feed cut, cold-open, reaction insert, or thumbnail candidate.",
+        "rights_safety_notes should flag visible broadcast graphics, scoreboard/OCR, crowd closeups, sponsor marks, or anything a producer should review before publishing.",
+        "Do not invent players, scores, emotions, audio, transcript, or visual details. Use empty arrays for unsupported evidence lists.",
+    ]
+    if video_reference and video_reference != video_name:
+        parts.append(f"Marengo indexed video reference: {video_reference}.")
+    if query:
+        parts.append(f"Original Marengo search query: {query}.")
+    if marengo_description:
+        parts.append(f"Marengo retrieved description: {marengo_description}.")
+    if marengo_relevance:
+        parts.append(f"Marengo retrieval rationale: {marengo_relevance}.")
+    return "\n".join(parts)
+
+
+def parse_selected_clip_analysis_json(result):
+    if isinstance(result, dict):
+        if all(key in result for key in SELECTED_CLIP_ANALYSIS_SCHEMA["required"]):
+            return result
+        nested_result = result.get("result")
+        if isinstance(nested_result, dict):
+            try:
+                return parse_selected_clip_analysis_json(nested_result)
+            except ApiError:
+                pass
+        for candidate in selected_clip_analysis_text_candidates(result):
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    raise ApiError("Pegasus 1.5 selected clip analysis did not include valid JSON", 502)
+
+
+def selected_clip_analysis_text_candidates(result):
+    candidates = []
+    for key in ("data", "text", "response", "output_text"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            candidates.append(value.strip())
+            event_text = event_stream_text(value)
+            if event_text:
+                candidates.append(event_text)
+    output = result.get("output")
+    if isinstance(output, str) and output.strip():
+        candidates.append(output.strip())
+    elif isinstance(output, list):
+        for item in output:
+            if isinstance(item, str) and item.strip():
+                candidates.append(item.strip())
+            elif isinstance(item, dict):
+                for key in ("data", "text", "content"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        candidates.append(value.strip())
+    return candidates
+
+
+def event_stream_text(value):
+    chunks = []
+    for line in value.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        text = event.get("text") if isinstance(event, dict) else None
+        if isinstance(text, str):
+            chunks.append(text)
+    return "".join(chunks).strip()
+
+
+def normalize_selected_clip_analysis(game, video_name, start_time, end_time, asset_id, video_reference, analyze_start, analyze_end, result, analysis):
+    if not isinstance(analysis, dict):
+        raise ApiError("Pegasus 1.5 selected clip analysis response was not an object", 502)
+    confidence = analysis.get("confidence")
+    if not isinstance(confidence, (int, float)):
+        confidence = 0.75
+    confidence = min(1, max(0.01, float(confidence)))
+    return {
+        "provider": "twelvelabs",
+        "model": TWELVELABS_PEGASUS_MODEL,
+        "source": "pegasus_clip_analysis",
+        "response_id": response_id(result),
+        "game_tag": game["tag"],
+        "video_name": video_name,
+        "video_reference": video_reference or video_name,
+        "asset_id": asset_id,
+        "start_time": start_time,
+        "end_time": end_time,
+        "analyze_window": {
+            "start_time": timecode_from_seconds(analyze_start),
+            "end_time": timecode_from_seconds(analyze_end),
+        },
+        "description": clean_optional_string(analysis.get("description")) or "Pegasus analyzed the selected clip.",
+        "emotional_tone": clean_optional_string(analysis.get("emotional_tone")) or "Not clearly supported",
+        "key_action": clean_optional_string(analysis.get("key_action")) or "No key action was clearly returned.",
+        "participants": normalize_participants(analysis.get("participants")),
+        "moment_types": normalize_analysis_list(analysis.get("moment_types")),
+        "tags": normalize_analysis_list(analysis.get("tags")),
+        "score_context": clean_optional_string(analysis.get("score_context")) or "No score context was clearly supported.",
+        "visual_evidence": normalize_analysis_list(analysis.get("visual_evidence")),
+        "audio_evidence": normalize_analysis_list(analysis.get("audio_evidence")),
+        "transcript_evidence": normalize_analysis_list(analysis.get("transcript_evidence")),
+        "producer_summary": clean_optional_string(analysis.get("producer_summary")) or "No producer summary was returned.",
+        "story_arc": clean_optional_string(analysis.get("story_arc")) or "No story arc was returned.",
+        "editorial_use": clean_optional_string(analysis.get("editorial_use")) or "Use as a selected clip after Marengo retrieval.",
+        "recommended_formats": normalize_analysis_list(analysis.get("recommended_formats")),
+        "clip_boundary_notes": clean_optional_string(analysis.get("clip_boundary_notes")) or "Use the selected Marengo range as the clip boundary.",
+        "rights_safety_notes": clean_optional_string(analysis.get("rights_safety_notes")) or "Review the source footage before publishing.",
+        "confidence": confidence,
+    }
+
+
+def normalize_participants(value):
+    if not isinstance(value, list):
+        return []
+    participants = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = clean_optional_string(item.get("name"))
+        if not name:
+            continue
+        participants.append(
+            {
+                "name": name,
+                "role": clean_optional_string(item.get("role")) or "Subject",
+                "team_or_group": clean_optional_string(item.get("team_or_group")) or "Unknown",
+                "evidence": clean_optional_string(item.get("evidence")) or "Visible or audible in the selected clip.",
+            }
+        )
+    return participants[:8]
+
+
+def create_entity_tracking_response(tag, payload=None):
+    game = get_game(tag)
+    payload = payload or {}
+    force_generate = bool(payload.get("force_generate") or payload.get("regenerate"))
+    requested_video = payload.get("video_name") or payload.get("source_video")
+    video_name = validate_registered_video_name(game, requested_video, status_code=404) if requested_video else None
+    index_id = configured_search_index_id(game)
+
+    if video_name and not force_generate:
+        asset_id = asset_id_for_video_name(game, video_name)
+        if asset_id:
+            indexed_assets = indexed_assets_for_video_metadata(game, index_id, asset_id, video_name)
+            for indexed_asset in indexed_assets:
+                cached = jockey_entity_tracking_from_indexed_asset(indexed_asset, video_name, asset_id)
+                if not cached:
+                    continue
+                indexed_asset_id = response_id(indexed_asset)
+                return jockey_entity_tracking_with_provenance(
+                    cached["tracking"],
+                    user_metadata=cached["metadata"],
+                    index_id=index_id,
+                    indexed_asset_id=indexed_asset_id,
+                    asset_id=asset_id,
+                    video_name=video_name,
+                    source="indexed_asset_user_metadata",
+                )
+
+    result = twelvelabs_request_json(
+        "post",
+        "/responses",
+        {
+            "model": TWELVELABS_MODEL,
+            "instructions": jockey_entity_tracking_instructions(),
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": entity_tracking_prompt(game, video_name),
+                }
+            ],
+            "knowledge_store_id": game["knowledge_store_id"],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "entity_tracking",
+                    "schema": ENTITY_TRACKING_SCHEMA,
+                }
+            },
+        },
+    )
+    manifest = parse_jockey_response_json(result, "TwelveLabs Jockey entity tracking response")
+    tracking = normalize_entity_tracking(game, video_name, result, manifest)
+
+    if video_name:
+        asset_id = asset_id_for_video_name(game, video_name)
+        if asset_id:
+            indexed_assets = indexed_assets_for_video_metadata(game, index_id, asset_id, video_name)
+            indexed_asset = indexed_asset_for_generated_metadata(game, index_id, asset_id, video_name, indexed_assets)
+            indexed_asset_id = response_id(indexed_asset)
+            if indexed_asset_id:
+                user_metadata = store_jockey_entity_tracking(
+                    index_id,
+                    indexed_asset_id,
+                    asset_id,
+                    video_name,
+                    tracking,
+                )
+                invalidate_index_videos_cache(tag)
+                merged_metadata = indexed_asset_user_metadata(indexed_asset)
+                if isinstance(user_metadata, dict):
+                    merged_metadata = {**merged_metadata, **user_metadata}
+                return jockey_entity_tracking_with_provenance(
+                    tracking,
+                    user_metadata=merged_metadata,
+                    index_id=index_id,
+                    indexed_asset_id=indexed_asset_id,
+                    asset_id=asset_id,
+                    video_name=video_name,
+                    source="generated_and_stored_to_user_metadata",
+                )
+
+    return tracking
+
+
+def jockey_entity_tracking_instructions():
+    return (
+        "You are a senior sports video analyst using TwelveLabs Jockey over a sports knowledge store. "
+        "Extract entity tracking from indexed source-footage evidence only. Return JSON only. "
+        "Do not invent named people, teams, timestamps, relationships, emotions, or actions. "
+        "Use generic entity names such as 'Arsenal players' or 'home crowd' when individual identity is not grounded."
+    )
+
+
+def entity_tracking_prompt(game, video_name=None):
+    parts = [
+        "Extract an entity tracking manifest for Dashboard display.",
+        f"Game context: {game['label']} ({game['sport']}).",
+        "Return the most important grounded entities in the footage: players, teams, coaches, officials, fan groups, benches, or broadcast subjects.",
+        "For each entity, include 1-5 timestamped appearances with start_time, end_time, action, emotion, and context.",
+        "Entity confidence must be 0.01 to 1.0 and should reflect how clearly the footage supports the entity identity and its appearances.",
+        "Use source-video timecodes like M:SS or H:MM:SS. Keep appearances short and playable.",
+        "Include relationships only when the footage supports a direct interaction, such as goal scorer with teammates, coach reacting to players, crowd reacting to a goal, or opponents contesting a play.",
+        "Prefer 4-8 high-value entities over exhaustive tracking. Use empty arrays when evidence is unsupported.",
+    ]
+    source_videos = game.get("source_videos", [])
+    if source_videos:
+        parts.append("Registered source videos: " + "; ".join(source_videos))
+    if video_name:
+        parts.append(f"Analyze only this registered source video: {video_name}.")
+    else:
+        parts.append("Analyze across the registered source videos in this knowledge store.")
+    return "\n".join(parts)
+
+
+def normalize_entity_tracking(game, video_name, result, manifest):
+    if not isinstance(manifest, dict):
+        raise ApiError("TwelveLabs Jockey entity tracking response was not an object", 502)
+    entities = []
+    raw_entities = manifest.get("entities")
+    if isinstance(raw_entities, list):
+        for item in raw_entities:
+            entity = normalize_entity_tracking_entity(item)
+            if entity:
+                entities.append(entity)
+    relationships = []
+    raw_relationships = manifest.get("relationships")
+    if isinstance(raw_relationships, list):
+        for item in raw_relationships:
+            relationship = normalize_entity_tracking_relationship(item)
+            if relationship:
+                relationships.append(relationship)
+    return {
+        "provider": "twelvelabs",
+        "model": TWELVELABS_MODEL,
+        "source": "jockey_entity_tracking",
+        "response_id": response_id(result),
+        "game_tag": game["tag"],
+        "video_name": video_name,
+        "summary": clean_optional_string(manifest.get("summary")) or "Jockey did not return an entity summary for this source.",
+        "entities": entities[:8],
+        "relationships": relationships[:10],
+    }
+
+
+def normalize_entity_tracking_entity(value):
+    if not isinstance(value, dict):
+        return None
+    name = clean_optional_string(value.get("name"))
+    if not name:
+        return None
+    appearances = []
+    raw_appearances = value.get("appearances")
+    if isinstance(raw_appearances, list):
+        for item in raw_appearances[:5]:
+            appearance = normalize_entity_tracking_appearance(item)
+            if appearance:
+                appearances.append(appearance)
+    confidence = value.get("confidence")
+    if not isinstance(confidence, (int, float)):
+        confidence = 0.75
+    confidence = min(1, max(0.01, float(confidence)))
+    return {
+        "name": name,
+        "entity_type": clean_optional_string(value.get("entity_type")) or "entity",
+        "team_or_group": clean_optional_string(value.get("team_or_group")) or "Unknown",
+        "role": clean_optional_string(value.get("role")) or "Observed subject",
+        "description": clean_optional_string(value.get("description")) or "Grounded entity from the source footage.",
+        "confidence": confidence,
+        "appearances": appearances,
+    }
+
+
+def normalize_entity_tracking_appearance(value):
+    if not isinstance(value, dict):
+        return None
+    start_time = clean_optional_string(value.get("start_time"))
+    end_time = clean_optional_string(value.get("end_time"))
+    action = clean_optional_string(value.get("action"))
+    if not (start_time and end_time and action):
+        return None
+    return {
+        "start_time": start_time,
+        "end_time": end_time,
+        "action": action,
+        "emotion": clean_optional_string(value.get("emotion")) or "Not clearly supported",
+        "context": clean_optional_string(value.get("context")) or "Source-footage appearance.",
+    }
+
+
+def normalize_entity_tracking_relationship(value):
+    if not isinstance(value, dict):
+        return None
+    entity = clean_optional_string(value.get("entity"))
+    related_entity = clean_optional_string(value.get("related_entity"))
+    description = clean_optional_string(value.get("description"))
+    if not (entity and related_entity and description):
+        return None
+    return {
+        "entity": entity,
+        "related_entity": related_entity,
+        "timestamp": clean_optional_string(value.get("timestamp")) or "",
+        "interaction_type": clean_optional_string(value.get("interaction_type")) or "interaction",
+        "description": description,
+    }
+
+
+def normalize_analysis_list(value):
+    if not isinstance(value, list):
+        return []
+    notes = []
+    for item in value:
+        note = clean_optional_string(item)
+        if note:
+            notes.append(note)
+    return notes[:8]
+
+
 def create_jockey_chat_response(tag, payload=None):
     game = get_game(tag)
     payload = payload or {}
     message = required_payload_string(payload, "message")
     include_reel = payload.get("include_reel")
     include_reel = bool(include_reel) if include_reel is not None else jockey_message_requests_reel(message)
-    default_limit = 1 if include_reel and jockey_message_requests_specific_clip(message) else 8 if include_reel else 0
+    default_limit = 1 if include_reel and jockey_message_requests_specific_clip(message) else 4 if include_reel else 0
     limit = optional_payload_int(payload.get("limit"), "limit", default=default_limit, minimum=0, maximum=16)
     if not include_reel:
         limit = 0
     session_id = clean_optional_string(payload.get("session_id"))
+    conversation_history = normalize_jockey_conversation_history(payload.get("conversation_history"))
     requested_video = payload.get("video_name") or payload.get("source_video")
     video_name = validate_registered_video_name(game, requested_video) if requested_video else None
 
@@ -1453,7 +2631,7 @@ def create_jockey_chat_response(tag, payload=None):
             {
                 "type": "message",
                 "role": "user",
-                "content": jockey_chat_prompt(game, message, limit, video_name, include_reel),
+                "content": jockey_chat_prompt(game, message, limit, video_name, include_reel, conversation_history),
             }
         ],
         "knowledge_store_id": game["knowledge_store_id"],
@@ -1477,11 +2655,12 @@ def jockey_chat_instructions():
     return (
         "You are a senior sports highlight producer using TwelveLabs Jockey over a sports knowledge store. "
         "Use only indexed video evidence. Answer conversational producer questions plainly, and build clip manifests only when the request asks for a reel, specific clip, playable moment, or showcase highlight. "
+        "Use session continuity and the provided recent conversation history to interpret follow-up refinements. "
         "Return JSON only. Do not invent timestamps, filenames, scores, players, clip rationale, or intensity."
     )
 
 
-def jockey_chat_prompt(game, message, limit, video_name=None, include_reel=False):
+def jockey_chat_prompt(game, message, limit, video_name=None, include_reel=False, conversation_history=None):
     parts = [
         "Producer request:",
         message,
@@ -1489,11 +2668,19 @@ def jockey_chat_prompt(game, message, limit, video_name=None, include_reel=False
         f"Game context: {game['label']} ({game['sport']}).",
         "Registered source videos: " + "; ".join(game.get("source_videos", [])),
     ]
+    if conversation_history:
+        parts.extend(
+            [
+                "Recent conversation history, newest last. Use this only to resolve follow-up filters or refinements:",
+                json.dumps(conversation_history[-5:], ensure_ascii=False),
+            ]
+        )
     if include_reel:
         parts.extend(
             [
-                f"Return up to {limit} ranked clips for a simple Jockey reel or clip showcase.",
-                "Each clip must include video_reference, start_time, end_time, moment_type, emotional_intensity, jockey_rationale, and highlight_potential.",
+                f"Return up to {limit} ranked clips for a typed timestamp manifest that can be rendered as a simple Jockey reel or clip showcase.",
+                "Each clip must include video_reference, start_time, end_time, moment_type, emotional_intensity, jockey_rationale, confidence, and highlight_potential.",
+                "confidence is the grounded evidence confidence from 0.01 to 1.0 for the exact timestamp, moment type, and rationale. Omit clips when confidence cannot be supported.",
                 "Use timecodes like M:SS or H:MM:SS. Choose short, playable ranges.",
                 "Rank clips by editorial value and highlight_potential descending.",
             ]
@@ -1506,6 +2693,41 @@ def jockey_chat_prompt(game, message, limit, video_name=None, include_reel=False
         parts.append("You may reason across every registered source video in this knowledge store.")
     parts.append("If no grounded matches exist, return an empty clips array with a concise narrative_summary.")
     return "\n".join(parts)
+
+
+def normalize_jockey_conversation_history(value):
+    if not isinstance(value, list):
+        return []
+    history = []
+    for item in value[-5:]:
+        if not isinstance(item, dict):
+            continue
+        prompt = clean_optional_string(item.get("prompt") or item.get("user") or item.get("message"))
+        summary = clean_optional_string(item.get("narrative_summary") or item.get("summary") or item.get("assistant"))
+        clips = item.get("clips")
+        clip_summaries = []
+        if isinstance(clips, list):
+            for clip in clips[:8]:
+                if not isinstance(clip, dict):
+                    continue
+                clip_summaries.append(
+                    {
+                        "video_reference": clean_optional_string(clip.get("video_reference")),
+                        "start_time": clean_optional_string(clip.get("start_time")),
+                        "end_time": clean_optional_string(clip.get("end_time")),
+                        "moment_type": clean_optional_string(clip.get("moment_type")),
+                        "confidence": clip.get("confidence") if isinstance(clip.get("confidence"), (int, float)) else None,
+                    }
+                )
+        if prompt or summary or clip_summaries:
+            history.append(
+                {
+                    "prompt": prompt,
+                    "narrative_summary": summary,
+                    "clips": clip_summaries,
+                }
+            )
+    return history
 
 
 def jockey_message_requests_reel(message):
@@ -1559,12 +2781,28 @@ def normalize_jockey_chat_manifest(game, message, result, manifest, limit):
             clips.append(normalized)
 
     return {
-        "session_id": clean_optional_string(result.get("session_id")) or clean_optional_string(result.get("id")),
+        "session_id": jockey_response_session_id(result),
         "message": message,
         "narrative_summary": clean_optional_string(manifest.get("narrative_summary"))
         or "No grounded Jockey-curated moments were returned for this request.",
         "clips": clips,
     }
+
+
+def jockey_response_session_id(result):
+    if not isinstance(result, dict):
+        return None
+    for key in ("session_id", "response_session_id"):
+        value = clean_optional_string(result.get(key))
+        if value:
+            return value
+    session = result.get("session")
+    if isinstance(session, dict):
+        for key in ("id", "session_id"):
+            value = clean_optional_string(session.get(key))
+            if value:
+                return value
+    return clean_optional_string(result.get("id"))
 
 
 def normalize_jockey_chat_clip(game, raw_clip, index):
@@ -1580,31 +2818,21 @@ def normalize_jockey_chat_clip(game, raw_clip, index):
     stream_info_path = None
     video_url = None
     thumbnail_url = None
-    playback_asset_id = None
     stream_target = video_name or reference
     if stream_target:
         path_target = video_name or reference
         stream_info_path = f"/games/{game['tag']}/stream/{quote(path_target, safe='')}"
-        try:
-            stream_info = twelvelabs_stream_info(game["tag"], stream_target)
-            video_url = clean_optional_string(stream_info.get("manifest_url"))
-            playback_asset_id = clean_optional_string(stream_info.get("asset_id"))
-        except ApiError:
-            pass
-    if video_name:
-        thumbnail_url = registered_indexed_thumbnail_url(game["tag"], video_name)
-    elif reference:
-        index_id = configured_search_index_id(game)
-        if index_id:
-            indexed_asset = indexed_asset_for_reference(index_id, reference)
-            if indexed_asset:
-                thumbnail_url = indexed_asset_thumbnail_url(
-                    indexed_asset_with_user_metadata(index_id, indexed_asset)
-                )
+    source_asset_id = asset_id_for_selected_clip_analysis(game, video_name, reference, raw_clip)
     potential = raw_clip.get("highlight_potential")
     if not isinstance(potential, (int, float)):
         potential = 0
     potential = min(1, max(0, float(potential)))
+    confidence = raw_clip.get("confidence")
+    if not isinstance(confidence, (int, float)):
+        confidence = raw_clip.get("confidence_score")
+    if not isinstance(confidence, (int, float)):
+        confidence = potential or 0.75
+    confidence = min(1, max(0.01, float(confidence)))
 
     return {
         "id": f"jockey-chat-{index}-{sha256(json.dumps(raw_clip, sort_keys=True, default=str).encode()).hexdigest()[:12]}",
@@ -1615,8 +2843,9 @@ def normalize_jockey_chat_clip(game, raw_clip, index):
         "moment_type": clean_optional_string(raw_clip.get("moment_type")) or "jockey_curated",
         "emotional_intensity": clean_optional_string(raw_clip.get("emotional_intensity")) or "unknown",
         "jockey_rationale": rationale,
+        "confidence": confidence,
         "highlight_potential": potential,
-        "source_asset_id": playback_asset_id or asset_id_for_video_name(game, video_name),
+        "source_asset_id": source_asset_id,
         "thumbnail_url": thumbnail_url,
         "stream_info_path": stream_info_path,
         "video_url": video_url,
@@ -1727,6 +2956,7 @@ def normalize_marengo_search_result(game, query, raw_result, index):
     title = f"{query} match"
     description = transcription or f"Found a visual/audio match for \"{query}\"."
     relevance = f"Rank {rank if isinstance(rank, int) else index + 1} result from visual/audio search."
+    source_asset_id = marengo_result_source_asset_id(game, raw_result, video_name, reference)
 
     return {
         "id": f"marengo-{index}-{sha256(json.dumps(raw_result, sort_keys=True, default=str).encode()).hexdigest()[:12]}",
@@ -1742,8 +2972,36 @@ def normalize_marengo_search_result(game, query, raw_result, index):
         "confidence": confidence,
         "rank": rank,
         "thumbnail_url": clean_optional_string(raw_result.get("thumbnail_url")),
-        "source_asset_id": asset_id_for_video_name(game, video_name),
+        "source_asset_id": source_asset_id,
     }
+
+
+def marengo_result_source_asset_id(game, raw_result, video_name, reference):
+    for key in ("source_asset_id", "asset_id", "assetId", "video_asset_id", "videoAssetId"):
+        asset_id = clean_optional_string(raw_result.get(key))
+        if asset_id:
+            return asset_id
+
+    asset_id = asset_id_for_video_name(game, video_name)
+    if asset_id:
+        return asset_id
+
+    index_id = configured_search_index_id(game)
+    if not index_id:
+        return None
+    for key in ("indexed_asset_id", "indexedAssetId", "video_id", "id"):
+        candidate = clean_optional_string(raw_result.get(key))
+        if not candidate:
+            continue
+        indexed_asset = indexed_asset_for_reference(index_id, candidate)
+        if indexed_asset:
+            indexed_asset_id = indexed_asset_asset_id(indexed_asset)
+            if indexed_asset_id:
+                return indexed_asset_id
+    indexed_asset = indexed_asset_for_reference(index_id, reference)
+    if indexed_asset:
+        return indexed_asset_asset_id(indexed_asset)
+    return None
 
 
 def video_name_for_marengo_result(game, raw_result, reference):

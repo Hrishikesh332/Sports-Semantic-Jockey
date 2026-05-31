@@ -98,7 +98,25 @@ def parse_args():
 
 
 def source_already_registered(game, source_name):
-    return source_name in game.get("video_asset_ids", {})
+    if source_name not in game.get("video_asset_ids", {}):
+        return False
+    asset_id = game.get("video_asset_ids", {}).get(source_name)
+    if not asset_id:
+        return True
+    try:
+        response = requests.get(
+            f"{os.environ.get('TWELVELABS_API_BASE', 'https://api.twelvelabs.io/v1.3')}/assets/{asset_id}",
+            headers={"x-api-key": os.environ.get("TWELVELABS_API_KEY", "")},
+            timeout=30,
+        )
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        body = response.json()
+        hls = body.get("hls") or {}
+        return bool(hls.get("manifest_url") and hls.get("status") == "ready")
+    except requests.RequestException:
+        return False
 
 
 def segment_already_registered(game, upload_name):

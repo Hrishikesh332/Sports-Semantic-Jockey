@@ -2,15 +2,26 @@ from flask import Blueprint, Response, jsonify, redirect, request, send_file, se
 
 from app.core.errors import ApiError
 from app.core.validation import json_body, uploaded_file
+from app.services.jockey_workspace_metadata import (
+    append_saved_clip_analysis,
+    append_saved_jockey_turn,
+    append_saved_jockey_turns_for_exchange,
+    get_jockey_workspace_metadata,
+)
 from app.services.games import (
     THUMBNAILS_DIR,
     VIDEOS_DIR,
     generated_reel_clip,
     generated_reel_thumbnail,
+    create_entity_tracking_response,
     generate_game_highlight_reels,
     create_jockey_chat_response,
+    create_selected_clip_analysis,
     get_game,
+    list_game_discover_videos,
     list_game_index_videos,
+    repair_game_video,
+    queue_game_video_repair,
     list_games,
     public_game,
     register_game,
@@ -49,6 +60,16 @@ def show_game_index_videos(tag):
     return jsonify(list_game_index_videos(tag))
 
 
+@games_bp.get("/games/<tag>/discover-videos")
+def show_game_discover_videos(tag):
+    return jsonify(list_game_discover_videos(tag))
+
+
+@games_bp.post("/games/<tag>/videos/<video_name>/repair")
+def repair_game_video_route(tag, video_name):
+    return jsonify(queue_game_video_repair(tag, video_name)), 202
+
+
 @games_bp.post("/games/<tag>/highlight-reels")
 def create_game_highlight_reels(tag):
     reels = generate_game_highlight_reels(tag, json_body())
@@ -71,6 +92,41 @@ def upload_game_media(tag):
 def jockey_chat(tag):
     result = create_jockey_chat_response(tag, json_body())
     return jsonify(result)
+
+
+@games_bp.post("/games/<tag>/clip-analysis")
+def selected_clip_analysis(tag):
+    result = create_selected_clip_analysis(tag, json_body())
+    return jsonify(result)
+
+
+@games_bp.post("/games/<tag>/entity-tracking")
+def entity_tracking(tag):
+    result = create_entity_tracking_response(tag, json_body())
+    return jsonify(result)
+
+
+@games_bp.get("/games/<tag>/videos/<video_name>/jockey-workspace")
+def show_jockey_workspace(tag, video_name):
+    return jsonify(get_jockey_workspace_metadata(tag, video_name))
+
+
+@games_bp.post("/games/<tag>/videos/<video_name>/jockey-workspace/saved-clip-analysis")
+def save_jockey_workspace_clip_analysis(tag, video_name):
+    result = append_saved_clip_analysis(tag, video_name, json_body())
+    return jsonify(result), 201
+
+
+@games_bp.post("/games/<tag>/videos/<video_name>/jockey-workspace/saved-jockey-turn")
+def save_jockey_workspace_turn(tag, video_name):
+    result = append_saved_jockey_turn(tag, video_name, json_body())
+    return jsonify(result), 201
+
+
+@games_bp.post("/games/<tag>/jockey-workspace/saved-jockey-turn")
+def save_jockey_workspace_turns(tag):
+    result = append_saved_jockey_turns_for_exchange(tag, json_body())
+    return jsonify(result), 201
 
 
 @games_bp.get("/games/<tag>/media/<video_name>")

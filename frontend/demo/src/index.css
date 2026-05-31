@@ -20,9 +20,21 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.strand-icon svg {
+.strand-icon,
+.logo-svg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.strand-icon svg,
+.logo-svg svg {
+  display: block;
   width: 100%;
   height: 100%;
+  flex: 0 0 auto;
 }
 
 .workspace-video-carousel::before,

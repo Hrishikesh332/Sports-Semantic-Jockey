@@ -70,6 +70,12 @@ type ViewKey = 'discover' | 'workspace' | 'jockey' | 'overview'
 type ReelFormatKey = '9x16' | '16x9' | '1x1' | '4x5'
 type HighlightReelRequestOptions = { silent?: boolean }
 
+type WorkspaceAnalysisResponse = {
+  video_name?: string
+  highlight_reels: HighlightReels
+  entity_tracking?: EntityTrackingResponse
+}
+
 type PegasusResponseMetadata = {
   source?: string
   from_user_metadata?: boolean
@@ -103,6 +109,19 @@ type IndexVideo = {
   duration_seconds?: number | null
   selectable?: boolean
   has_pegasus_metadata?: boolean
+  has_jockey_highlight_metadata?: boolean
+  jockey_highlight_generated_at?: string | null
+  jockey_highlight_clip_counts?: Partial<Record<MapCategoryKey, number>> | null
+  has_jockey_entity_tracking_metadata?: boolean
+  jockey_entity_tracking_generated_at?: string | null
+  jockey_entity_tracking_entity_count?: number | null
+  has_jockey_workspace_metadata?: boolean
+  jockey_workspace_updated_at?: string | null
+  jockey_workspace_counts?: {
+    clip_analysis?: number
+    jockey_turn?: number
+    total?: number
+  } | null
   metadata_generated_at?: string | null
   metadata_source_video_name?: string | null
   metadata_clip_counts?: Partial<Record<MapCategoryKey, number>> | null
@@ -111,6 +130,49 @@ type IndexVideo = {
 type IndexVideoResponse = {
   index_id?: string
   index_videos: IndexVideo[]
+}
+
+type DiscoverVideo = {
+  video_name: string
+  thumbnail_url?: string | null
+  thumbnail_path?: string | null
+  stream_info_path?: string | null
+  indexed?: boolean
+  in_live_index?: boolean
+  playback_ready?: boolean
+  discoverable?: boolean
+  stale_registration?: boolean
+  repair_available?: boolean
+  has_local_thumbnail?: boolean
+  indexed_asset_id?: string | null
+  asset_id?: string | null
+  status?: string | null
+}
+
+type JockeyWorkspaceSaveResponse = {
+  game_tag: string
+  video_name: string
+  item: {
+    id: string
+    kind: string
+    saved_at: string
+  }
+  duplicate: boolean
+  summary?: {
+    counts?: {
+      clip_analysis?: number
+      jockey_turn?: number
+      total?: number
+    }
+  }
+}
+
+type JockeyWorkspaceBatchSaveResponse = {
+  saved: Array<{
+    video_name: string
+    item_id: string
+    duplicate: boolean
+  }>
 }
 
 type DiscoverMatch = {
@@ -197,6 +259,19 @@ type MarengoSearchResponse = {
   results: MarengoSearchResult[]
 }
 
+type DiscoverSearchSession = {
+  searchQuery: string
+  submittedSearchQuery: string
+  searchResponse: MarengoSearchResponse | null
+  activePreviewId: string | null
+  searchError: string
+}
+
+type WorkspaceUiSession = {
+  selectedSourceVideoName: string | null
+  selectedSearchMoment: SearchMoment | null
+}
+
 type UploadGameVideoResponse = {
   status: 'indexing' | 'ready'
   video_name: string
@@ -215,12 +290,105 @@ type UploadPreviewItem = {
 type SearchMoment = {
   videoName: string
   videoReference: string
+  query?: string
+  sourceAssetId?: string | null
   title: string
   description: string
   relevance: string
   startTime?: string
   endTime?: string
   sourceLabel?: string
+}
+
+type SelectedClipAnalysis = {
+  provider: string
+  model: string
+  source: string
+  response_id?: string | null
+  game_tag: string
+  video_name: string
+  video_reference: string
+  asset_id?: string | null
+  start_time: string
+  end_time: string
+  analyze_window?: {
+    start_time: string
+    end_time: string
+  }
+  description: string
+  emotional_tone: string
+  key_action: string
+  participants: Array<{
+    name: string
+    role: string
+    team_or_group: string
+    evidence: string
+  }>
+  moment_types: string[]
+  tags: string[]
+  score_context: string
+  visual_evidence: string[]
+  audio_evidence: string[]
+  transcript_evidence: string[]
+  producer_summary: string
+  story_arc: string
+  editorial_use: string
+  recommended_formats: string[]
+  clip_boundary_notes: string
+  rights_safety_notes: string
+  confidence: number
+  _jockey_metadata?: {
+    source?: string
+    from_user_metadata?: boolean
+    saved_at?: string | null
+    stored_to_user_metadata?: boolean
+    duplicate?: boolean
+    workspace_item_id?: string | null
+  }
+}
+
+type EntityTrackingAppearance = {
+  start_time: string
+  end_time: string
+  action: string
+  emotion: string
+  context: string
+}
+
+type EntityTrack = {
+  name: string
+  entity_type: string
+  team_or_group: string
+  role: string
+  description: string
+  confidence: number
+  appearances: EntityTrackingAppearance[]
+}
+
+type EntityRelationship = {
+  entity: string
+  related_entity: string
+  timestamp: string
+  interaction_type: string
+  description: string
+}
+
+type EntityTrackingResponse = {
+  provider: string
+  model: string
+  source: string
+  response_id?: string | null
+  game_tag: string
+  video_name?: string | null
+  summary: string
+  entities: EntityTrack[]
+  relationships: EntityRelationship[]
+  _jockey_metadata?: {
+    source?: string
+    from_user_metadata?: boolean
+    entity_count?: number
+    generated_at?: string | null
+  }
 }
 
 type SegmentRange = {
@@ -239,6 +407,7 @@ type JockeyManifestClip = {
   moment_type: string
   emotional_intensity: string
   jockey_rationale: string
+  confidence: number
   highlight_potential: number
   source_asset_id?: string | null
   thumbnail_url?: string | null
@@ -249,6 +418,7 @@ type JockeyManifestClip = {
 type JockeyChatRequest = {
   message: string
   session_id?: string
+  conversation_history?: JockeyConversationTurn[]
   include_reel?: boolean
   video_name?: string
   limit?: number
@@ -270,6 +440,18 @@ type JockeyChatExchange = {
   showReel: boolean
 }
 
+type JockeyConversationTurn = {
+  prompt: string
+  narrative_summary?: string
+  clips?: Array<{
+    video_reference: string
+    start_time: string
+    end_time: string
+    moment_type: string
+    confidence: number
+  }>
+}
+
 const categories: Array<{ key: CategoryKey; label: string; icon: string }> = [
   { key: 'best_plays', label: 'Best Plays', icon: 'trophy' },
   { key: 'emotional_moments', label: 'Emotional Moments', icon: 'flame' },
@@ -279,7 +461,7 @@ const categories: Array<{ key: CategoryKey; label: string; icon: string }> = [
 
 const assemblyModes: Array<{ key: AssemblyModeKey; label: string; detail: string; icon: string }> = [
   { key: 'wsc_baseline', label: 'Stats Baseline', detail: 'Event-feed baseline', icon: 'usage' },
-  { key: 'twelvelabs_enhanced', label: 'TwelveLabs Enhanced', detail: 'Stats plus Pegasus semantic lift', icon: 'vision' },
+  { key: 'twelvelabs_enhanced', label: 'TwelveLabs Enhanced', detail: 'Stats plus Jockey semantic lift', icon: 'vision' },
   { key: 'hyper_personalized', label: 'Hyper-Personalized', detail: 'One lane, social-first', icon: 'filter' },
 ]
 
@@ -347,6 +529,82 @@ const uploadRequirementLabels = [
   'File size ≤4GB per video',
 ]
 const JOCKEY_CHAT_CACHE_PREFIX = 'sports-jockey:jockey-chat:'
+const DISCOVER_SESSION_PREFIX = 'sports-jockey:discover-session:'
+const WORKSPACE_UI_SESSION_KEY = 'sports-jockey:workspace-ui-session-v1'
+
+function emptyDiscoverSearchSession(): DiscoverSearchSession {
+  return {
+    searchQuery: '',
+    submittedSearchQuery: '',
+    searchResponse: null,
+    activePreviewId: null,
+    searchError: '',
+  }
+}
+
+function loadDiscoverSearchSessions(): Record<string, DiscoverSearchSession> {
+  if (typeof window === 'undefined') return {}
+  const sessions: Record<string, DiscoverSearchSession> = {}
+  for (let index = 0; index < window.sessionStorage.length; index += 1) {
+    const key = window.sessionStorage.key(index)
+    if (!key || !key.startsWith(DISCOVER_SESSION_PREFIX)) continue
+    try {
+      const parsed = JSON.parse(window.sessionStorage.getItem(key) || '') as DiscoverSearchSession
+      if (!parsed || typeof parsed !== 'object') continue
+      sessions[key.slice(DISCOVER_SESSION_PREFIX.length)] = {
+        ...emptyDiscoverSearchSession(),
+        ...parsed,
+        searchResponse: parsed.searchResponse && typeof parsed.searchResponse === 'object' ? parsed.searchResponse : null,
+      }
+    } catch {
+      // Ignore invalid persisted discover sessions.
+    }
+  }
+  return sessions
+}
+
+function persistDiscoverSearchSession(tag: string, session: DiscoverSearchSession) {
+  if (typeof window === 'undefined' || !tag) return
+  const key = `${DISCOVER_SESSION_PREFIX}${tag}`
+  const hasContent = Boolean(
+    session.searchQuery.trim()
+    || session.submittedSearchQuery.trim()
+    || session.searchResponse
+    || session.searchError
+    || session.activePreviewId,
+  )
+  if (!hasContent) {
+    window.sessionStorage.removeItem(key)
+    return
+  }
+  window.sessionStorage.setItem(key, JSON.stringify(session))
+}
+
+function loadWorkspaceUiSession(): WorkspaceUiSession | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(WORKSPACE_UI_SESSION_KEY) || '') as WorkspaceUiSession
+    if (!parsed || typeof parsed !== 'object') return null
+    return {
+      selectedSourceVideoName: parsed.selectedSourceVideoName || null,
+      selectedSearchMoment: parsed.selectedSearchMoment && typeof parsed.selectedSearchMoment === 'object'
+        ? parsed.selectedSearchMoment
+        : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+function persistWorkspaceUiSession(session: WorkspaceUiSession) {
+  if (typeof window === 'undefined') return
+  const hasContent = Boolean(session.selectedSourceVideoName || session.selectedSearchMoment)
+  if (!hasContent) {
+    window.sessionStorage.removeItem(WORKSPACE_UI_SESSION_KEY)
+    return
+  }
+  window.sessionStorage.setItem(WORKSPACE_UI_SESSION_KEY, JSON.stringify(session))
+}
 
 const signalColors: Record<MapCategoryKey, { bg: string; border: string; text: string; track: string }> = {
   standard_stats: { bg: '#E8E7E5', border: '#B8B6B3', text: '#4F4F4F', track: '#E8E7E5' },
@@ -414,10 +672,18 @@ function App() {
   const [selectedSourceVideoName, setSelectedSourceVideoName] = useState<string | null>(null)
   const [pendingWorkspaceVideoName, setPendingWorkspaceVideoName] = useState<string | null>(null)
   const [selectedSearchMoment, setSelectedSearchMoment] = useState<SearchMoment | null>(null)
+  const [clipAnalysesByKey, setClipAnalysesByKey] = useState<Record<string, SelectedClipAnalysis>>({})
+  const [clipAnalysisLoadingKey, setClipAnalysisLoadingKey] = useState('')
+  const [clipAnalysisError, setClipAnalysisError] = useState('')
+  const [entityTrackingByKey, setEntityTrackingByKey] = useState<Record<string, EntityTrackingResponse>>({})
+  const [entityTrackingLoadingKey, setEntityTrackingLoadingKey] = useState('')
+  const [entityTrackingError, setEntityTrackingError] = useState('')
   const [reelFormat, setReelFormat] = useState<ReelFormatKey>('9x16')
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
   const [uploadNotice, setUploadNotice] = useState('')
-  const requestedTags = useRef<Set<string>>(new Set())
+  const [discoverSessionByTag, setDiscoverSessionByTag] = useState<Record<string, DiscoverSearchSession>>(() => loadDiscoverSearchSessions())
+  const [workspaceUiHydrated, setWorkspaceUiHydrated] = useState(false)
+  const inFlightReelsRef = useRef<Set<string>>(new Set())
   const suppressNextVideoReset = useRef(false)
   const selectedGame = useMemo(
     () => games.find((game) => game.tag === selectedTag) || null,
@@ -445,36 +711,179 @@ function App() {
   const standardClip = scopedReels?.standard_stats.clips[selectedStandardClipIndex] || scopedReels?.standard_stats.clips[0]
   const featuredClip = featuredSignalCategory === 'standard_stats' ? standardClip : enhancedClip
   const activeSearchMoment = selectedSearchMoment && selectedSearchMoment.videoName === activeVideoName ? selectedSearchMoment : null
+  const selectedClipAnalysisKey = selectedTag && activeSearchMoment ? selectedClipAnalysisCacheKey(selectedTag, activeSearchMoment) : ''
+  const selectedClipAnalysis = selectedClipAnalysisKey ? clipAnalysesByKey[selectedClipAnalysisKey] : undefined
+  const selectedClipAnalysisLoading = Boolean(selectedClipAnalysisKey && clipAnalysisLoadingKey === selectedClipAnalysisKey)
+  const selectedClipAnalysisError = selectedClipAnalysisKey ? clipAnalysisError : ''
+  const entityTrackingKey = selectedTag && activeVideoName ? `${selectedTag}|${activeVideoName}` : ''
+  const entityTracking = entityTrackingKey ? entityTrackingByKey[entityTrackingKey] : undefined
+  const entityTrackingLoading = Boolean(entityTrackingKey && entityTrackingLoadingKey === entityTrackingKey)
+  const activeEntityTrackingError = entityTrackingKey ? entityTrackingError : ''
   const featuredEyebrow = featuredSignalCategory === 'standard_stats'
     ? 'Event Feed'
     : categories.find((category) => category.key === selectedCategory)?.label || 'Enhanced'
-  const featuredTitle = featuredSignalCategory === 'standard_stats' ? 'Event Feed Baseline' : 'Pegasus Discovery Cut'
+  const featuredTitle = featuredSignalCategory === 'standard_stats' ? 'Event Feed Baseline' : 'Jockey Discovery Cut'
+  const activeIndexVideo = useMemo(() => {
+    if (!selectedGame || !activeVideoName) return undefined
+    return workspaceIndexVideos.find((video) => indexVideoWorkspaceName(selectedGame, video) === activeVideoName)
+  }, [activeVideoName, selectedGame, workspaceIndexVideos])
+  const hasCachedHighlightMetadata = Boolean(activeIndexVideo?.has_jockey_highlight_metadata)
+  const hasCachedEntityTrackingMetadata = Boolean(activeIndexVideo?.has_jockey_entity_tracking_metadata)
+  const hasCachedClipAnalysisMetadata = Boolean((activeIndexVideo?.jockey_workspace_counts?.clip_analysis || 0) > 0)
   const hasHighlightAnalysis = scopedReels ? hasHighlightClips(scopedReels) : false
   const isLoadingReels = Boolean(selectedReelsKey && loadingTag === selectedReelsKey)
   const isLoadingIndexVideos = Boolean(selectedTag && loadingIndexVideosTag === selectedTag)
+  const activeDiscoverSession = selectedTag
+    ? discoverSessionByTag[selectedTag] || emptyDiscoverSearchSession()
+    : emptyDiscoverSearchSession()
+
+  const updateDiscoverSession = useCallback((tag: string, patch: Partial<DiscoverSearchSession>) => {
+    if (!tag) return
+    setDiscoverSessionByTag((current) => {
+      const previous = current[tag] || emptyDiscoverSearchSession()
+      const next = { ...previous, ...patch }
+      persistDiscoverSearchSession(tag, next)
+      return { ...current, [tag]: next }
+    })
+  }, [])
+
+  const clearDiscoverSearch = useCallback((tag: string) => {
+    if (!tag) return
+    setDiscoverSessionByTag((current) => {
+      const next = { ...current, [tag]: emptyDiscoverSearchSession() }
+      persistDiscoverSearchSession(tag, emptyDiscoverSearchSession())
+      return next
+    })
+  }, [])
+
+  const handleDiscoverSessionChange = useCallback((patch: Partial<DiscoverSearchSession>) => {
+    if (selectedTag) updateDiscoverSession(selectedTag, patch)
+  }, [selectedTag, updateDiscoverSession])
+
+  const handleDiscoverClearSearch = useCallback(() => {
+    if (selectedTag) clearDiscoverSearch(selectedTag)
+  }, [clearDiscoverSearch, selectedTag])
+
+  const clearSelectedClipSession = useCallback(() => {
+    setSelectedSearchMoment(null)
+    setClipAnalysisError('')
+    setClipAnalysisLoadingKey('')
+  }, [])
+
   const requestHighlightReels = useCallback((videoName?: string, options: HighlightReelRequestOptions = {}) => {
-    if (!selectedTag) return
+    if (!selectedTag) return Promise.resolve()
     const cacheKey = reelCacheKey(selectedTag, videoName)
-    if (reelsByTag[cacheKey] || requestedTags.current.has(cacheKey)) return
-    requestedTags.current.add(cacheKey)
+    const entityKey = videoName ? `${selectedTag}|${videoName}` : ''
+    if (reelsByTag[cacheKey] && (!videoName || entityTrackingByKey[entityKey])) return Promise.resolve()
+    if (inFlightReelsRef.current.has(cacheKey)) return Promise.resolve()
+
+    inFlightReelsRef.current.add(cacheKey)
     if (!options.silent) {
       setLoadingTag(cacheKey)
       setReelsError('')
+      if (entityKey) {
+        setEntityTrackingLoadingKey(entityKey)
+        setEntityTrackingError('')
+      }
     }
-    fetchJson<HighlightReels>(`/games/${encodeURIComponent(selectedTag)}/highlight-reels`, {
+
+    const requestPayload = videoName
+      ? {
+          ...indexVideoRequestPayload(selectedGame, workspaceIndexVideos, videoName),
+          include_entity_tracking: true,
+        }
+      : {}
+
+    return fetchJson<HighlightReels | WorkspaceAnalysisResponse>(`/games/${encodeURIComponent(selectedTag)}/highlight-reels`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(videoName ? indexVideoRequestPayload(selectedGame, workspaceIndexVideos, videoName) : {}),
+      body: JSON.stringify(requestPayload),
     })
-      .then((body) => setReelsByTag((current) => ({ ...current, [cacheKey]: body })))
+      .then((body) => {
+        const bundled = isWorkspaceAnalysisResponse(body) ? body : null
+        const highlightReels = bundled?.highlight_reels || (body as HighlightReels)
+        setReelsByTag((current) => ({ ...current, [cacheKey]: highlightReels }))
+
+        if (bundled?.entity_tracking && entityKey) {
+          setEntityTrackingByKey((current) => ({ ...current, [entityKey]: bundled.entity_tracking! }))
+        }
+
+        if (!videoName || !selectedGame) return
+
+        const highlightProvenance = highlightReels._pegasus_metadata
+        if (
+          highlightProvenance
+          && (highlightProvenance.from_user_metadata || highlightProvenance.source === 'generated_and_stored_to_user_metadata')
+        ) {
+          setIndexVideosByTag((current) => {
+            const videos = current[selectedTag]
+            if (!videos) return current
+            return {
+              ...current,
+              [selectedTag]: videos.map((video) => {
+                if (indexVideoWorkspaceName(selectedGame, video) !== videoName) return video
+                return {
+                  ...video,
+                  has_jockey_highlight_metadata: true,
+                  jockey_highlight_generated_at: highlightProvenance.generated_at || video.jockey_highlight_generated_at || null,
+                  jockey_highlight_clip_counts: highlightProvenance.clip_counts || video.jockey_highlight_clip_counts || null,
+                }
+              }),
+            }
+          })
+        }
+
+        const entityProvenance = bundled?.entity_tracking?._jockey_metadata
+        if (
+          entityProvenance
+          && (entityProvenance.from_user_metadata || entityProvenance.source === 'generated_and_stored_to_user_metadata')
+        ) {
+          setIndexVideosByTag((current) => {
+            const videos = current[selectedTag]
+            if (!videos) return current
+            return {
+              ...current,
+              [selectedTag]: videos.map((video) => {
+                if (indexVideoWorkspaceName(selectedGame, video) !== videoName) return video
+                return {
+                  ...video,
+                  has_jockey_entity_tracking_metadata: true,
+                  jockey_entity_tracking_generated_at: entityProvenance.generated_at || video.jockey_entity_tracking_generated_at || null,
+                  jockey_entity_tracking_entity_count: entityProvenance.entity_count ?? video.jockey_entity_tracking_entity_count ?? null,
+                }
+              }),
+            }
+          })
+        }
+      })
       .catch((error: Error) => {
-        requestedTags.current.delete(cacheKey)
         if (!options.silent) setReelsError(error.message)
+        if (entityKey) setEntityTrackingError(error.message)
       })
       .finally(() => {
-        if (!options.silent) setLoadingTag((current) => (current === cacheKey ? '' : current))
+        inFlightReelsRef.current.delete(cacheKey)
+        if (!options.silent) {
+          setLoadingTag((current) => (current === cacheKey ? '' : current))
+          if (entityKey) setEntityTrackingLoadingKey((current) => (current === entityKey ? '' : current))
+        }
       })
-  }, [reelsByTag, selectedGame, selectedTag, workspaceIndexVideos])
+  }, [entityTrackingByKey, reelsByTag, selectedGame, selectedTag, workspaceIndexVideos])
+
+  useEffect(() => {
+    if (workspaceUiHydrated) return
+    const saved = loadWorkspaceUiSession()
+    if (saved?.selectedSourceVideoName) setSelectedSourceVideoName(saved.selectedSourceVideoName)
+    if (saved?.selectedSearchMoment) setSelectedSearchMoment(saved.selectedSearchMoment)
+    setWorkspaceUiHydrated(true)
+  }, [workspaceUiHydrated])
+
+  useEffect(() => {
+    if (!workspaceUiHydrated) return
+    persistWorkspaceUiSession({
+      selectedSourceVideoName,
+      selectedSearchMoment,
+    })
+  }, [selectedSearchMoment, selectedSourceVideoName, workspaceUiHydrated])
 
   useEffect(() => {
     let active = true
@@ -496,7 +905,8 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!selectedTag || indexVideosByTag[selectedTag]) return
+    if (!selectedTag) return
+    if (indexVideosByTag[selectedTag]) return
     let active = true
     setLoadingIndexVideosTag(selectedTag)
     setIndexVideosError('')
@@ -520,9 +930,116 @@ function App() {
   }, [indexVideosByTag, selectedTag])
 
   useEffect(() => {
-    if (view !== 'workspace' || !activeVideoName) return
-    requestHighlightReels(activeVideoName)
-  }, [activeVideoName, requestHighlightReels, view])
+    if (view !== 'workspace' || !activeVideoName || activeSearchMoment) return
+    void requestHighlightReels(activeVideoName)
+  }, [activeSearchMoment, activeVideoName, requestHighlightReels, view])
+
+  useEffect(() => {
+    if (!selectedReelsKey) return
+    if (reelsByTag[selectedReelsKey]) {
+      setLoadingTag((current) => (current === selectedReelsKey ? '' : current))
+    }
+  }, [reelsByTag, selectedReelsKey])
+
+  useEffect(() => {
+    if (view !== 'workspace' || !activeVideoName || activeSearchMoment || isLoadingReels) return
+    if (!selectedReelsKey || reelsByTag[selectedReelsKey] || reelsError) return
+    const retryTimer = window.setTimeout(() => {
+      if (!inFlightReelsRef.current.has(selectedReelsKey)) {
+        void requestHighlightReels(activeVideoName)
+      }
+    }, 1500)
+    return () => window.clearTimeout(retryTimer)
+  }, [
+    activeSearchMoment,
+    activeVideoName,
+    isLoadingReels,
+    reelsByTag,
+    reelsError,
+    requestHighlightReels,
+    selectedReelsKey,
+    view,
+  ])
+
+  useEffect(() => {
+    if (view !== 'workspace' || !selectedTag || !activeSearchMoment?.startTime || !selectedClipAnalysisKey) return
+    if (clipAnalysesByKey[selectedClipAnalysisKey]) {
+      setClipAnalysisError('')
+      return
+    }
+    let active = true
+    setClipAnalysisLoadingKey(selectedClipAnalysisKey)
+    setClipAnalysisError('')
+    fetchJson<SelectedClipAnalysis>(`/games/${encodeURIComponent(selectedTag)}/clip-analysis`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        video_name: activeSearchMoment.videoName,
+        video_reference: activeSearchMoment.videoReference,
+        start_time: activeSearchMoment.startTime,
+        end_time: activeSearchMoment.endTime,
+        asset_id: activeSearchMoment.sourceAssetId,
+        query: activeSearchMoment.query,
+        description: activeSearchMoment.description,
+        relevance: activeSearchMoment.relevance,
+      }),
+    })
+      .then((body) => {
+        if (!active) return
+        setClipAnalysesByKey((current) => ({ ...current, [selectedClipAnalysisKey]: body }))
+        const provenance = body._jockey_metadata
+        if (
+          provenance
+          && selectedGame
+          && activeSearchMoment
+          && (provenance.from_user_metadata || provenance.stored_to_user_metadata)
+        ) {
+          setIndexVideosByTag((current) => {
+            const videos = current[selectedTag]
+            if (!videos) return current
+            return {
+              ...current,
+              [selectedTag]: videos.map((video) => {
+                if (indexVideoWorkspaceName(selectedGame, video) !== activeSearchMoment.videoName) return video
+                const clipCount = Math.max(video.jockey_workspace_counts?.clip_analysis || 0, 1)
+                return {
+                  ...video,
+                  has_jockey_workspace_metadata: true,
+                  jockey_workspace_updated_at: provenance.saved_at || video.jockey_workspace_updated_at || null,
+                  jockey_workspace_counts: {
+                    ...video.jockey_workspace_counts,
+                    clip_analysis: clipCount,
+                    total: Math.max(video.jockey_workspace_counts?.total || 0, clipCount),
+                  },
+                }
+              }),
+            }
+          })
+        }
+      })
+      .catch((error: Error) => {
+        if (active) setClipAnalysisError(error.message)
+      })
+      .finally(() => {
+        if (active) setClipAnalysisLoadingKey((current) => (current === selectedClipAnalysisKey ? '' : current))
+      })
+    return () => {
+      active = false
+    }
+  }, [
+    activeSearchMoment?.description,
+    activeSearchMoment?.endTime,
+    activeSearchMoment?.query,
+    activeSearchMoment?.relevance,
+    activeSearchMoment?.sourceAssetId,
+    activeSearchMoment?.startTime,
+    activeSearchMoment?.videoName,
+    activeSearchMoment?.videoReference,
+    clipAnalysesByKey,
+    selectedClipAnalysisKey,
+    selectedTag,
+    view,
+  ])
 
   useEffect(() => {
     setReelsError('')
@@ -591,6 +1108,19 @@ function App() {
       document.getElementById('assembly-highlights')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }
+  const scrollSelectedClipAnalysisIntoView = () => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const target = document.getElementById('selected-clip-analysis') as HTMLElement | null
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          target.focus({ preventScroll: true })
+          return
+        }
+        document.getElementById('workspace-details')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    })
+  }
   const selectWorkspaceClipForVideo = (videoName: string, currentGame: Game, currentReels: HighlightReels) => {
     const match = clipSelectionForVideo(currentGame, currentReels, videoName)
     if (!match) return false
@@ -621,9 +1151,10 @@ function App() {
       return
     }
     const canUseRequestedVideo = dashboardVideoName === videoName
+    const shouldAnalyzeSelectedClip = canUseRequestedVideo && Boolean(searchMoment)
     setSelectedSourceVideoName(dashboardVideoName)
     setSelectedSearchMoment(canUseRequestedVideo ? searchMoment || null : null)
-    if (canUseRequestedVideo && searchMoment) setAssemblyMode('twelvelabs_enhanced')
+    if (shouldAnalyzeSelectedClip) setAssemblyMode('twelvelabs_enhanced')
     if (target && canUseRequestedVideo) {
       suppressNextVideoReset.current = true
       if (target.categoryKey === 'standard_stats') {
@@ -638,11 +1169,15 @@ function App() {
     } else {
       setSelectedEnhancedClipIndex(0)
       setSelectedStandardClipIndex(0)
-      setFeaturedSignalCategory(canUseRequestedVideo && searchMoment ? 'standard_stats' : 'best_plays')
-      setPendingWorkspaceVideoName(canUseRequestedVideo ? dashboardVideoName : null)
+      setFeaturedSignalCategory('best_plays')
+      setPendingWorkspaceVideoName(shouldAnalyzeSelectedClip ? null : canUseRequestedVideo ? dashboardVideoName : null)
     }
     navigate('workspace')
-    scrollWorkspaceDetailsIntoView()
+    if (shouldAnalyzeSelectedClip) {
+      scrollSelectedClipAnalysisIntoView()
+    } else {
+      scrollWorkspaceDetailsIntoView()
+    }
   }
 
   useEffect(() => {
@@ -659,6 +1194,11 @@ function App() {
     setPendingWorkspaceVideoName(null)
     scrollWorkspaceDetailsIntoView()
   }, [pendingWorkspaceVideoName, selectedGame, scopedReels, activeVideoName])
+
+  useEffect(() => {
+    if (view !== 'workspace' || !selectedClipAnalysisKey) return
+    scrollSelectedClipAnalysisIntoView()
+  }, [selectedClipAnalysisKey, view])
 
   const updateRegisteredGame = (updatedGame: Game, preferredVideoName?: string) => {
     setGames((current) => {
@@ -744,7 +1284,7 @@ function App() {
             <div className="flex items-center gap-4">
               <span
                 className={[
-                  'inline-flex h-9 w-[180px] items-center',
+                  'logo-svg inline-flex h-9 w-[180px] shrink-0 items-center justify-center',
                   'text-brand-charcoal',
                 ].join(' ')}
                 dangerouslySetInnerHTML={{ __html: logoFull }}
@@ -826,6 +1366,9 @@ function App() {
           indexVideos={workspaceIndexVideos}
           loading={loadingGames}
           error={gamesError}
+          session={activeDiscoverSession}
+          onSessionChange={handleDiscoverSessionChange}
+          onClearSearch={handleDiscoverClearSearch}
           onOpenInWorkspace={openSourceInWorkspace}
         />
         ) : view === 'jockey' ? (
@@ -853,6 +1396,9 @@ function App() {
             selectedGame={selectedGame}
             workspaceIndexVideos={workspaceIndexVideos}
             workspaceVideoNames={workspaceVideoNames}
+            hasCachedHighlightMetadata={hasCachedHighlightMetadata}
+            hasCachedEntityTrackingMetadata={hasCachedEntityTrackingMetadata}
+            hasCachedClipAnalysisMetadata={hasCachedClipAnalysisMetadata}
             reels={scopedReels}
             hasHighlightAnalysis={hasHighlightAnalysis}
             activeVideoName={activeVideoName}
@@ -860,9 +1406,16 @@ function App() {
             selectedEnhancedClipIndex={selectedEnhancedClipIndex}
             selectedStandardClipIndex={selectedStandardClipIndex}
             selectedSearchMoment={activeSearchMoment}
+            selectedClipAnalysis={selectedClipAnalysis}
+            selectedClipAnalysisLoading={selectedClipAnalysisLoading}
+            selectedClipAnalysisError={selectedClipAnalysisError}
+            entityTracking={entityTracking}
+            entityTrackingLoading={entityTrackingLoading}
+            entityTrackingError={activeEntityTrackingError}
             assemblyMode={assemblyMode}
             reelFormat={reelFormat}
             onOpenDiscover={() => navigate('discover')}
+            onClearSelectedClip={clearSelectedClipSession}
             onSourceVideoSelect={openVideoInWorkspace}
             onAssemblyModeChange={setAssemblyMode}
             onReelFormatChange={setReelFormat}
@@ -939,6 +1492,9 @@ function ProducerCockpit({
   selectedGame,
   workspaceIndexVideos,
   workspaceVideoNames,
+  hasCachedHighlightMetadata,
+  hasCachedEntityTrackingMetadata,
+  hasCachedClipAnalysisMetadata,
   reels,
   hasHighlightAnalysis,
   activeVideoName,
@@ -946,9 +1502,16 @@ function ProducerCockpit({
   selectedEnhancedClipIndex,
   selectedStandardClipIndex,
   selectedSearchMoment,
+  selectedClipAnalysis,
+  selectedClipAnalysisLoading,
+  selectedClipAnalysisError,
+  entityTracking,
+  entityTrackingLoading,
+  entityTrackingError,
   assemblyMode,
   reelFormat,
   onOpenDiscover,
+  onClearSelectedClip,
   onSourceVideoSelect,
   onAssemblyModeChange,
   onReelFormatChange,
@@ -965,6 +1528,9 @@ function ProducerCockpit({
   selectedGame: Game | null
   workspaceIndexVideos: IndexVideo[]
   workspaceVideoNames: string[]
+  hasCachedHighlightMetadata: boolean
+  hasCachedEntityTrackingMetadata: boolean
+  hasCachedClipAnalysisMetadata: boolean
   reels?: HighlightReels
   hasHighlightAnalysis: boolean
   activeVideoName?: string
@@ -972,9 +1538,16 @@ function ProducerCockpit({
   selectedEnhancedClipIndex: number
   selectedStandardClipIndex: number
   selectedSearchMoment: SearchMoment | null
+  selectedClipAnalysis?: SelectedClipAnalysis
+  selectedClipAnalysisLoading: boolean
+  selectedClipAnalysisError: string
+  entityTracking?: EntityTrackingResponse
+  entityTrackingLoading: boolean
+  entityTrackingError: string
   assemblyMode: AssemblyModeKey
   reelFormat: ReelFormatKey
   onOpenDiscover: () => void
+  onClearSelectedClip: () => void
   onSourceVideoSelect: (videoName: string) => void
   onAssemblyModeChange: (mode: AssemblyModeKey) => void
   onReelFormatChange: (format: ReelFormatKey) => void
@@ -985,8 +1558,10 @@ function ProducerCockpit({
   const enhancedCategory = reels?.[selectedCategory]
   const standardClip = reels?.standard_stats.clips[selectedStandardClipIndex] || reels?.standard_stats.clips[0]
   const enhancedClip = enhancedCategory?.clips[selectedEnhancedClipIndex] || enhancedCategory?.clips[0]
-  const showProductionTools = Boolean(selectedGame && reels && hasHighlightAnalysis)
-  const showExplainabilityRail = Boolean(reels && hasHighlightAnalysis)
+  const isSelectedClipMode = Boolean(selectedSearchMoment)
+  const showProductionTools = Boolean(!isSelectedClipMode && selectedGame && reels && hasHighlightAnalysis)
+  const showExplainabilityRail = Boolean(!isSelectedClipMode && reels && hasHighlightAnalysis)
+  const showSplitComparison = Boolean(!isSelectedClipMode && reels && hasHighlightAnalysis)
   const [explainRailCollapsed, setExplainRailCollapsed] = useState(false)
 
   const handleAssemblyModeChange = (mode: AssemblyModeKey) => {
@@ -1004,17 +1579,43 @@ function ProducerCockpit({
         indexVideosError={indexVideosError}
         selectedGame={selectedGame}
         workspaceVideoCount={workspaceIndexVideos.length}
+        hasCachedHighlightMetadata={hasCachedHighlightMetadata}
+        hasCachedEntityTrackingMetadata={hasCachedEntityTrackingMetadata}
+        hasCachedClipAnalysisMetadata={hasCachedClipAnalysisMetadata}
         reels={reels}
         activeVideoName={activeVideoName}
+        selectedSearchMoment={selectedSearchMoment}
+        selectedClipAnalysis={selectedClipAnalysis}
+        selectedClipAnalysisLoading={selectedClipAnalysisLoading}
+        selectedClipAnalysisError={selectedClipAnalysisError}
+        entityTracking={entityTracking}
+        entityTrackingLoading={entityTrackingLoading}
+        entityTrackingError={entityTrackingError}
         onOpenDiscover={onOpenDiscover}
+        onClearSelectedClip={onClearSelectedClip}
       />
 
-      <WorkspaceModeBar
-        mode={assemblyMode}
-        onModeChange={handleAssemblyModeChange}
-      />
+      {!isSelectedClipMode && (
+        <WorkspaceModeBar
+          mode={assemblyMode}
+          onModeChange={handleAssemblyModeChange}
+        />
+      )}
 
-      {reels && !hasHighlightAnalysis && <PegasusIndexNotice game={selectedGame} />}
+      {!isSelectedClipMode && reels && !hasHighlightAnalysis && <AnalysisIndexNotice game={selectedGame} />}
+
+      {isSelectedClipMode && selectedSearchMoment && selectedGame && (
+        <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+          <SelectedClipAnalysisSection
+            game={selectedGame}
+            searchMoment={selectedSearchMoment}
+            analysis={selectedClipAnalysis}
+            loading={selectedClipAnalysisLoading}
+            error={selectedClipAnalysisError}
+            hasCachedMetadata={hasCachedClipAnalysisMetadata}
+          />
+        </section>
+      )}
 
       <div
         className={[
@@ -1023,23 +1624,24 @@ function ProducerCockpit({
         ].join(' ')}
       >
         <section className="flex min-w-0 flex-col gap-6">
-          <div id="workspace-details" className="scroll-mt-40">
-            <SplitComparisonStage
-              game={selectedGame}
-              reels={reels}
-              activeVideoName={activeVideoName}
-              assemblyMode={assemblyMode}
-              selectedCategory={selectedCategory}
-              standardClip={standardClip}
-              enhancedClip={enhancedClip}
-              searchMoment={selectedSearchMoment}
-              standardIndex={selectedStandardClipIndex}
-              enhancedIndex={selectedEnhancedClipIndex}
-              onStandardSelect={onSelectStandardClip}
-              onEnhancedSelect={onSelectEnhancedClip}
-              emptyText={isLoadingReels ? 'Generating PRD highlight lanes' : 'No clips returned for this source'}
-            />
-          </div>
+          {showSplitComparison && (
+            <div id="workspace-details" className="scroll-mt-40">
+              <SplitComparisonStage
+                game={selectedGame}
+                reels={reels}
+                activeVideoName={activeVideoName}
+                assemblyMode={assemblyMode}
+                selectedCategory={selectedCategory}
+                standardClip={standardClip}
+                enhancedClip={enhancedClip}
+                standardIndex={selectedStandardClipIndex}
+                enhancedIndex={selectedEnhancedClipIndex}
+                onStandardSelect={onSelectStandardClip}
+                onEnhancedSelect={onSelectEnhancedClip}
+                emptyText={isLoadingReels ? 'Generating PRD highlight lanes' : 'No clips returned for this source'}
+              />
+            </div>
+          )}
 
           {selectedGame && (
             <WorkspaceVideoCarousel
@@ -1135,7 +1737,12 @@ function WorkspaceModeBar({
   return (
     <section className="flex min-w-0 flex-col gap-3 px-1 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent bg-accent-light text-brand-charcoal">
+        <span
+          className={[
+            'flex h-9 w-9 shrink-0 items-center justify-center text-brand-charcoal',
+            activeMode.key === 'twelvelabs_enhanced' ? '' : 'rounded-md border border-accent bg-accent-light',
+          ].join(' ')}
+        >
           <ModeGlyph mode={activeMode.key} icon={activeMode.icon} className={activeMode.key === 'twelvelabs_enhanced' ? 'h-5 w-7' : 'h-4 w-4'} />
         </span>
         <div className="min-w-0">
@@ -1176,7 +1783,7 @@ function ModeGlyph({
   className?: string
 }) {
   if (mode === 'twelvelabs_enhanced') {
-    return <span className={['inline-flex text-current [&>svg]:h-full [&>svg]:w-full', className || 'h-4 w-5'].join(' ')} dangerouslySetInnerHTML={{ __html: logoMark }} />
+    return <span className={['logo-svg inline-flex shrink-0 text-current', className || 'h-4 w-5'].join(' ')} dangerouslySetInnerHTML={{ __html: logoMark }} />
   }
   return <StrandIcon name={icon} className={className} />
 }
@@ -1299,7 +1906,6 @@ function SplitComparisonStage({
   selectedCategory,
   standardClip,
   enhancedClip,
-  searchMoment,
   standardIndex,
   enhancedIndex,
   onStandardSelect,
@@ -1313,7 +1919,6 @@ function SplitComparisonStage({
   selectedCategory: CategoryKey
   standardClip?: Clip
   enhancedClip?: Clip
-  searchMoment?: SearchMoment | null
   standardIndex: number
   enhancedIndex: number
   onStandardSelect: (index: number) => void
@@ -1322,17 +1927,13 @@ function SplitComparisonStage({
 }) {
   const category = reels?.[selectedCategory]
   const rightTitle =
-    searchMoment
-      ? searchMoment.title
-      : assemblyMode === 'wsc_baseline'
+    assemblyMode === 'wsc_baseline'
       ? 'Event Feed Baseline'
       : assemblyMode === 'hyper_personalized'
         ? category?.title || 'Hyper-Personalized Lane'
         : 'TwelveLabs Enhanced Cut'
   const rightEyebrow =
-    searchMoment
-      ? searchMoment.sourceLabel || 'Marengo Search'
-      : assemblyMode === 'wsc_baseline'
+    assemblyMode === 'wsc_baseline'
       ? 'Stats Only'
       : categories.find((item) => item.key === selectedCategory)?.label || 'Semantic'
   const rightClip = assemblyMode === 'wsc_baseline' ? standardClip : enhancedClip
@@ -1342,7 +1943,7 @@ function SplitComparisonStage({
       <div className="grid gap-4 border-b border-border-light bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary">Split-View Player</p>
-          <h2 className="mt-1 text-lg font-semibold text-text-primary">Stats baseline vs Pegasus lift</h2>
+          <h2 className="mt-1 text-lg font-semibold text-text-primary">Stats baseline vs Jockey lift</h2>
         </div>
         <div className="flex flex-wrap gap-2 lg:justify-end">
           <span className="inline-flex h-8 items-center rounded-sm border border-border bg-surface px-2.5 text-xs font-semibold text-text-secondary">
@@ -1370,9 +1971,8 @@ function SplitComparisonStage({
           tone="enhanced"
           game={game}
           sourceVideoName={activeVideoName}
-          clip={searchMoment ? undefined : rightClip}
-          searchMoment={searchMoment}
-          timelineCategory={searchMoment ? undefined : category}
+          clip={rightClip}
+          timelineCategory={category}
           timelineLabel={rightEyebrow}
           selectedTimelineIndex={enhancedIndex}
           onTimelineSelect={onEnhancedSelect}
@@ -1390,7 +1990,6 @@ function ComparisonPlayer({
   game,
   sourceVideoName,
   clip,
-  searchMoment,
   timelineCategory,
   timelineLabel,
   selectedTimelineIndex,
@@ -1403,7 +2002,6 @@ function ComparisonPlayer({
   game: Game | null
   sourceVideoName?: string
   clip?: Clip
-  searchMoment?: SearchMoment | null
   timelineCategory?: HighlightCategory
   timelineLabel: string
   selectedTimelineIndex: number
@@ -1411,9 +2009,9 @@ function ComparisonPlayer({
   emptyText: string
 }) {
   const clipVideoName = game && clip ? videoNameForClip(game, clip) : undefined
-  const sourceName = searchMoment?.videoName || clipVideoName || sourceVideoName
-  const startTime = searchMoment?.startTime || clip?.start_time
-  const endTime = searchMoment?.endTime || clip?.end_time
+  const sourceName = clipVideoName || sourceVideoName
+  const startTime = clip?.start_time
+  const endTime = clip?.end_time
   const startSeconds = startTime ? secondsFromTime(startTime) : 0
   const endSeconds = endTime ? secondsFromTime(endTime) : undefined
   const streamInfoUrl = game && sourceName ? streamInfoForVideoName(game, sourceName) : null
@@ -1423,13 +2021,9 @@ function ComparisonPlayer({
       ? thumbnailForVideoName(game, sourceName)
       : undefined
   const colorClass = tone === 'baseline' ? 'text-brand-charcoal' : 'text-accent'
-  const hasPlayable = Boolean(streamInfoUrl && (searchMoment || clip || sourceName))
-  const description = searchMoment?.description || clip?.description || ''
-  const metaLabel = searchMoment
-    ? `${searchMoment.sourceLabel || 'Marengo search'} match`
-    : clip
-      ? `${sourceLabel(clip.source_type)} · ${cleanClipTypeLabel(clip.clip_type)}`
-      : 'Source video'
+  const hasPlayable = Boolean(streamInfoUrl && (clip || sourceName))
+  const description = clip?.description || ''
+  const metaLabel = clip ? `${sourceLabel(clip.source_type)} · ${cleanClipTypeLabel(clip.clip_type)}` : 'Source video'
 
   return (
     <article className="min-w-0 border-b border-border-light last:border-b-0 xl:border-b-0 xl:border-r xl:last:border-r-0">
@@ -1805,7 +2399,9 @@ function ProducerChatPanel({
     if (!message || loading) return
     const submittedSkill = activeSkill || jockeySkillForPrompt(message)
     const showReel = jockeyPromptRequestsReel(message, submittedSkill)
-    const reelLimit = showReel && jockeyPromptRequestsSpecificClip(message) ? 1 : 8
+    const reelLimit = showReel && jockeyPromptRequestsSpecificClip(message) ? 1 : 4
+    const sessionId = latestJockeySessionId(exchanges)
+    const conversationHistory = jockeyConversationHistory(exchanges, 5)
     const currentExchange: JockeyChatExchange = {
       id: `jockey-exchange-${Date.now()}`,
       prompt: message,
@@ -1819,21 +2415,20 @@ function ProducerChatPanel({
       message,
       include_reel: showReel,
       limit: showReel ? reelLimit : 0,
+      conversation_history: conversationHistory,
     }
-    fetchJson<JockeyChatResponse>(`/games/${encodeURIComponent(game.tag)}/jockey-chat`, {
+    if (sessionId) body.session_id = sessionId
+    fetchJson<unknown>(`/games/${encodeURIComponent(game.tag)}/jockey-chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
       .then((response) => {
-        setExchanges((current) =>
-          current.map((exchange) => (exchange.id === currentExchange.id ? { ...currentExchange, response } : exchange)),
-        )
+        const normalizedResponse = normalizeJockeyChatResponse(response, message)
+        setExchanges((current) => upsertJockeyChatExchange(current, { ...currentExchange, response: normalizedResponse }))
       })
       .catch((error: Error) => {
-        setExchanges((current) =>
-          current.map((exchange) => (exchange.id === currentExchange.id ? { ...currentExchange, error: error.message } : exchange)),
-        )
+        setExchanges((current) => upsertJockeyChatExchange(current, { ...currentExchange, error: error.message || 'Jockey request failed' }))
       })
       .finally(() => setLoading(false))
   }
@@ -1889,6 +2484,12 @@ function ProducerChatPanel({
             ref={composerRef}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                submitPrompt(draft)
+              }
+            }}
             rows={1}
             className="max-h-[132px] min-h-[48px] flex-1 resize-none bg-transparent px-2 py-3 text-sm font-medium leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
             placeholder={activeSkill ? activeSkill.label : 'Ask Jockey a question or ask for a clip.'}
@@ -1924,13 +2525,7 @@ function JockeyExchangeView({
 }) {
   return (
     <div className="min-w-0">
-      <div
-        className="ml-auto max-w-3xl rounded-md border px-4 py-3 text-sm font-semibold leading-6 text-brand-charcoal"
-        style={{
-          borderColor: jockeySkillForKey(exchange.skillKey)?.color || '#00DC82',
-          backgroundColor: jockeySkillForKey(exchange.skillKey)?.tint || 'rgba(0,220,130,0.12)',
-        }}
-      >
+      <div className="ml-auto max-w-3xl rounded-md border border-brand-charcoal bg-brand-charcoal px-4 py-3 text-sm font-semibold leading-6 text-white shadow-[0_8px_20px_rgba(29,28,27,0.14)]">
         <p>{exchange.prompt}</p>
       </div>
       {exchange.error ? (
@@ -1940,6 +2535,7 @@ function JockeyExchangeView({
       ) : exchange.response ? (
         <JockeyResponseShowcase
           game={game}
+          exchange={exchange}
           response={exchange.response}
           skill={jockeySkillForKey(exchange.skillKey)}
           showReel={exchange.showReel}
@@ -1952,24 +2548,34 @@ function JockeyExchangeView({
 
 function JockeyResponseShowcase({
   game,
+  exchange,
   response,
   skill,
   showReel,
   onOpenInWorkspace,
 }: {
   game: Game
+  exchange: JockeyChatExchange
   response: JockeyChatResponse
   skill?: (typeof jockeyProducerSkills)[number]
   showReel: boolean
   onOpenInWorkspace: (videoName: string, searchMoment: SearchMoment) => void
 }) {
+  const clips = Array.isArray(response.clips) ? response.clips : []
+
   if (showReel) {
     return (
       <div className="mt-4">
-        {response.clips.length ? (
+        <JockeyManifestSummary
+          game={game}
+          exchange={exchange}
+          response={response}
+          skill={skill}
+        />
+        {clips.length ? (
           <JockeyClipShowcase
             game={game}
-            clips={response.clips}
+            clips={clips}
             onOpenInWorkspace={onOpenInWorkspace}
           />
         ) : (
@@ -1981,11 +2587,108 @@ function JockeyResponseShowcase({
 
   return (
     <div className="mt-4 max-w-4xl rounded-md border border-border-light bg-surface px-4 py-4 shadow-[0_1px_2px_rgba(31,41,33,0.035)]">
-      <div className="flex items-center gap-2">
-        <StrandIcon name={skill?.icon || 'speech'} className="h-4 w-4 text-accent" />
-        <h3 className="text-sm font-semibold text-text-primary">Jockey</h3>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <StrandIcon name={skill?.icon || 'speech'} className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-semibold text-text-primary">Jockey</h3>
+        </div>
+        <JockeySaveTurnButton game={game} exchange={exchange} response={response} />
       </div>
       <p className="mt-3 text-sm font-medium leading-6 text-text-secondary">{response.narrative_summary}</p>
+    </div>
+  )
+}
+
+function JockeyManifestSummary({
+  game,
+  exchange,
+  response,
+  skill,
+}: {
+  game: Game
+  exchange: JockeyChatExchange
+  response: JockeyChatResponse
+  skill?: (typeof jockeyProducerSkills)[number]
+}) {
+  return (
+    <div className="max-w-4xl rounded-md border border-border-light bg-surface px-4 py-4 shadow-[0_1px_2px_rgba(31,41,33,0.035)]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <StrandIcon name={skill?.icon || 'document-list'} className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-semibold text-text-primary">Jockey Reasoning</h3>
+        </div>
+        <JockeySaveTurnButton game={game} exchange={exchange} response={response} />
+      </div>
+      <p className="mt-3 text-sm font-medium leading-6 text-text-secondary">{response.narrative_summary}</p>
+    </div>
+  )
+}
+
+function JockeySaveTurnButton({
+  game,
+  exchange,
+  response,
+}: {
+  game: Game
+  exchange: JockeyChatExchange
+  response: JockeyChatResponse
+}) {
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
+  const promptPreview = exchange.prompt.length > 48 ? `${exchange.prompt.slice(0, 45)}...` : exchange.prompt
+  const targetVideos = jockeyExchangeTargetVideos(game, response)
+  const canSave = targetVideos.length > 0 && !exchange.error
+
+  const handleSave = async () => {
+    if (!canSave || saving) return
+    setSaving(true)
+    setError('')
+    try {
+      const body = await fetchJson<JockeyWorkspaceBatchSaveResponse>(
+        `/games/${encodeURIComponent(game.tag)}/jockey-workspace/saved-jockey-turn`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: exchange.prompt,
+            skill_key: exchange.skillKey,
+            show_reel: exchange.showReel,
+            response: exchange.response,
+          }),
+        },
+      )
+      if (!body.saved?.length) {
+        throw new Error('No video-specific Jockey turn was saved')
+      }
+      setSaved(true)
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="flex shrink-0 flex-col items-end gap-1">
+      <button
+        type="button"
+        aria-label={`Save Jockey turn: ${promptPreview}`}
+        title={saved ? 'Saved to video workspace metadata' : 'Save this turn to the source video workspace metadata'}
+        disabled={!canSave || saving}
+        className={[
+          'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold shadow-[0_1px_2px_rgba(31,41,33,0.035)]',
+          saved
+            ? 'border-accent/40 bg-accent-light text-brand-charcoal'
+            : 'border-border-light bg-card text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
+          !canSave || saving ? 'cursor-not-allowed opacity-60' : '',
+        ].join(' ')}
+        onClick={() => void handleSave()}
+      >
+        <StrandIcon name={saving ? 'spinner' : saved ? 'checkmark' : 'document'} className={['h-3.5 w-3.5', saving ? 'animate-spin' : ''].join(' ')} />
+        {saved ? 'Saved' : saving ? 'Saving' : 'Save'}
+      </button>
+      {error ? <span className="max-w-[220px] truncate text-[10px] font-semibold text-error">{error}</span> : null}
     </div>
   )
 }
@@ -2060,6 +2763,9 @@ function JockeyClipShowcase({
                 <p className="min-w-0 truncate font-mono text-xs font-semibold text-text-primary">
                   {formatSeconds(paddedRange.start)} - {formatSeconds(paddedRange.end)}
                 </p>
+                <span className="shrink-0 rounded-sm border border-border-light bg-card px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
+                  Conf. {confidenceLabel(clip.confidence)}
+                </span>
                 {workspaceMoment && sourceName && (
                   <button
                     type="button"
@@ -2184,8 +2890,7 @@ function WorkspaceExplainabilityRail({
 
         <div className="mt-4 rounded-md border border-accent/45 bg-accent-light/70 px-3 py-3 shadow-[0_1px_0_rgba(0,220,130,0.08)]">
           <div className="flex min-w-0 items-center justify-between gap-3">
-            <p className="inline-flex min-w-0 items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-charcoal">
-              <span className="h-2 w-2 shrink-0 rounded-full bg-accent shadow-[0_0_0_3px_rgba(0,220,130,0.14)]" />
+            <p className="inline-flex min-w-0 items-center text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-charcoal">
               <span className="truncate">Active evidence</span>
             </p>
             <span className="shrink-0 rounded-sm border border-accent/30 bg-surface/85 px-2 py-1 font-mono text-[11px] font-semibold text-text-secondary">
@@ -2879,29 +3584,34 @@ function DiscoverPage({
   indexVideos,
   loading,
   error,
+  session,
+  onSessionChange,
+  onClearSearch,
   onOpenInWorkspace,
 }: {
   game: Game | null
   indexVideos: IndexVideo[]
   loading: boolean
   error: string
+  session: DiscoverSearchSession
+  onSessionChange: (patch: Partial<DiscoverSearchSession>) => void
+  onClearSearch: () => void
   onOpenInWorkspace: (item: DiscoverItem) => void
 }) {
-  const [searchQuery, setSearchQuery] = useState('')
-  const [submittedSearchQuery, setSubmittedSearchQuery] = useState('')
-  const [searchResponse, setSearchResponse] = useState<MarengoSearchResponse | null>(null)
+  const searchRequestRef = useRef(0)
   const [searchLoading, setSearchLoading] = useState(false)
-  const [searchError, setSearchError] = useState('')
-  const [activePreviewId, setActivePreviewId] = useState<string | null>(null)
-  const sourceVideos = useMemo(() => game?.source_videos || [], [game])
+  const [discoverVideos, setDiscoverVideos] = useState<DiscoverVideo[]>([])
+  const [discoverVideosLoading, setDiscoverVideosLoading] = useState(false)
+  const { searchQuery, submittedSearchQuery, searchResponse, activePreviewId, searchError } = session
   const normalizedQuery = normalizeSearchText(submittedSearchQuery)
   const trimmedSearchQuery = submittedSearchQuery.trim()
   const draftSearchQuery = searchQuery.trim()
+  const hasActiveSearch = Boolean(trimmedSearchQuery || searchResponse || searchError)
   const items = useMemo(() => {
     if (!game) return []
     if (normalizedQuery) return searchResponse ? searchResultItems(game, searchResponse) : []
-    return sourceVideoItems(game, sourceVideos, indexVideos)
-  }, [game, indexVideos, normalizedQuery, searchResponse, sourceVideos])
+    return indexReadyDiscoverItems(game, indexVideos, discoverVideos)
+  }, [discoverVideos, game, indexVideos, normalizedQuery, searchResponse])
   const resultLabel = normalizedQuery
     ? searchLoading
       ? 'Searching'
@@ -2913,41 +3623,83 @@ function DiscoverPage({
 
   useEffect(() => {
     const firstSearchItem = normalizedQuery ? items.find((item) => item.resultType === 'search') : null
-    setActivePreviewId(firstSearchItem?.id || null)
-  }, [items, normalizedQuery])
+    const nextPreviewId = firstSearchItem?.id || null
+    if (nextPreviewId !== activePreviewId) {
+      onSessionChange({ activePreviewId: nextPreviewId })
+    }
+  }, [activePreviewId, items, normalizedQuery, onSessionChange])
 
   const submitSearch = useCallback(() => {
     const nextQuery = searchQuery.trim()
-    setSubmittedSearchQuery(nextQuery)
+    if (nextQuery === trimmedSearchQuery && searchResponse && !searchError) return
+    searchRequestRef.current += 1
+    onSessionChange({
+      submittedSearchQuery: nextQuery,
+      searchResponse: null,
+      searchError: '',
+      activePreviewId: null,
+    })
     if (!nextQuery) {
-      setSearchResponse(null)
-      setSearchError('')
       setSearchLoading(false)
     }
-  }, [searchQuery])
+  }, [onSessionChange, searchError, searchQuery, searchResponse, trimmedSearchQuery])
 
   const updateSearchQuery = useCallback((value: string) => {
-    setSearchQuery(value)
-    if (!value.trim()) {
-      setSubmittedSearchQuery('')
-      setSearchResponse(null)
-      setSearchError('')
-      setSearchLoading(false)
+    onSessionChange({ searchQuery: value })
+  }, [onSessionChange])
+
+  const clearSearch = useCallback(() => {
+    searchRequestRef.current += 1
+    setSearchLoading(false)
+    onClearSearch()
+  }, [onClearSearch])
+
+  const selectPreset = useCallback((preset: string) => {
+    searchRequestRef.current += 1
+    onSessionChange({
+      searchQuery: preset,
+      submittedSearchQuery: preset,
+      searchResponse: null,
+      searchError: '',
+      activePreviewId: null,
+    })
+  }, [onSessionChange])
+
+  useEffect(() => {
+    if (!game) {
+      setDiscoverVideos([])
+      setDiscoverVideosLoading(false)
+      return
     }
-  }, [])
+    let active = true
+    setDiscoverVideosLoading(true)
+    fetchJson<DiscoverVideoResponse>(`/games/${encodeURIComponent(game.tag)}/discover-videos`)
+      .then((body) => {
+        if (active) setDiscoverVideos(body.videos || [])
+      })
+      .catch(() => {
+        if (active) setDiscoverVideos([])
+      })
+      .finally(() => {
+        if (active) setDiscoverVideosLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [game])
 
   useEffect(() => {
     if (!game || !trimmedSearchQuery) {
-      setSearchResponse(null)
-      setSearchError('')
       setSearchLoading(false)
       return
     }
 
     let active = true
     const controller = new AbortController()
+    const requestId = searchRequestRef.current + 1
+    searchRequestRef.current = requestId
     setSearchLoading(true)
-    setSearchError('')
+    onSessionChange({ searchError: '' })
     const timeout = window.setTimeout(() => {
       fetchJson<MarengoSearchResponse>(`/games/${encodeURIComponent(game.tag)}/search`, {
         method: 'POST',
@@ -2961,16 +3713,19 @@ function DiscoverPage({
         }),
       })
         .then((body) => {
-          if (active) setSearchResponse(body)
+          if (active && requestId === searchRequestRef.current) {
+            onSessionChange({ searchResponse: body, searchError: '' })
+          }
         })
         .catch((fetchError: Error) => {
-          if (active && !controller.signal.aborted) {
-            setSearchResponse(null)
-            setSearchError(fetchError.message)
+          if (active && requestId === searchRequestRef.current && !controller.signal.aborted) {
+            onSessionChange({ searchResponse: null, searchError: fetchError.message })
           }
         })
         .finally(() => {
-          if (active) setSearchLoading(false)
+          if (active && requestId === searchRequestRef.current) {
+            setSearchLoading(false)
+          }
         })
     }, 360)
 
@@ -2979,7 +3734,7 @@ function DiscoverPage({
       window.clearTimeout(timeout)
       controller.abort()
     }
-  }, [game, trimmedSearchQuery])
+  }, [game, onSessionChange, trimmedSearchQuery])
 
   if (error) {
     return (
@@ -3019,14 +3774,13 @@ function DiscoverPage({
           value={searchQuery}
           onChange={updateSearchQuery}
           onSubmit={submitSearch}
+          onClear={clearSearch}
           resultLabel={resultLabel}
           searchLoading={searchLoading}
           canSearch={Boolean(draftSearchQuery) && !searchLoading}
+          canClear={hasActiveSearch && !searchLoading}
           presets={marengoSearchPresets}
-          onPresetSelect={(preset) => {
-            setSearchQuery(preset)
-            setSubmittedSearchQuery(preset)
-          }}
+          onPresetSelect={selectPreset}
         />
 
         <section className="min-w-0">
@@ -3043,7 +3797,17 @@ function DiscoverPage({
             </div>
           )}
 
-          {searchLoading && items.length === 0 ? (
+          {discoverVideosLoading && !normalizedQuery && items.length === 0 ? (
+            <div className="flex min-h-[320px] items-center justify-center rounded-md border border-border bg-card p-8 text-center">
+              <div className="max-w-sm">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
+                  <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
+                </div>
+                <h3 className="mt-4 text-base font-semibold text-text-primary">Loading indexed videos</h3>
+                <p className="mt-2 text-sm leading-6 text-text-secondary">Fetching ready videos from the TwelveLabs index.</p>
+              </div>
+            </div>
+          ) : searchLoading && items.length === 0 ? (
             <div className="flex min-h-[320px] items-center justify-center rounded-md border border-border bg-card p-8 text-center">
               <div className="max-w-sm">
                 <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
@@ -3061,7 +3825,11 @@ function DiscoverPage({
                   item={item}
                   onOpenInWorkspace={onOpenInWorkspace}
                   isPreviewActive={activePreviewId === item.id}
-                  onTogglePreview={() => setActivePreviewId((current) => (current === item.id ? null : item.id))}
+                  onTogglePreview={() => {
+                    onSessionChange({
+                      activePreviewId: activePreviewId === item.id ? null : item.id,
+                    })
+                  }}
                 />
               ))}
             </div>
@@ -3078,18 +3846,22 @@ function DiscoverSearchPanel({
   value,
   onChange,
   onSubmit,
+  onClear,
   resultLabel,
   searchLoading,
   canSearch,
+  canClear,
   presets,
   onPresetSelect,
 }: {
   value: string
   onChange: (value: string) => void
   onSubmit: () => void
+  onClear: () => void
   resultLabel: string
   searchLoading: boolean
   canSearch: boolean
+  canClear: boolean
   presets: string[]
   onPresetSelect: (value: string) => void
 }) {
@@ -3107,6 +3879,7 @@ function DiscoverSearchPanel({
             onChange={(event) => onChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') onSubmit()
+              if (event.key === 'Escape') onClear()
             }}
             className="min-w-0 flex-1 bg-transparent text-base font-medium text-text-primary outline-none placeholder:text-text-tertiary"
             placeholder="Search visual/audio moments: player celebration, crowd roar, diving save..."
@@ -3114,7 +3887,7 @@ function DiscoverSearchPanel({
           {value && (
             <button
               type="button"
-              onClick={() => onChange('')}
+              onClick={onClear}
               className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-text-secondary hover:border-accent hover:text-brand-charcoal"
               aria-label="Clear search"
               title="Clear search"
@@ -3136,6 +3909,16 @@ function DiscoverSearchPanel({
             <StrandIcon name="search" className="h-4 w-4" />
             Search
           </button>
+          {canClear && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+            >
+              <StrandIcon name="close" className="h-4 w-4" />
+              Clear
+            </button>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           {presets.map((preset) => (
@@ -3145,7 +3928,7 @@ function DiscoverSearchPanel({
               onClick={() => onPresetSelect(preset)}
               className="inline-flex h-8 max-w-full items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
             >
-              <StrandIcon name="vision" className="h-3.5 w-3.5 text-accent" />
+              <StrandIcon name="search-v2" className="h-4 w-4 text-accent" />
               <span className="truncate">{preset}</span>
             </button>
           ))}
@@ -3183,7 +3966,11 @@ function DiscoverResultCard({
   const isMomentResult = item.resultType === 'moment' || item.resultType === 'search'
   const canOpen = Boolean(item.videoName)
   const canPreviewSegment = item.resultType === 'search' && Boolean(item.media && item.searchMoment && item.startTime)
-  const actionLabel = isMomentResult ? `Open moment in ${item.videoName}` : `Open details for ${item.videoName}`
+  const actionLabel = item.resultType === 'search'
+    ? `Analyze clip in Dashboard for ${item.videoName}`
+    : isMomentResult
+      ? `Open moment in ${item.videoName}`
+      : `Open details for ${item.videoName}`
   const timeRange = item.startTime ? `${item.startTime}${item.endTime ? ` - ${item.endTime}` : ''}` : ''
   const previewStartSeconds = item.startTime ? secondsFromTime(item.startTime) : 0
   const previewEndSeconds = item.endTime ? secondsFromTime(item.endTime) : undefined
@@ -3196,6 +3983,8 @@ function DiscoverResultCard({
       }
     : undefined
   const primaryMatch = item.matches[0]
+  const showLabel = item.label !== 'Indexed Video'
+  const showSubtitle = Boolean(item.subtitle && item.subtitle.toLowerCase() !== 'ready')
 
   return (
     <article className="group flex min-w-0 flex-col overflow-hidden rounded-md border border-border bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
@@ -3247,9 +4036,9 @@ function DiscoverResultCard({
       <div className="flex flex-1 flex-col px-5 pb-5 pt-1">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-tertiary">{item.label}</p>
-            <h4 className="mt-2 line-clamp-2 text-lg font-semibold leading-6 text-text-primary">{item.title}</h4>
-            {item.subtitle && <p className="mt-2 line-clamp-2 text-sm leading-5 text-text-secondary">{item.subtitle}</p>}
+            {showLabel && <p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-tertiary">{item.label}</p>}
+            <h4 className={[showLabel ? 'mt-2' : '', 'line-clamp-2 text-lg font-semibold leading-6 text-text-primary'].join(' ')}>{item.title}</h4>
+            {showSubtitle && <p className="mt-2 line-clamp-2 text-sm leading-5 text-text-secondary">{item.subtitle}</p>}
           </div>
         </div>
 
@@ -3274,8 +4063,8 @@ function DiscoverResultCard({
               disabled={!canOpen}
               className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <StrandIcon name="arrow-diagonal" className="h-4 w-4" />
-              Open in Workspace
+              <StrandIcon name="analyze" className="h-4 w-4" />
+              Analyze
             </button>
           </div>
         )}
@@ -3865,9 +4654,20 @@ function StatusStrip({
   indexVideosError,
   selectedGame,
   workspaceVideoCount,
+  hasCachedHighlightMetadata,
+  hasCachedEntityTrackingMetadata,
+  hasCachedClipAnalysisMetadata,
   reels,
   activeVideoName,
+  selectedSearchMoment,
+  selectedClipAnalysis,
+  selectedClipAnalysisLoading,
+  selectedClipAnalysisError,
+  entityTracking,
+  entityTrackingLoading,
+  entityTrackingError,
   onOpenDiscover,
+  onClearSelectedClip,
 }: {
   loadingGames: boolean
   gamesError: string
@@ -3877,9 +4677,20 @@ function StatusStrip({
   indexVideosError: string
   selectedGame: Game | null
   workspaceVideoCount: number
+  hasCachedHighlightMetadata: boolean
+  hasCachedEntityTrackingMetadata: boolean
+  hasCachedClipAnalysisMetadata: boolean
   reels?: HighlightReels
   activeVideoName?: string
+  selectedSearchMoment?: SearchMoment | null
+  selectedClipAnalysis?: SelectedClipAnalysis
+  selectedClipAnalysisLoading: boolean
+  selectedClipAnalysisError: string
+  entityTracking?: EntityTrackingResponse
+  entityTrackingLoading: boolean
+  entityTrackingError: string
   onOpenDiscover: () => void
+  onClearSelectedClip: () => void
 }) {
   if (loadingGames) {
     return <Notice tone="neutral" icon="spinner" text="Loading analyzed games" />
@@ -3899,11 +4710,64 @@ function StatusStrip({
   if (!activeVideoName) {
     return <Notice tone="neutral" icon="info" text="No indexed videos returned for this workspace" />
   }
+  if (selectedSearchMoment) {
+    return (
+      <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+        <div className="grid gap-4 bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Selected video</p>
+            <div className="mt-1 flex min-w-0 items-center gap-3">
+              <StrandIcon name="play-boxed" className="h-5 w-5 shrink-0 text-accent" />
+              <h2 className="truncate text-xl font-semibold text-text-primary">{activeVideoName}</h2>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-xs font-semibold text-text-secondary">
+                {selectedSearchMoment.title}
+              </span>
+              {selectedSearchMoment.startTime && (
+                <span className="rounded-sm border border-accent/30 bg-accent-light px-2 py-1 font-mono text-[11px] font-semibold text-brand-charcoal">
+                  {selectedSearchMoment.startTime}{selectedSearchMoment.endTime ? ` - ${selectedSearchMoment.endTime}` : ''}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onClearSelectedClip}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+            >
+              <StrandIcon name="close" className="h-4 w-4" />
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={onOpenDiscover}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+            >
+              <StrandIcon name="search" className="h-4 w-4" />
+              Discover Videos
+            </button>
+          </div>
+        </div>
+      </section>
+    )
+  }
   if (reelsError) {
     return <Notice tone="error" icon="warning" text={reelsError} />
   }
   if (isLoadingReels) {
-    return <Notice tone="neutral" icon="spinner" text={`Reading saved metadata for ${activeVideoName}`} />
+    return (
+      <Notice
+        tone="neutral"
+        icon="spinner"
+        text={
+          hasCachedHighlightMetadata
+            ? `Loading saved Jockey analysis for ${activeVideoName}`
+            : `Generating Jockey analysis for ${activeVideoName}. First visit can take 1-2 minutes.`
+        }
+      />
+    )
   }
   if (reels) {
     const enhancedCount =
@@ -3944,10 +4808,37 @@ function StatusStrip({
             {displayAnalysisSummary(reels.match_summary)}
           </p>
         </div>
+        {selectedSearchMoment && (
+          <SelectedClipAnalysisSection
+            game={selectedGame}
+            searchMoment={selectedSearchMoment}
+            analysis={selectedClipAnalysis}
+            loading={selectedClipAnalysisLoading}
+            error={selectedClipAnalysisError}
+          />
+        )}
+        {!selectedSearchMoment && (
+          <EntityTrackingSection
+            tracking={entityTracking}
+            loading={entityTrackingLoading}
+            error={entityTrackingError}
+            hasCachedMetadata={hasCachedEntityTrackingMetadata}
+          />
+        )}
       </section>
     )
   }
-  return <Notice tone="neutral" icon="hourglass" text="Select an indexed video to load its saved metadata" />
+  return (
+    <Notice
+      tone="neutral"
+      icon="hourglass"
+      text={
+        activeVideoName
+          ? `Analysis for ${activeVideoName} has not loaded yet. Make sure the backend is running on port 5000, then retry.`
+          : 'Select an indexed video to open its analysis'
+      }
+    />
+  )
 }
 
 function WorkspaceFact({ icon, label, value }: { icon: string; label: string; value: string }) {
@@ -3962,7 +4853,628 @@ function WorkspaceFact({ icon, label, value }: { icon: string; label: string; va
   )
 }
 
-function PegasusIndexNotice({ game }: { game: Game | null }) {
+function SelectedClipAnalysisSection({
+  game,
+  searchMoment,
+  analysis,
+  loading,
+  error,
+  hasCachedMetadata = false,
+}: {
+  game: Game | null
+  searchMoment: SearchMoment
+  analysis?: SelectedClipAnalysis
+  loading: boolean
+  error: string
+  hasCachedMetadata?: boolean
+}) {
+  const evidenceRows = analysis
+    ? [
+        { label: 'Visual', icon: 'vision', values: analysis.visual_evidence },
+        { label: 'Audio', icon: 'volume-mid', values: analysis.audio_evidence },
+        { label: 'Transcript', icon: 'transcription', values: analysis.transcript_evidence },
+      ].filter((row) => row.values.length)
+    : []
+  const clipStartSeconds = searchMoment.startTime ? secondsFromTime(searchMoment.startTime) : 0
+  const clipEndSeconds = searchMoment.endTime ? secondsFromTime(searchMoment.endTime) : undefined
+  const clipStreamInfoUrl = game ? streamInfoForVideoName(game, searchMoment.videoName) : null
+  const clipSegmentRange: SegmentRange | undefined = searchMoment.startTime
+    ? {
+        startSeconds: clipStartSeconds,
+        endSeconds: clipEndSeconds,
+        startLabel: searchMoment.startTime,
+        endLabel: searchMoment.endTime,
+      }
+    : undefined
+  return (
+    <div
+      id="selected-clip-analysis"
+      tabIndex={-1}
+      className="scroll-mt-40 px-5 py-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <StrandIcon name="analyze" className="h-4 w-4 shrink-0 text-accent" />
+            <h3 className="truncate text-base font-semibold text-text-primary">Pegasus 1.5 Selected Clip Analysis</h3>
+          </div>
+          <p className="mt-1 truncate text-sm font-medium text-text-secondary">
+            {searchMoment.title}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <span className="rounded-sm border border-border-light bg-card px-2 py-1 font-mono text-[11px] font-semibold text-text-tertiary">
+            {searchMoment.startTime}{searchMoment.endTime ? ` - ${searchMoment.endTime}` : ''}
+          </span>
+          {analysis && (
+            <span className="rounded-sm border border-accent/30 bg-accent-light px-2 py-1 font-mono text-[11px] font-semibold text-brand-charcoal">
+              Conf. {confidenceLabel(analysis.confidence)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 min-w-0 overflow-hidden rounded-md border border-border-light bg-card">
+        <div className="border-b border-border-light px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Selected Search Clip</p>
+        </div>
+        <div className="aspect-video bg-card">
+          {clipStreamInfoUrl ? (
+            <TwelveLabsVideoPlayer
+              key={`${searchMoment.videoName}-${searchMoment.startTime || 'start'}-${searchMoment.endTime || 'end'}`}
+              streamInfoUrl={clipStreamInfoUrl}
+              startSeconds={clipStartSeconds}
+              endSeconds={clipEndSeconds}
+              posterUrl={game ? thumbnailForVideoName(game, searchMoment.videoName) : undefined}
+              segmentRange={clipSegmentRange}
+              variant="minimal"
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-text-secondary">
+              Selected clip playback is unavailable.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-md border border-border-light bg-card px-4 py-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <StrandIcon name="vision" className="h-4 w-4 shrink-0 text-accent" />
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-text-primary">Pegasus 1.5 Response</p>
+              <p className="inline-flex max-w-full items-center gap-1 truncate rounded-sm border border-border-light bg-surface px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
+                <StrandIcon name="checkmark" className="h-3 w-3 text-accent" />
+                Selected clip only — no whole-video Jockey analysis
+              </p>
+            </div>
+          </div>
+          <SelectedClipAnalysisSaveButton game={game} searchMoment={searchMoment} analysis={analysis} />
+        </div>
+        {loading ? (
+          <div className="inline-flex items-center gap-2 rounded-md border border-border-light bg-surface px-3 py-2 text-sm font-semibold text-text-secondary">
+            <StrandIcon name="spinner" className="h-4 w-4 animate-spin text-accent" />
+            {hasCachedMetadata || analysis?._jockey_metadata?.from_user_metadata
+              ? 'Loading saved clip analysis'
+              : 'Pegasus 1.5 is analyzing the selected clip'}
+          </div>
+        ) : analysis ? (
+          <div className="grid gap-4">
+            <SelectedClipNarrative analysis={analysis} />
+            <div className="grid gap-2 sm:grid-cols-3">
+              <SelectedClipToneTags value={analysis.emotional_tone} />
+              <SelectedClipActionSignal value={analysis.key_action} />
+              <SelectedClipScoreSignal value={analysis.score_context} />
+            </div>
+            <SelectedClipParticipants participants={analysis.participants} />
+            <SelectedClipTagGroup icon="flame" label="Moment types" values={analysis.moment_types} />
+            <SelectedClipTagGroup icon="filter" label="Producer tags" values={analysis.tags} />
+            <SelectedClipTagGroup icon="devices" label="Recommended formats" values={analysis.recommended_formats} />
+            <div className="grid gap-2 sm:grid-cols-2">
+              <SelectedClipNote icon="hourglass" label="Boundaries" value={analysis.clip_boundary_notes} />
+              <SelectedClipNote icon="warning" label="Review notes" value={analysis.rights_safety_notes} />
+            </div>
+            <SelectedClipEvidenceGroup rows={evidenceRows} />
+          </div>
+        ) : error ? (
+          <div className="rounded-md border border-error bg-error-light px-3 py-2 text-sm font-semibold text-error-dark">
+            {error}
+          </div>
+        ) : (
+          <p className="text-sm font-semibold text-text-tertiary">Choose Analyze from Discover to run Pegasus 1.5 on a selected clip.</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SelectedClipNarrative({ analysis }: { analysis: SelectedClipAnalysis }) {
+  const rows = [
+    { label: 'Clip read', icon: 'analyze', value: analysis.description, primary: true },
+    { label: 'Producer angle', icon: 'document-list', value: analysis.producer_summary },
+    { label: 'Story arc', icon: 'play-next', value: analysis.story_arc },
+    { label: 'Editorial use', icon: 'share', value: analysis.editorial_use },
+  ].filter((row) => row.value.trim())
+
+  return (
+    <section aria-label="Selected clip narrative" className="grid gap-2">
+      {rows.map((row) => (
+        <article key={row.label} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-2 rounded-md border border-border-light bg-surface px-3 py-2">
+          <span className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-sm border border-border-light bg-card text-accent">
+            <StrandIcon name={row.icon} className="h-3.5 w-3.5" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{row.label}</p>
+            <p className={['mt-1 text-sm leading-6', row.primary ? 'font-semibold text-text-primary' : 'text-text-secondary'].join(' ')}>
+              {row.value}
+            </p>
+          </div>
+        </article>
+      ))}
+    </section>
+  )
+}
+
+function SelectedClipToneTags({ value }: { value: string }) {
+  const tags = selectedClipListTags(value)
+  if (!tags.length) return null
+  return (
+    <div className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <StrandIcon name="flame" className="h-3.5 w-3.5 text-accent" />
+        <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Tone</p>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {tags.map((tag) => (
+          <span key={tag} className="rounded-sm border border-accent/30 bg-accent-light px-2 py-1 text-xs font-semibold text-brand-charcoal">
+            {tag}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function SelectedClipActionSignal({ value }: { value: string }) {
+  const actions = selectedClipActionTags(value)
+  if (!actions.length) return null
+  return (
+    <div className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <StrandIcon name="play-boxed" className="h-3.5 w-3.5 text-accent" />
+        <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Key action</p>
+      </div>
+      <div className="mt-2 grid gap-1.5">
+        {actions.map((action) => (
+          <span key={action} className="inline-flex min-w-0 items-start gap-1.5 rounded-sm border border-border-light bg-card px-2 py-1 text-xs font-semibold leading-5 text-text-primary">
+            <StrandIcon name="checkmark" className="mt-0.5 h-3 w-3 text-accent" />
+            <span className="min-w-0 break-words">{action}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function SelectedClipScoreSignal({ value }: { value: string }) {
+  if (!value.trim()) return null
+  const score = selectedClipScoreParts(value)
+  if (!score) return <SelectedClipSignal icon="trophy" label="Score" value={value} />
+  return (
+    <div className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <StrandIcon name="trophy" className="h-3.5 w-3.5 text-accent" />
+        <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Score</p>
+      </div>
+      <div className="mt-2 rounded-sm border border-border-light bg-card px-2 py-2">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold text-text-secondary">{score.homeTeam}</p>
+            <p className="mt-0.5 font-mono text-xl font-bold leading-none text-text-primary">{score.homeScore}</p>
+          </div>
+          <span className="rounded-sm border border-border-light bg-surface px-1.5 py-0.5 font-mono text-[10px] font-bold text-text-tertiary">
+            VS
+          </span>
+          <div className="min-w-0 text-right">
+            <p className="truncate text-xs font-semibold text-text-secondary">{score.awayTeam}</p>
+            <p className="mt-0.5 font-mono text-xl font-bold leading-none text-text-primary">{score.awayScore}</p>
+          </div>
+        </div>
+        {score.matchTime && (
+          <div className="mt-2 inline-flex max-w-full items-center gap-1 rounded-sm border border-accent/30 bg-accent-light px-2 py-1 text-[11px] font-semibold text-brand-charcoal">
+            <StrandIcon name="hourglass" className="h-3 w-3" />
+            <span className="min-w-0 truncate">{score.matchTime} match time</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SelectedClipSignal({ icon, label, value }: { icon: string; label: string; value: string }) {
+  if (!value.trim()) return null
+  return (
+    <div className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <StrandIcon name={icon} className="h-3.5 w-3.5 text-accent" />
+        <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
+      </div>
+      <p className="mt-1 break-words text-sm font-semibold leading-5 text-text-primary">{value}</p>
+    </div>
+  )
+}
+
+function selectedClipListTags(value: string) {
+  return Array.from(new Set(
+    value
+      .split(/[,;•]+/)
+      .map(selectedClipTagLabel)
+      .filter(Boolean),
+  ))
+}
+
+function selectedClipActionTags(value: string) {
+  const fallback = selectedClipTagLabel(value)
+  if (!fallback) return []
+  const actions = value
+    .split(/\s+(?:and|then|followed by)\s+|[,;•]+/i)
+    .map(selectedClipTagLabel)
+    .filter(Boolean)
+  if (actions.length > 1 && actions.length <= 4 && actions.every((action) => action.length <= 72)) {
+    return Array.from(new Set(actions))
+  }
+  return [fallback]
+}
+
+function selectedClipTagLabel(value: string) {
+  const normalized = value.trim().replace(/\s+/g, ' ').replace(/[.]+$/, '')
+  if (!normalized) return ''
+  return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
+}
+
+function selectedClipScoreParts(value: string) {
+  const normalized = value.trim().replace(/\s+/g, ' ')
+  const [scoreText, ...contextParts] = normalized.split(',')
+  const match = scoreText.match(/^(.+?)\s+(\d+)\s*[-–]\s*(\d+)\s+(.+)$/)
+  if (!match) return null
+  const matchTime = contextParts
+    .join(',')
+    .trim()
+    .replace(/\bmatch\s*time\b/i, '')
+    .trim()
+  return {
+    homeTeam: match[1].trim(),
+    homeScore: match[2],
+    awayScore: match[3],
+    awayTeam: match[4].trim(),
+    matchTime,
+  }
+}
+
+function SelectedClipParticipants({ participants }: { participants: SelectedClipAnalysis['participants'] }) {
+  if (!participants.length) return null
+  return (
+    <section className="min-w-0">
+      <SelectedClipGroupHeader icon="members" label="Participants" count={participants.length} />
+      <div className="mt-2 grid gap-2">
+        {participants.map((participant, index) => (
+          <article key={`${participant.name}-${participant.role}-${index}`} className="min-w-0 rounded-md border border-border-light bg-surface px-3 py-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="min-w-0 truncate text-sm font-semibold text-text-primary">{participant.name}</span>
+              {participant.role && (
+                <span className="rounded-sm border border-accent/30 bg-accent-light px-1.5 py-0.5 text-[11px] font-semibold text-brand-charcoal">
+                  {participant.role}
+                </span>
+              )}
+              {participant.team_or_group && (
+                <span className="rounded-sm border border-border-light bg-card px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
+                  {participant.team_or_group}
+                </span>
+              )}
+            </div>
+            {participant.evidence && (
+              <p className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-1.5 text-xs leading-5 text-text-secondary">
+                <StrandIcon name="checkmark" className="mt-0.5 h-3.5 w-3.5 text-accent" />
+                <span>{participant.evidence}</span>
+              </p>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function SelectedClipTagGroup({ icon, label, values }: { icon: string; label: string; values: string[] }) {
+  const tags = values.filter((value) => value.trim())
+  if (!tags.length) return null
+  return (
+    <section className="min-w-0">
+      <SelectedClipGroupHeader icon={icon} label={label} count={tags.length} />
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {tags.map((value, index) => (
+          <span
+            key={`${label}-${value}-${index}`}
+            className="inline-flex max-w-full items-center gap-1 rounded-sm border border-border-light bg-surface px-2 py-1 text-xs font-semibold text-text-secondary"
+            title={value}
+          >
+            <StrandIcon name="checkmark" className="h-3 w-3 text-accent" />
+            <span className="min-w-0 break-words">{value}</span>
+          </span>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function SelectedClipNote({ icon, label, value }: { icon: string; label: string; value: string }) {
+  if (!value.trim()) return null
+  return (
+    <article className="min-w-0 rounded-md border border-border-light bg-surface px-3 py-2">
+      <div className="flex min-w-0 items-center gap-1.5">
+        <StrandIcon name={icon} className="h-3.5 w-3.5 text-accent" />
+        <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
+      </div>
+      <p className="mt-1 text-sm leading-5 text-text-secondary">{value}</p>
+    </article>
+  )
+}
+
+function SelectedClipEvidenceGroup({ rows }: { rows: Array<{ label: string; icon: string; values: string[] }> }) {
+  if (!rows.length) return null
+  return (
+    <section className="min-w-0">
+      <SelectedClipGroupHeader icon="vision" label="Grounded evidence" />
+      <div className="mt-2 grid gap-2">
+        {rows.map((row) => (
+          <article key={row.label} className="min-w-0 rounded-md border border-border-light bg-surface px-3 py-2">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <StrandIcon name={row.icon} className="h-3.5 w-3.5 text-accent" />
+              <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{row.label}</p>
+              <span className="ml-auto rounded-sm border border-border-light bg-card px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
+                {row.values.length}
+              </span>
+            </div>
+            <ul className="mt-2 grid gap-1.5">
+              {row.values.map((value, index) => (
+                <li key={`${row.label}-${value}-${index}`} className="grid grid-cols-[auto_minmax(0,1fr)] gap-1.5 text-sm leading-5 text-text-secondary">
+                  <StrandIcon name="checkmark" className="mt-0.5 h-3.5 w-3.5 text-accent" />
+                  <span>{value}</span>
+                </li>
+              ))}
+            </ul>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function SelectedClipGroupHeader({ icon, label, count }: { icon: string; label: string; count?: number }) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <StrandIcon name={icon} className="h-3.5 w-3.5 text-accent" />
+      <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
+      {typeof count === 'number' && (
+        <span className="rounded-sm border border-border-light bg-surface px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
+          {count}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function SelectedClipAnalysisSaveButton({
+  game,
+  searchMoment,
+  analysis,
+}: {
+  game: Game | null
+  searchMoment: SearchMoment
+  analysis?: SelectedClipAnalysis
+}) {
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(Boolean(analysis?._jockey_metadata?.stored_to_user_metadata))
+  const [error, setError] = useState('')
+  const label = searchMoment.title || searchMoment.videoName
+  const preview = label.length > 48 ? `${label.slice(0, 45)}...` : label
+  const canSave = Boolean(game && analysis && !analysis._jockey_metadata?.stored_to_user_metadata)
+
+  useEffect(() => {
+    setSaved(Boolean(analysis?._jockey_metadata?.stored_to_user_metadata))
+  }, [analysis])
+
+  const handleSave = async () => {
+    if (!game || !analysis || saving) return
+    setSaving(true)
+    setError('')
+    try {
+      await fetchJson<JockeyWorkspaceSaveResponse>(
+        `/games/${encodeURIComponent(game.tag)}/videos/${encodeURIComponent(searchMoment.videoName)}/jockey-workspace/saved-clip-analysis`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            analysis,
+            search_context: {
+              title: searchMoment.title,
+              query: searchMoment.query,
+              description: searchMoment.description,
+              relevance: searchMoment.relevance,
+              start_time: searchMoment.startTime,
+              end_time: searchMoment.endTime,
+              video_reference: searchMoment.videoReference,
+            },
+          }),
+        },
+      )
+      setSaved(true)
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="flex shrink-0 flex-col items-end gap-1">
+      <button
+        type="button"
+        aria-label={`Save selected clip analysis: ${preview}`}
+        title={saved ? 'Saved to video workspace metadata' : 'Append this clip analysis to the source video workspace metadata'}
+        disabled={!canSave || saving}
+        className={[
+          'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold shadow-[0_1px_2px_rgba(31,41,33,0.035)]',
+          saved
+            ? 'border-accent/40 bg-accent-light text-brand-charcoal'
+            : 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
+          !canSave || saving ? 'cursor-not-allowed opacity-60' : '',
+        ].join(' ')}
+        onClick={() => void handleSave()}
+      >
+        <StrandIcon name={saving ? 'spinner' : saved ? 'checkmark' : 'document'} className={['h-3.5 w-3.5', saving ? 'animate-spin' : ''].join(' ')} />
+        {saved ? 'Saved' : saving ? 'Saving' : 'Save'}
+      </button>
+      {error ? <span className="max-w-[220px] truncate text-[10px] font-semibold text-error">{error}</span> : null}
+    </div>
+  )
+}
+
+function EntityTrackingSection({
+  tracking,
+  loading,
+  error,
+  hasCachedMetadata = false,
+}: {
+  tracking?: EntityTrackingResponse
+  loading: boolean
+  error: string
+  hasCachedMetadata?: boolean
+}) {
+  const entities = tracking?.entities || []
+  const relationships = tracking?.relationships || []
+  return (
+    <div className="border-t border-border-light bg-card px-5 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <StrandIcon name="members" className="h-4 w-4 shrink-0 text-accent" />
+            <h3 className="truncate text-base font-semibold text-text-primary">Entity Tracking</h3>
+          </div>
+          <p className="mt-1 max-w-4xl text-sm leading-6 text-text-secondary">
+            {tracking?.summary || 'Jockey is extracting grounded players, teams, crowd groups, and interactions from this source.'}
+          </p>
+        </div>
+        {tracking && (
+          <span className="rounded-sm border border-border-light bg-surface px-2 py-1 font-mono text-[11px] font-semibold text-text-tertiary">
+            {entities.length} entities
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="mt-4 inline-flex items-center gap-2 rounded-md border border-border-light bg-surface px-3 py-2 text-sm font-semibold text-text-secondary">
+          <StrandIcon name="spinner" className="h-4 w-4 animate-spin text-accent" />
+          {hasCachedMetadata ? 'Loading saved entity tracks' : 'Jockey is building entity tracks'}
+        </div>
+      ) : error ? (
+        <div className="mt-4 rounded-md border border-error bg-error-light px-3 py-2 text-sm font-semibold text-error-dark">
+          {error}
+        </div>
+      ) : tracking ? (
+        <div className="mt-4 grid gap-4">
+          {entities.length ? (
+            <div className="grid gap-3 lg:grid-cols-2">
+              {entities.map((entity) => (
+                <article key={`${entity.name}-${entity.role}`} className="min-w-0 rounded-md border border-border-light bg-surface p-3">
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h4 className="truncate text-sm font-semibold text-text-primary">{entity.name}</h4>
+                      <p className="mt-1 truncate text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">
+                        {entity.entity_type} / {entity.team_or_group} / {entity.role}
+                      </p>
+                    </div>
+                    <span className="rounded-sm border border-accent/30 bg-accent-light px-2 py-1 font-mono text-[11px] font-semibold text-brand-charcoal">
+                      {confidenceLabel(entity.confidence)}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm leading-5 text-text-secondary">{entity.description}</p>
+                  {entity.appearances.length ? (
+                    <div className="mt-3 grid gap-2">
+                      {entity.appearances.map((appearance) => (
+                        <div
+                          key={`${entity.name}-${appearance.start_time}-${appearance.end_time}-${appearance.action}`}
+                          className="grid gap-2 rounded-sm border border-border-light bg-card px-2 py-2 sm:grid-cols-[96px_minmax(0,1fr)]"
+                        >
+                          <span className="font-mono text-[11px] font-semibold text-text-tertiary">
+                            {appearance.start_time} - {appearance.end_time}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-text-primary">{appearance.action}</p>
+                            <p className="mt-1 text-xs leading-5 text-text-secondary">
+                              {appearance.emotion} / {appearance.context}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm font-semibold text-text-tertiary">No grounded entity tracks were returned for this source.</p>
+          )}
+
+          {relationships.length ? (
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Interactions</p>
+              <div className="mt-2 grid gap-2">
+                {relationships.map((relationship) => (
+                  <div
+                    key={`${relationship.entity}-${relationship.related_entity}-${relationship.timestamp}-${relationship.description}`}
+                    className="grid gap-2 rounded-md border border-border-light bg-surface px-3 py-2 sm:grid-cols-[110px_minmax(0,1fr)]"
+                  >
+                    <span className="font-mono text-[11px] font-semibold text-text-tertiary">
+                      {relationship.timestamp || 'Observed'}
+                    </span>
+                    <p className="min-w-0 text-sm leading-5 text-text-secondary">
+                      <span className="font-semibold text-text-primary">{relationship.entity}</span>
+                      {' -> '}
+                      <span className="font-semibold text-text-primary">{relationship.related_entity}</span>
+                      {' / '}
+                      {relationship.interaction_type}: {relationship.description}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mt-4 text-sm font-semibold text-text-tertiary">Entity tracks will appear after Jockey analyzes the active source.</p>
+      )}
+    </div>
+  )
+}
+
+function TagRow({ label, values }: { label: string; values: string[] }) {
+  if (!values.length) return null
+  return (
+    <div className="mt-3">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {values.map((value) => (
+          <span key={value} className="rounded-sm border border-border-light bg-card px-2 py-1 text-xs font-semibold text-text-secondary">
+            {value}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function AnalysisIndexNotice({ game }: { game: Game | null }) {
   return (
     <section className="rounded-md border border-warning bg-warning-light p-5 text-warning-dark shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
       <div className="flex items-start gap-3">
@@ -4009,11 +5521,6 @@ function SignalMap({
     })),
   )
   const maxTime = Math.max(1, ...nodes.map((node) => node.end))
-  const semanticCount = nodes.filter((node) => node.clip.source_type !== 'stats').length
-  const confidenceValues = nodes.map((node) => node.clip.confidence).filter(hasUsableConfidence)
-  const avgConfidence = confidenceValues.length
-    ? String(Math.round((confidenceValues.reduce((total, confidence) => total + confidence, 0) / confidenceValues.length) * 100))
-    : 'N/A'
   const references = Array.from(new Set(nodes.map((node) => node.clip.video_reference)))
   const referenceColorMap = Object.fromEntries(
     references.map((reference, index) => [reference, referencePalette[index % referencePalette.length]]),
@@ -4023,6 +5530,7 @@ function SignalMap({
   )
   const compact = variant === 'sidecar'
   const mapLens: LensKey = 'category'
+  const laneGridClass = compact ? 'grid-cols-[86px_minmax(0,1fr)] gap-2' : 'grid-cols-[132px_minmax(0,1fr)] gap-4'
 
   return (
     <section className="rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.05)]">
@@ -4038,12 +5546,6 @@ function SignalMap({
             <StrandIcon name="neural-network" className="h-4 w-4 text-brand-charcoal" />
             <h2 className="text-base font-semibold text-text-primary">Meta Discovery Map</h2>
           </div>
-          {!collapsed && (
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <MapMetricPill label="Lift" value={String(semanticCount)} />
-              <MapMetricPill label="Conf." value={avgConfidence} />
-            </div>
-          )}
         </div>
         <div className="flex min-w-0 items-center gap-3 sm:justify-end">
           <button
@@ -4084,65 +5586,70 @@ function SignalMap({
               const laneNodes = nodes.filter((node) => node.lane.key === lane.key)
               const laneTrackColor = mapLens === 'category' ? signalColors[lane.key].track : '#E8E7E5'
               return (
-                <div key={lane.key} className={['grid items-center', compact ? 'grid-cols-[86px_1fr] gap-2' : 'grid-cols-[132px_1fr] gap-4'].join(' ')}>
+                <div key={lane.key} className={['grid items-center', laneGridClass].join(' ')}>
                   <div className={['flex items-center gap-2 font-semibold text-text-secondary', compact ? 'text-xs' : 'text-sm'].join(' ')}>
                     <StrandIcon name={lane.icon} className="h-4 w-4" />
                     <span className="truncate">{lane.label}</span>
                     <span className="ml-auto text-xs font-semibold text-text-tertiary">{laneNodes.length}</span>
                   </div>
                   <div className={['relative rounded-md border border-border-light bg-surface', compact ? 'h-10' : 'h-12'].join(' ')}>
-                    <div className="absolute left-3 right-3 top-1/2 h-1 -translate-y-1/2 rounded-sm" style={{ backgroundColor: laneTrackColor }} />
-                    {laneNodes.map((node) => {
-                      const left = clamp((node.start / maxTime) * 100, 0, 97)
-                      const width = clamp(((node.end - node.start) / maxTime) * 100, 2.2, 18)
-                      const selected = isSelectedSignal(node.lane.key, node.index, selectedCategory, selectedEnhancedIndex, selectedStandardIndex)
-                      const color = signalColor(node.lane.key, node.clip, mapLens, referenceColorMap)
-                      return (
-                        <button
-                          key={`${lane.key}-${node.index}-${node.clip.start_time}`}
-                          type="button"
-                          onPointerDown={(event) => {
-                            event.preventDefault()
-                            onSelect(lane.key, node.index)
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
+                    <div className="absolute inset-x-3 top-1/2 h-1 -translate-y-1/2 rounded-sm" style={{ backgroundColor: laneTrackColor }} />
+                    <div className="absolute inset-x-3 bottom-0 top-0">
+                      {laneNodes.map((node) => {
+                        const left = clamp((node.start / maxTime) * 100, 0, 97)
+                        const width = clamp(((node.end - node.start) / maxTime) * 100, 2.2, Math.min(18, 100 - left))
+                        const selected = isSelectedSignal(node.lane.key, node.index, selectedCategory, selectedEnhancedIndex, selectedStandardIndex)
+                        const color = signalColor(node.lane.key, node.clip, mapLens, referenceColorMap)
+                        return (
+                          <button
+                            key={`${lane.key}-${node.index}-${node.clip.start_time}`}
+                            type="button"
+                            onPointerDown={(event) => {
                               event.preventDefault()
                               onSelect(lane.key, node.index)
-                            }
-                          }}
-                          onClick={() => onSelect(lane.key, node.index)}
-                          aria-label={`${lane.label} ${node.clip.start_time}, confidence ${confidenceLabel(node.clip.confidence)}. ${node.clip.description}`}
-                          title={`${lane.label} · Confidence ${confidenceLabel(node.clip.confidence)} · ${node.clip.start_time}-${node.clip.end_time}`}
-                          className={[
-                            'absolute top-1/2 inline-flex -translate-y-1/2 items-center justify-center rounded-sm border font-mono font-bold leading-none shadow-[0_2px_6px_rgba(31,41,33,0.12)] transition-transform hover:scale-110',
-                            compact ? 'h-6 px-1.5 text-[9px]' : 'h-5 px-1 text-[10px]',
-                            selected ? 'z-10 ring-2 ring-accent ring-offset-2 ring-offset-surface' : '',
-                          ].join(' ')}
-                          style={{
-                            left: `${left}%`,
-                            width: `${width}%`,
-                            minWidth: compact ? 30 : 24,
-                            backgroundColor: color.bg,
-                            borderColor: color.border,
-                            color: color.text,
-                            opacity: signalOpacity(node.clip.confidence, 0.55),
-                          }}
-                        >
-                          {signalLabel(node.clip, mapLens, referenceLabelMap)}
-                        </button>
-                      )
-                    })}
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault()
+                                onSelect(lane.key, node.index)
+                              }
+                            }}
+                            onClick={() => onSelect(lane.key, node.index)}
+                            aria-label={`${lane.label} ${node.clip.start_time}, confidence ${confidenceLabel(node.clip.confidence)}. ${node.clip.description}`}
+                            title={`${lane.label} · Confidence ${confidenceLabel(node.clip.confidence)} · ${node.clip.start_time}-${node.clip.end_time}`}
+                            className={[
+                              'absolute top-1/2 inline-flex -translate-y-1/2 items-center justify-center rounded-sm border font-mono font-bold leading-none shadow-[0_2px_6px_rgba(31,41,33,0.12)] transition-transform hover:scale-110',
+                              compact ? 'h-6 px-1.5 text-[9px]' : 'h-5 px-1 text-[10px]',
+                              selected ? 'z-10 ring-2 ring-accent ring-offset-2 ring-offset-surface' : '',
+                            ].join(' ')}
+                            style={{
+                              left: `${left}%`,
+                              width: `${width}%`,
+                              minWidth: compact ? 30 : 24,
+                              backgroundColor: color.bg,
+                              borderColor: color.border,
+                              color: color.text,
+                              opacity: signalOpacity(node.clip.confidence, 0.55),
+                            }}
+                          >
+                            {signalLabel(node.clip, mapLens, referenceLabelMap)}
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
                 </div>
               )
             })}
           </div>
 
-          <div className="mt-4 grid grid-cols-3 gap-2 text-xs font-semibold text-text-tertiary">
-            <span>0:00</span>
-            <span className="text-center">{formatSeconds(Math.round(maxTime / 2))}</span>
-            <span className="text-right">{formatSeconds(maxTime)}</span>
+          <div className={['mt-4 grid items-center', laneGridClass].join(' ')}>
+            <div aria-hidden="true" />
+            <div className="grid grid-cols-3 gap-2 px-3 text-xs font-semibold text-text-tertiary">
+              <span>0:00</span>
+              <span className="text-center">{formatSeconds(Math.round(maxTime / 2))}</span>
+              <span className="text-right">{formatSeconds(maxTime)}</span>
+            </div>
           </div>
         </div>
       </div>}
@@ -4629,11 +6136,12 @@ function ReasonBlock({
 }
 
 function EvidenceTrail({ clip }: { clip: Clip }) {
+  const showMediaEvidence = !isStatsBaselineClip(clip)
   const evidenceRows = [
-    { label: 'Visual', values: clip.visual_evidence || [] },
-    { label: 'Audio', values: clip.audio_evidence || [] },
+    showMediaEvidence ? { label: 'Visual', values: clip.visual_evidence || [] } : null,
+    showMediaEvidence ? { label: 'Audio', values: clip.audio_evidence || [] } : null,
     { label: 'Transcript', values: clip.transcript_evidence || [] },
-  ].filter((row) => row.values.length)
+  ].filter((row): row is { label: string; values: string[] } => Boolean(row && row.values.length))
   const contextRows = [
     clip.timeline_rationale ? { label: 'Timing', value: clip.timeline_rationale } : null,
     clip.editorial_use ? { label: 'Edit', value: clip.editorial_use } : null,
@@ -4665,11 +6173,12 @@ function EvidenceTrail({ clip }: { clip: Clip }) {
 }
 
 function EvidenceStack({ clip, compact = false }: { clip: Clip; compact?: boolean }) {
+  const showMediaEvidence = !isStatsBaselineClip(clip)
   const rows = [
-    { label: 'Visual', values: clip.visual_evidence || [] },
-    { label: 'Audio', values: clip.audio_evidence || [] },
+    showMediaEvidence ? { label: 'Visual', values: clip.visual_evidence || [] } : null,
+    showMediaEvidence ? { label: 'Audio', values: clip.audio_evidence || [] } : null,
     { label: 'Transcript', values: clip.transcript_evidence || [] },
-  ].filter((row) => row.values.length)
+  ].filter((row): row is { label: string; values: string[] } => Boolean(row && row.values.length))
   const contextRows = [
     clip.timeline_rationale ? { label: 'Timing', value: clip.timeline_rationale } : null,
     clip.editorial_use ? { label: 'Edit', value: clip.editorial_use } : null,
@@ -4695,21 +6204,16 @@ function EvidenceStack({ clip, compact = false }: { clip: Clip; compact?: boolea
   )
 }
 
+function isStatsBaselineClip(clip: Clip) {
+  return clip.category === 'standard_stats' || clip.source_type === 'stats'
+}
+
 function CompactMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="border-l border-border pl-3">
       <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
       <p className="mt-1 text-lg font-semibold text-text-primary">{value}</p>
     </div>
-  )
-}
-
-function MapMetricPill({ label, value }: { label: string; value: string }) {
-  return (
-    <span className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border-light bg-card px-2 text-xs font-semibold text-text-secondary">
-      <span className="uppercase tracking-[0.08em] text-text-tertiary">{label}</span>
-      <span className="font-mono text-sm text-text-primary">{value}</span>
-    </span>
   )
 }
 
@@ -4745,7 +6249,7 @@ function Confidence({ value }: { value: number }) {
 
 function StrandIcon({ name, className = 'h-4 w-4' }: { name: string; className?: string }) {
   const svg = icons[name] || icons.info
-  return <span className={`strand-icon inline-flex shrink-0 ${className}`} dangerouslySetInnerHTML={{ __html: svg }} />
+  return <span className={`strand-icon shrink-0 ${className}`} dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
 function sourceLabel(sourceType: Clip['source_type']) {
@@ -4810,6 +6314,10 @@ function hasHighlightClips(reels: HighlightReels) {
 
 function reelCacheKey(tag: string, videoName?: string) {
   return videoName ? `${tag}::${videoName}` : tag
+}
+
+function isWorkspaceAnalysisResponse(value: HighlightReels | WorkspaceAnalysisResponse): value is WorkspaceAnalysisResponse {
+  return typeof value === 'object' && value !== null && 'highlight_reels' in value
 }
 
 function scopeReelsToVideo(game: Game, reels: HighlightReels, videoName: string): HighlightReels {
@@ -4879,6 +6387,41 @@ function jockeyPromptRequestsSpecificClip(prompt: string) {
   return /\b(one|single|specific|that|this)\b.*\b(reel|clip|moment|highlight|play)\b|\b(showcase|show\s+me|play)\b.*\b(clip|moment|highlight|play)\b/i.test(prompt)
 }
 
+function latestJockeySessionId(exchanges: JockeyChatExchange[]) {
+  for (let index = exchanges.length - 1; index >= 0; index -= 1) {
+    const sessionId = exchanges[index].response?.session_id?.trim()
+    if (sessionId) return sessionId
+  }
+  return ''
+}
+
+function upsertJockeyChatExchange(exchanges: JockeyChatExchange[], nextExchange: JockeyChatExchange) {
+  let matched = false
+  const nextExchanges = exchanges.map((exchange) => {
+    if (exchange.id !== nextExchange.id) return exchange
+    matched = true
+    return nextExchange
+  })
+  return matched ? nextExchanges : [...exchanges, nextExchange]
+}
+
+function jockeyConversationHistory(exchanges: JockeyChatExchange[], limit: number): JockeyConversationTurn[] {
+  return exchanges
+    .filter((exchange) => exchange.response && !exchange.error)
+    .slice(-limit)
+    .map((exchange) => ({
+      prompt: exchange.prompt,
+      narrative_summary: exchange.response?.narrative_summary,
+      clips: (Array.isArray(exchange.response?.clips) ? exchange.response.clips : []).slice(0, 8).map((clip) => ({
+        video_reference: clip.video_reference,
+        start_time: clip.start_time,
+        end_time: clip.end_time,
+        moment_type: clip.moment_type,
+        confidence: clip.confidence,
+      })),
+    }))
+}
+
 function jockeyChatCacheKey(tag: string) {
   return `${JOCKEY_CHAT_CACHE_PREFIX}${tag}`
 }
@@ -4890,7 +6433,9 @@ function readJockeyChatCache(tag: string): JockeyChatExchange[] {
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.filter(isJockeyChatExchange)
+    return parsed
+      .map(normalizeJockeyChatExchange)
+      .filter((exchange): exchange is JockeyChatExchange => Boolean(exchange))
   } catch {
     return []
   }
@@ -4908,12 +6453,62 @@ function writeJockeyChatCache(tag: string, exchanges: JockeyChatExchange[]) {
   }
 }
 
-function isJockeyChatExchange(value: unknown): value is JockeyChatExchange {
-  if (!value || typeof value !== 'object') return false
+function normalizeJockeyChatExchange(value: unknown): JockeyChatExchange | null {
+  if (!value || typeof value !== 'object') return null
   const exchange = value as Partial<JockeyChatExchange>
-  return typeof exchange.id === 'string'
-    && typeof exchange.prompt === 'string'
-    && typeof exchange.showReel === 'boolean'
+  if (typeof exchange.id !== 'string' || typeof exchange.prompt !== 'string' || typeof exchange.showReel !== 'boolean') return null
+  return {
+    id: exchange.id,
+    prompt: exchange.prompt,
+    skillKey: typeof exchange.skillKey === 'string' ? exchange.skillKey : undefined,
+    response: exchange.response ? normalizeJockeyChatResponse(exchange.response, exchange.prompt) : undefined,
+    error: typeof exchange.error === 'string' ? exchange.error : undefined,
+    showReel: exchange.showReel,
+  }
+}
+
+function normalizeJockeyChatResponse(value: unknown, fallbackMessage = ''): JockeyChatResponse {
+  const response = value && typeof value === 'object' ? value as Partial<JockeyChatResponse> : {}
+  return {
+    session_id: typeof response.session_id === 'string' ? response.session_id : null,
+    message: typeof response.message === 'string' ? response.message : fallbackMessage,
+    narrative_summary: typeof response.narrative_summary === 'string' && response.narrative_summary.trim()
+      ? response.narrative_summary
+      : 'Jockey did not return a narrative summary.',
+    clips: Array.isArray(response.clips)
+      ? response.clips.map(normalizeJockeyManifestClip).filter((clip): clip is JockeyManifestClip => Boolean(clip))
+      : [],
+  }
+}
+
+function normalizeJockeyManifestClip(value: unknown, index: number): JockeyManifestClip | null {
+  if (!value || typeof value !== 'object') return null
+  const clip = value as Partial<JockeyManifestClip>
+  const startTime = typeof clip.start_time === 'string' ? clip.start_time : ''
+  const rationale = typeof clip.jockey_rationale === 'string' ? clip.jockey_rationale : ''
+  if (!startTime || !rationale) return null
+  const reference = typeof clip.video_reference === 'string' && clip.video_reference.trim()
+    ? clip.video_reference
+    : typeof clip.video_name === 'string'
+      ? clip.video_name
+      : ''
+  if (!reference) return null
+  return {
+    id: typeof clip.id === 'string' && clip.id.trim() ? clip.id : `jockey-chat-cached-${index}`,
+    video_name: typeof clip.video_name === 'string' ? clip.video_name : null,
+    video_reference: reference,
+    start_time: startTime,
+    end_time: typeof clip.end_time === 'string' && clip.end_time.trim() ? clip.end_time : startTime,
+    moment_type: typeof clip.moment_type === 'string' && clip.moment_type.trim() ? clip.moment_type : 'jockey_curated',
+    emotional_intensity: typeof clip.emotional_intensity === 'string' && clip.emotional_intensity.trim() ? clip.emotional_intensity : 'unknown',
+    jockey_rationale: rationale,
+    confidence: typeof clip.confidence === 'number' && Number.isFinite(clip.confidence) ? clip.confidence : 0.75,
+    highlight_potential: typeof clip.highlight_potential === 'number' && Number.isFinite(clip.highlight_potential) ? clip.highlight_potential : 0,
+    source_asset_id: typeof clip.source_asset_id === 'string' ? clip.source_asset_id : null,
+    thumbnail_url: typeof clip.thumbnail_url === 'string' ? clip.thumbnail_url : null,
+    stream_info_path: typeof clip.stream_info_path === 'string' ? clip.stream_info_path : null,
+    video_url: typeof clip.video_url === 'string' ? clip.video_url : null,
+  }
 }
 
 function signalOpacity(confidence: number, minimum: number) {
@@ -5047,7 +6642,31 @@ function thumbnailForVideoName(game: Game, videoName: string) {
   return apiUrl(`/games/${encodeURIComponent(game.tag)}/thumbnail/${encodeURIComponent(videoName)}`)
 }
 
-function posterForVideoName(game: Game, videoName: string, _indexVideos: IndexVideo[] = []) {
+function indexVideoForName(game: Game, indexVideos: IndexVideo[], videoName: string) {
+  return indexVideos.find((video) => {
+    const candidates = [
+      indexVideoWorkspaceName(game, video),
+      cleanString(video.source_video_name),
+      cleanString(video.metadata_source_video_name),
+      cleanString(video.name),
+      cleanString(video.display_name),
+    ].filter(Boolean)
+    return candidates.includes(videoName)
+  })
+}
+
+function posterForVideoName(
+  game: Game,
+  videoName: string,
+  discoverVideos: DiscoverVideo[] = [],
+  indexVideos: IndexVideo[] = [],
+) {
+  const discoverVideo = discoverVideos.find((video) => video.video_name === videoName)
+  const discoverPoster = cleanString(discoverVideo?.thumbnail_url)
+  if (discoverPoster) return discoverPoster
+  const indexedPoster = cleanString(indexVideoForName(game, indexVideos, videoName)?.thumbnail_url)
+  if (indexedPoster) return indexedPoster
+  if (discoverVideo?.thumbnail_path) return apiUrl(discoverVideo.thumbnail_path)
   return thumbnailForVideoName(game, videoName)
 }
 
@@ -5067,7 +6686,11 @@ function uniqueIndexVideos(videos: IndexVideo[]) {
 }
 
 function orderIndexVideosForMetadataFirst(videos: IndexVideo[]) {
-  return [...videos].sort((left, right) => Number(Boolean(right.has_pegasus_metadata)) - Number(Boolean(left.has_pegasus_metadata)))
+  return [...videos].sort((left, right) => {
+    const leftScore = Number(Boolean(left.has_jockey_highlight_metadata)) + Number(Boolean(left.has_pegasus_metadata))
+    const rightScore = Number(Boolean(right.has_jockey_highlight_metadata)) + Number(Boolean(right.has_pegasus_metadata))
+    return rightScore - leftScore
+  })
 }
 
 function workspaceVideoNamesFromIndex(game: Game, videos: IndexVideo[]) {
@@ -5139,6 +6762,15 @@ function jockeyClipVideoName(game: Game, clip: JockeyManifestClip) {
   return videoNameForReference(game, clip.video_reference)
 }
 
+function jockeyExchangeTargetVideos(game: Game, response: JockeyChatResponse) {
+  const names = new Set<string>()
+  for (const clip of response.clips || []) {
+    const name = jockeyClipVideoName(game, clip)
+    if (name) names.add(name)
+  }
+  return [...names]
+}
+
 function jockeyClipStreamInfoUrl(game: Game, clip: JockeyManifestClip) {
   if (clip.stream_info_path) return apiUrl(clip.stream_info_path)
   const sourceName = jockeyClipVideoName(game, clip)
@@ -5206,11 +6838,16 @@ function gameOptionLabel(game: Game) {
 
 function searchResultItems(game: Game, response: MarengoSearchResponse): DiscoverItem[] {
   return response.results
-    .map((result, index) => discoverItemFromSearchResult(game, result, index))
+    .map((result, index) => discoverItemFromSearchResult(game, response, result, index))
     .filter((item): item is DiscoverItem => Boolean(item))
 }
 
-function discoverItemFromSearchResult(game: Game, result: MarengoSearchResult, index: number): DiscoverItem | null {
+function discoverItemFromSearchResult(
+  game: Game,
+  response: MarengoSearchResponse,
+  result: MarengoSearchResult,
+  index: number,
+): DiscoverItem | null {
   const videoName = result.video_name || videoNameForReference(game, result.video_reference)
   if (!videoName) return null
   const startTime = result.start_time || result.timestamp
@@ -5220,6 +6857,8 @@ function discoverItemFromSearchResult(game: Game, result: MarengoSearchResult, i
   const searchMoment: SearchMoment = {
     videoName,
     videoReference: result.video_reference,
+    query: response.query,
+    sourceAssetId: result.source_asset_id,
     title,
     description: result.description,
     relevance: result.relevance,
@@ -5261,15 +6900,51 @@ function responseScore(result: MarengoSearchResult, index: number) {
     : 1 / (index + 1)
 }
 
-function sourceVideoItems(game: Game, sourceVideos: string[], indexVideos: IndexVideo[] = []): DiscoverItem[] {
-  return Array.from(new Set(sourceVideos)).map((videoName, index) => ({
-    id: `${game.tag}-${videoName}-${index}`,
-    label: 'Source Video',
-    title: videoName,
-    subtitle: '',
-    media: streamInfoForVideoName(game, videoName),
-    poster: posterForVideoName(game, videoName, indexVideos),
-    videoName,
+function indexReadyDiscoverItems(
+  game: Game,
+  indexVideos: IndexVideo[],
+  discoverVideos: DiscoverVideo[],
+): DiscoverItem[] {
+  const discoverByName = new Map(discoverVideos.map((video) => [video.video_name, video]))
+  const readyIndexVideos = uniqueIndexVideos(
+    indexVideos.filter((video) => cleanString(video.status) === 'ready' && cleanString(video.asset_id)),
+  )
+  const videoNames = workspaceVideoNamesFromIndex(game, readyIndexVideos)
+  const indexedDiscoverVideos = videoNames
+    .map((videoName) => {
+      const discoverVideo = discoverByName.get(videoName)
+      if (discoverVideo?.in_live_index && discoverVideo.playback_ready !== false) {
+        return discoverVideo
+      }
+      const indexedVideo = indexVideoForName(game, readyIndexVideos, videoName)
+      if (!indexedVideo) return null
+      return {
+        video_name: videoName,
+        status: cleanString(indexedVideo.status) || 'ready',
+        in_live_index: true,
+        playback_ready: true,
+        stream_info_path: `/games/${encodeURIComponent(game.tag)}/stream/${encodeURIComponent(videoName)}`,
+        thumbnail_url: cleanString(indexedVideo.thumbnail_url) || null,
+      } satisfies DiscoverVideo
+    })
+    .filter((video): video is DiscoverVideo => Boolean(video))
+
+  return discoverVideoItems(game, indexedDiscoverVideos, indexVideos)
+}
+
+function discoverVideoItems(
+  game: Game,
+  discoverVideos: DiscoverVideo[],
+  indexVideos: IndexVideo[] = [],
+): DiscoverItem[] {
+  return discoverVideos.map((video, index) => ({
+    id: `${game.tag}-${video.video_name}-${index}`,
+    label: 'Indexed Video',
+    title: video.video_name,
+    subtitle: video.status || 'TwelveLabs index',
+    media: video.stream_info_path ? apiUrl(video.stream_info_path) : streamInfoForVideoName(game, video.video_name),
+    poster: posterForVideoName(game, video.video_name, discoverVideos, indexVideos),
+    videoName: video.video_name,
     knowledgeStoreId: game.knowledge_store_id,
     clipCount: 0,
     semanticCount: 0,
@@ -5279,6 +6954,37 @@ function sourceVideoItems(game: Game, sourceVideos: string[], indexVideos: Index
     hasMarengoSearch: false,
     resultType: 'video',
   }))
+}
+
+function sourceVideoItems(
+  game: Game,
+  sourceVideos: string[],
+  discoverVideos: DiscoverVideo[] = [],
+  indexVideos: IndexVideo[] = [],
+): DiscoverItem[] {
+  const discoverByName = new Map(discoverVideos.map((video) => [video.video_name, video]))
+  return Array.from(new Set(sourceVideos)).map((videoName, index) => {
+    const discoverVideo = discoverByName.get(videoName)
+    const media = discoverVideo?.stream_info_path
+      ? apiUrl(discoverVideo.stream_info_path)
+      : streamInfoForVideoName(game, videoName)
+    return {
+    id: `${game.tag}-${videoName}-${index}`,
+    label: discoverVideo?.indexed ? 'Indexed Video' : 'Source Video',
+    title: videoName,
+    subtitle: discoverVideo?.indexed ? 'TwelveLabs index' : discoverVideo?.status || '',
+    media,
+    poster: posterForVideoName(game, videoName, discoverVideos, indexVideos),
+    videoName,
+    knowledgeStoreId: game.knowledge_store_id,
+    clipCount: 0,
+    semanticCount: 0,
+    matches: [],
+    matchHeading: 'Matched Evidence',
+    searchScore: 0,
+    hasMarengoSearch: false,
+    resultType: 'video',
+  }})
 }
 
 function discoverStats(sourceVideos: string[], reelsByVideo: Record<string, HighlightReels | undefined>) {
@@ -5299,10 +7005,14 @@ function normalizeSearchText(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-function shortId(value?: string) {
-  if (!value) return ''
-  if (value.length <= 12) return value
-  return `${value.slice(0, 6)}...${value.slice(-4)}`
+function selectedClipAnalysisCacheKey(tag: string, moment: SearchMoment) {
+  return [
+    tag,
+    moment.videoName,
+    moment.startTime || '0:00',
+    moment.endTime || '',
+    normalizeSearchText(moment.query || moment.title || ''),
+  ].join('|')
 }
 
 function isVideoFile(file: File) {

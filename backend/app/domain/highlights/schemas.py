@@ -85,16 +85,28 @@ HIGHLIGHT_CLIP_SCHEMA = {
         "end_time": {"type": "string"},
         "video_reference": {"type": "string"},
         "clip_type": {"type": "string"},
-        "category": {"type": "string"},
-        "source_type": {"type": "string", "enum": ["stats", "semantic", "stats_semantic"]},
-        "description": {"type": "string"},
-        "score_context": {"type": "string"},
-        "selection_reason": {"type": "string"},
+        "category": {"type": "string", "description": "One of the required top-level reel category keys."},
+        "source_type": {
+            "type": "string",
+            "description": "Use stats for factual baseline clips; reserve semantic and stats_semantic for enhanced lanes.",
+            "enum": ["stats", "semantic", "stats_semantic"],
+        },
+        "description": {"type": "string", "description": "Concise factual clip summary grounded in the video."},
+        "score_context": {"type": "string", "description": "Score, result, race/status, or game-state context when visible or audible."},
+        "selection_reason": {"type": "string", "description": "Why this exact clip belongs in its category."},
         "confidence": {"type": "number", "minimum": 0.01, "maximum": 1},
         "explainability_label": {"type": "string"},
         "evidence_summary": {"type": "string"},
-        "visual_evidence": {"type": "array", "items": {"type": "string"}},
-        "audio_evidence": {"type": "array", "items": {"type": "string"}},
+        "visual_evidence": {
+            "type": "array",
+            "description": "Visual evidence for enhanced lanes only. Return an empty array for standard_stats clips.",
+            "items": {"type": "string"},
+        },
+        "audio_evidence": {
+            "type": "array",
+            "description": "Audio evidence for enhanced lanes only. Return an empty array for standard_stats clips.",
+            "items": {"type": "string"},
+        },
         "transcript_evidence": {"type": "array", "items": {"type": "string"}},
         "timeline_rationale": {"type": "string"},
         "editorial_use": {"type": "string"},
@@ -140,11 +152,30 @@ HIGHLIGHT_REEL_SCHEMA = {
     "type": "object",
     "properties": {
         "match_summary": {"type": "string"},
-        "standard_stats": HIGHLIGHT_CATEGORY_SCHEMA,
-        "best_plays": HIGHLIGHT_CATEGORY_SCHEMA,
-        "emotional_moments": HIGHLIGHT_CATEGORY_SCHEMA,
-        "fan_experience": HIGHLIGHT_CATEGORY_SCHEMA,
-        "behind_the_scenes": HIGHLIGHT_CATEGORY_SCHEMA,
+        "standard_stats": {
+            **HIGHLIGHT_CATEGORY_SCHEMA,
+            "description": (
+                "Sparse WSC-style baseline. Include only explicit score changes, official stats, final results, "
+                "race order/status, penalties, cards, fouls, timeouts, substitutions, or scoreboard/stat-sheet facts. "
+                "Do not include semantic interpretation, emotion, celebration, crowd reaction, or momentum language."
+            ),
+        },
+        "best_plays": {
+            **HIGHLIGHT_CATEGORY_SCHEMA,
+            "description": "Enhanced Jockey lane for decisive plays with semantic context.",
+        },
+        "emotional_moments": {
+            **HIGHLIGHT_CATEGORY_SCHEMA,
+            "description": "Enhanced Jockey lane for visible emotion, tension, celebration, relief, or disappointment.",
+        },
+        "fan_experience": {
+            **HIGHLIGHT_CATEGORY_SCHEMA,
+            "description": "Enhanced Jockey lane for crowd, fan, stadium, broadcast, and atmosphere moments.",
+        },
+        "behind_the_scenes": {
+            **HIGHLIGHT_CATEGORY_SCHEMA,
+            "description": "Enhanced Jockey lane for bench, sideline, warmup, huddle, tunnel, or production context.",
+        },
     },
     "required": [
         "match_summary",

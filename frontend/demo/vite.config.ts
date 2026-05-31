@@ -11,12 +11,12 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       proxy: {
-        '/assets': backendUrl,
-        '/knowledge-stores': backendUrl,
-        '/responses': backendUrl,
-        '/highlight-reels': backendUrl,
-        '/games': backendUrl,
-        '/health': backendUrl,
+        '/assets': { target: backendUrl, changeOrigin: true, timeout: 300_000 },
+        '/knowledge-stores': { target: backendUrl, changeOrigin: true, timeout: 300_000 },
+        '/responses': { target: backendUrl, changeOrigin: true, timeout: 300_000 },
+        '/highlight-reels': { target: backendUrl, changeOrigin: true, timeout: 300_000 },
+        '/games': { target: backendUrl, changeOrigin: true, timeout: 300_000 },
+        '/health': { target: backendUrl, changeOrigin: true, timeout: 300_000 },
       },
     },
     css: {

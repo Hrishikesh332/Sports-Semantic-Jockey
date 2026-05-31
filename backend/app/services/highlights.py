@@ -14,7 +14,7 @@ HIGHLIGHT_CATEGORY_KEYS = [
     "behind_the_scenes",
 ]
 PEGASUS_CATEGORY_LIMITS = {
-    "standard_stats": 18,
+    "standard_stats": 6,
     "best_plays": 12,
     "emotional_moments": 12,
     "fan_experience": 10,
@@ -113,19 +113,21 @@ def pegasus_highlight_prompt(asset_context, match_context=None, wsc_baseline=Non
         f"Timeline offset that the backend will add for playable source timestamps: {offset_seconds:.3f} seconds.",
         "Return timestamps relative to the analyzed window, with the start of this request treated as 0:00.",
         "Return video_reference exactly as the playable source video name, not the asset id and not the index id.",
-        "Generate one standard stats baseline and four TwelveLabs/Pegasus-enhanced highlight categories from the footage.",
+        "Generate one intentionally minimal stats baseline and four TwelveLabs/Pegasus-enhanced highlight categories from the footage.",
         "Return exactly these top-level category keys: standard_stats, best_plays, emotional_moments, fan_experience, behind_the_scenes.",
-        "standard_stats: stats-style baseline using scoring, result, or race/status events only, in chronological order.",
+        "standard_stats: minimal WSC-style baseline using only explicit score changes, official stats, final results, race order/status, penalties, cards, fouls, timeouts, substitutions, or other scoreboard/stat-sheet facts visible or audible in the footage. Keep this lane sparse and chronological. Do not include emotion, crowd reaction, replay beauty, player celebration, momentum language, cinematic context, or semantic interpretation in standard_stats.",
+        "Prefer only the essential standard_stats events needed to establish the match/race state, with at most 4-6 clips for this lane; if no explicit scoreboard/stat-sheet fact is supported, return an empty standard_stats clips array.",
         "best_plays: game-event plus semantic context, including decisive plays, immediate reactions, celebrations, saves, lead changes, and momentum-defining moments.",
         "emotional_moments: semantic-only clips showing visible emotion, tension, celebration, relief, frustration, heartbreak, or sportsmanship.",
         "fan_experience: semantic-only clips showing crowd roars, fans, signs, chants, stadium atmosphere, broadcast atmosphere, or fan reactions.",
         "behind_the_scenes: semantic-only clips showing warmups, coach reactions, bench moments, huddles, sideline context, pit/garage context, tunnels, or non-gameplay production context.",
         "Every clip must include start_time, end_time, video_reference, clip_type, category, source_type, description, score_context, selection_reason, confidence, explainability_label, evidence_summary, visual_evidence, audio_evidence, transcript_evidence, timeline_rationale, and editorial_use.",
-        "Use source_type stats for standard_stats, semantic for semantic-only categories, and stats_semantic only when a clip has both game-event and semantic evidence.",
+        "Use source_type stats for every standard_stats clip. Use semantic for semantic-only categories, and stats_semantic only in enhanced categories when a clip has both game-event and semantic evidence.",
+        "For standard_stats clips, visual_evidence and audio_evidence must be empty arrays. Explain stats clips through score_context, evidence_summary, transcript_evidence when supported, and timeline_rationale only.",
         "Confidence must be 0.01 to 1.0 and reflect how clearly this exact asset supports the timestamp and description.",
         "For explainability, evidence_summary must be one concise sentence grounded in the selected asset. visual_evidence should list visible cues such as scoreboard, body language, players, replays, crowd, bench, or broadcast graphics. audio_evidence should list audible cues such as crowd swell, whistle, commentary, or arena sound when supported. transcript_evidence should list short spoken or OCR/text cues only when present. timeline_rationale should explain why the selected start/end boundaries capture the complete moment. editorial_use should say how to use the clip in a reel.",
         "Choose short playable ranges. Omit clips when evidence is weak. Do not invent timestamps, player names, scores, emotions, standings, or results.",
-        "For each enhanced category, prefer the strongest 4-8 clips rather than exhaustive coverage.",
+        "For standard_stats, prefer fewer clips over broad coverage. For each enhanced category, prefer the strongest 4-8 clips rather than exhaustive coverage.",
     ]
     if window_start is not None and window_end is not None:
         parts.append(f"Analyze window on the asset timeline: {float(window_start):.3f}s to {float(window_end):.3f}s.")
@@ -266,6 +268,7 @@ def normalize_pegasus_clip(raw_clip, asset_context, offset_seconds, category_key
         confidence = 0.75
     confidence = min(1, max(0.01, float(confidence)))
 
+    is_standard_stats = category_key == "standard_stats"
     return {
         "start_time": timecode_from_seconds(start_seconds + offset_seconds),
         "end_time": timecode_from_seconds(end_seconds + offset_seconds),
@@ -279,8 +282,8 @@ def normalize_pegasus_clip(raw_clip, asset_context, offset_seconds, category_key
         "confidence": confidence,
         "explainability_label": clean_string(raw_clip.get("explainability_label")) or "Pegasus 1.5 video analysis",
         "evidence_summary": clean_string(raw_clip.get("evidence_summary")) or explainability_summary(raw_clip, category_key),
-        "visual_evidence": normalize_notes(raw_clip.get("visual_evidence")) or fallback_evidence_list(raw_clip, "description"),
-        "audio_evidence": normalize_notes(raw_clip.get("audio_evidence")),
+        "visual_evidence": [] if is_standard_stats else normalize_notes(raw_clip.get("visual_evidence")) or fallback_evidence_list(raw_clip, "description"),
+        "audio_evidence": [] if is_standard_stats else normalize_notes(raw_clip.get("audio_evidence")),
         "transcript_evidence": normalize_notes(raw_clip.get("transcript_evidence")),
         "timeline_rationale": clean_string(raw_clip.get("timeline_rationale")) or "The range captures the visible beginning and resolution of the highlighted moment.",
         "editorial_use": clean_string(raw_clip.get("editorial_use")) or default_editorial_use(category_key),
@@ -365,7 +368,7 @@ def default_category_title(category_key):
 
 def default_category_objective(category_key):
     return {
-        "standard_stats": "Chronological stats-style event coverage from indexed source footage.",
+        "standard_stats": "Minimal chronological score, result, and stat-sheet context from indexed source footage.",
         "best_plays": "High-value game moments with semantic context.",
         "emotional_moments": "Visible emotional beats grounded in the video.",
         "fan_experience": "Crowd, atmosphere, and broadcast experience moments.",
@@ -390,7 +393,7 @@ def fallback_evidence_list(raw_clip, key):
 
 def default_editorial_use(category_key):
     return {
-        "standard_stats": "Use as chronological event-feed context before or after enhanced semantic clips.",
+        "standard_stats": "Use as sparse score/stat context before or after enhanced semantic clips.",
         "best_plays": "Use as a primary highlight beat in the main reel sequence.",
         "emotional_moments": "Use as a reaction or emotional bridge around the related play.",
         "fan_experience": "Use as atmosphere texture before, after, or between key plays.",
