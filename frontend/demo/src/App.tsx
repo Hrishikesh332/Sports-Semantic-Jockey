@@ -68,6 +68,15 @@ type AssemblyModeKey = 'wsc_baseline' | 'twelvelabs_enhanced' | 'hyper_personali
 type ViewKey = 'discover' | 'workspace' | 'jockey' | 'overview'
 type ReelFormatKey = '9x16' | '16x9' | '1x1' | '4x5'
 type HighlightReelRequestOptions = { silent?: boolean }
+type ClipAnalysisPhase = 'metadata' | 'analysis'
+type TutorialStep = {
+  id: string
+  view: ViewKey
+  targetId: string
+  title: string
+  body: string
+  actionLabel?: string
+}
 
 type WorkspaceAnalysisResponse = {
   video_name?: string
@@ -174,6 +183,48 @@ type JockeyWorkspaceBatchSaveResponse = {
   }>
 }
 
+type JockeyWorkspaceItem = {
+  id: string
+  kind: 'clip_analysis' | 'jockey_turn' | string
+  saved_at?: string | null
+  video_name?: string | null
+  model?: string | null
+  source?: string | null
+  title?: string | null
+  clip_bounds?: {
+    start_time?: string | null
+    end_time?: string | null
+  } | null
+  payload?: {
+    analysis?: Partial<SelectedClipAnalysis>
+    search_context?: Record<string, unknown>
+    prompt?: string | null
+    skill_key?: string | null
+    show_reel?: boolean
+    session_id?: string | null
+    narrative_summary?: string | null
+    clips?: Array<Partial<JockeyManifestClip>>
+  } | null
+}
+
+type JockeyWorkspaceMetadataResponse = {
+  game_tag: string
+  video_name: string
+  workspace?: {
+    updated_at?: string | null
+    saved_items?: JockeyWorkspaceItem[]
+  }
+  summary?: {
+    updated_at?: string | null
+    counts?: {
+      clip_analysis?: number
+      jockey_turn?: number
+      total?: number
+    }
+  }
+  storage?: string
+}
+
 type DiscoverMatch = {
   id: string
   label: string
@@ -213,6 +264,7 @@ type DiscoverItem = {
     clipIndex: number
   }
   searchMoment?: SearchMoment
+  searchRank?: number
 }
 
 type TwelveLabsStreamInfo = {
@@ -508,7 +560,7 @@ const mapLanes: Array<{ key: MapCategoryKey; label: string; icon: string }> = [
 ]
 
 const marengoSearchPresets = [
-  'goal celebration teammates',
+  'goal celebration',
   'fan going wild in the stands',
   'goalkeeper diving save',
   'coach sideline reaction',
@@ -522,6 +574,70 @@ const navItems: Array<{ key: ViewKey; label: string; icon: string }> = [
   { key: 'overview', label: 'Overview', icon: 'document-list' },
 ]
 
+const TUTORIAL_DISCOVER_QUERY = 'goal celebration'
+const TUTORIAL_JOCKEY_PROMPT = 'Find three best reel moments with player reactions.'
+const tutorialSteps: TutorialStep[] = [
+  {
+    id: 'marengo-search',
+    view: 'discover',
+    targetId: 'marengo-search',
+    title: '1. Discover with Marengo',
+    body: 'Search the indexed video by visual and audio meaning. Marengo finds candidate moments before any full-video workflow is needed.',
+    actionLabel: 'Run sample search',
+  },
+  {
+    id: 'analyze-clip',
+    view: 'discover',
+    targetId: 'analyze-clip',
+    title: '2. Analyze Clip with Pegasus 1.5',
+    body: 'Open a search result with Analyze Clip. The selected timestamp is sent to Pegasus 1.5 for clip-only understanding.',
+    actionLabel: 'Open first result',
+  },
+  {
+    id: 'clip-analysis',
+    view: 'workspace',
+    targetId: 'selected-clip-analysis',
+    title: '3. Selected Clip Analysis',
+    body: 'This panel keeps the response grounded to the selected clip: video segment, tone tags, action, score context, participants, evidence, and save-to-metadata.',
+  },
+  {
+    id: 'source-video',
+    view: 'workspace',
+    targetId: 'source-video',
+    title: '4. Source Video Workspace',
+    body: 'The Dashboard source player compares the event-feed baseline against the richer Jockey lift for the active source video.',
+  },
+  {
+    id: 'semantic-lane',
+    view: 'workspace',
+    targetId: 'semantic-lane',
+    title: '5. Semantic Lanes',
+    body: 'Jockey curated responses turn the source into semantic lanes like Best Plays, Emotional Moments, Fan Experience, and Behind the Scenes.',
+  },
+  {
+    id: 'entity-tracking',
+    view: 'workspace',
+    targetId: 'entity-tracking',
+    title: '6. Entity Relationships',
+    body: 'Jockey extracts grounded entities and timestamped interactions so editors can understand who appears, when, and how they relate.',
+  },
+  {
+    id: 'tag-reels',
+    view: 'workspace',
+    targetId: 'tag-reels',
+    title: '7. Tag Reels',
+    body: 'Tag Reels turns the active semantic lane into previewable social cuts, with format choices and download-ready clip ranges.',
+  },
+  {
+    id: 'jockey-chat',
+    view: 'jockey',
+    targetId: 'jockey-composer',
+    title: '8. Ask Jockey',
+    body: 'Use chat to search editorially: ask for a reel, a specific play, a player reaction, or a story beat. Send a prompt to complete the loop.',
+    actionLabel: 'Insert sample prompt',
+  },
+]
+
 const uploadRequirementLabels = [
   'Duration 4sec-4hr',
   'Resolution 360p-4k',
@@ -531,6 +647,9 @@ const uploadRequirementLabels = [
 const JOCKEY_CHAT_CACHE_PREFIX = 'sports-jockey:jockey-chat:'
 const DISCOVER_SESSION_PREFIX = 'sports-jockey:discover-session:'
 const WORKSPACE_UI_SESSION_KEY = 'sports-jockey:workspace-ui-session-v1'
+const WORKSPACE_METADATA_SAVED_EVENT = 'sports-jockey:workspace-metadata-saved'
+const JOCKEY_TUTORIAL_PROMPT_EVENT = 'sports-jockey:tutorial-jockey-prompt'
+const TUTORIAL_ANALYZE_CLIP_EVENT = 'sports-jockey:tutorial-analyze-clip'
 
 function emptyDiscoverSearchSession(): DiscoverSearchSession {
   return {
@@ -666,16 +785,24 @@ function App() {
   const [selectedSearchMoment, setSelectedSearchMoment] = useState<SearchMoment | null>(null)
   const [clipAnalysesByKey, setClipAnalysesByKey] = useState<Record<string, SelectedClipAnalysis>>({})
   const [clipAnalysisLoadingKey, setClipAnalysisLoadingKey] = useState('')
+  const [clipAnalysisPhaseByKey, setClipAnalysisPhaseByKey] = useState<Record<string, ClipAnalysisPhase>>({})
   const [clipAnalysisError, setClipAnalysisError] = useState('')
   const [entityTrackingByKey, setEntityTrackingByKey] = useState<Record<string, EntityTrackingResponse>>({})
   const [entityTrackingLoadingKey, setEntityTrackingLoadingKey] = useState('')
   const [entityTrackingError, setEntityTrackingError] = useState('')
+  const [workspaceMetadataByKey, setWorkspaceMetadataByKey] = useState<Record<string, JockeyWorkspaceMetadataResponse>>({})
+  const [workspaceMetadataLoadingKey, setWorkspaceMetadataLoadingKey] = useState('')
+  const [workspaceMetadataError, setWorkspaceMetadataError] = useState('')
+  const [workspaceMetadataRefreshToken, setWorkspaceMetadataRefreshToken] = useState(0)
   const [reelFormat, setReelFormat] = useState<ReelFormatKey>('9x16')
   const [uploadModalOpen, setUploadModalOpen] = useState(false)
   const [uploadNotice, setUploadNotice] = useState('')
   const [discoverSessionByTag, setDiscoverSessionByTag] = useState<Record<string, DiscoverSearchSession>>(() => loadDiscoverSearchSessions())
   const [workspaceUiHydrated, setWorkspaceUiHydrated] = useState(false)
+  const [tutorialStepIndex, setTutorialStepIndex] = useState<number | null>(null)
   const inFlightReelsRef = useRef<Set<string>>(new Set())
+  const workspaceMetadataByKeyRef = useRef<Record<string, JockeyWorkspaceMetadataResponse>>({})
+  const workspaceMetadataRequestRef = useRef<Record<string, Promise<JockeyWorkspaceMetadataResponse>>>({})
   const suppressNextVideoReset = useRef(false)
   const selectedGame = useMemo(
     () => games.find((game) => game.tag === selectedTag) || null,
@@ -706,10 +833,15 @@ function App() {
   const selectedClipAnalysisKey = selectedTag && activeSearchMoment ? selectedClipAnalysisCacheKey(selectedTag, activeSearchMoment) : ''
   const selectedClipAnalysis = selectedClipAnalysisKey ? clipAnalysesByKey[selectedClipAnalysisKey] : undefined
   const selectedClipAnalysisLoading = Boolean(selectedClipAnalysisKey && clipAnalysisLoadingKey === selectedClipAnalysisKey)
+  const selectedClipAnalysisPhase = selectedClipAnalysisKey ? clipAnalysisPhaseByKey[selectedClipAnalysisKey] : undefined
   const selectedClipAnalysisError = selectedClipAnalysisKey ? clipAnalysisError : ''
   const entityTrackingKey = selectedTag && activeVideoName ? `${selectedTag}|${activeVideoName}` : ''
   const entityTracking = entityTrackingKey ? entityTrackingByKey[entityTrackingKey] : undefined
   const entityTrackingLoading = Boolean(entityTrackingKey && entityTrackingLoadingKey === entityTrackingKey)
+  const workspaceMetadataKey = selectedTag && activeVideoName ? `${selectedTag}|${activeVideoName}` : ''
+  const activeWorkspaceMetadata = workspaceMetadataKey ? workspaceMetadataByKey[workspaceMetadataKey] : undefined
+  const workspaceMetadataLoading = Boolean(workspaceMetadataKey && workspaceMetadataLoadingKey === workspaceMetadataKey)
+  const activeWorkspaceMetadataError = workspaceMetadataKey ? workspaceMetadataError : ''
   const activeEntityTrackingError = entityTrackingKey ? entityTrackingError : ''
   const featuredEyebrow = featuredSignalCategory === 'standard_stats'
     ? 'Event Feed'
@@ -728,6 +860,7 @@ function App() {
   const activeDiscoverSession = selectedTag
     ? discoverSessionByTag[selectedTag] || emptyDiscoverSearchSession()
     : emptyDiscoverSearchSession()
+  const activeTutorialStep = tutorialStepIndex == null ? null : tutorialSteps[tutorialStepIndex] || null
 
   const updateDiscoverSession = useCallback((tag: string, patch: Partial<DiscoverSearchSession>) => {
     if (!tag) return
@@ -760,6 +893,42 @@ function App() {
     setSelectedSearchMoment(null)
     setClipAnalysisError('')
     setClipAnalysisLoadingKey('')
+    setClipAnalysisPhaseByKey({})
+  }, [])
+
+  useEffect(() => {
+    workspaceMetadataByKeyRef.current = workspaceMetadataByKey
+  }, [workspaceMetadataByKey])
+
+  const requestWorkspaceMetadata = useCallback((tag: string, videoName: string, force = false) => {
+    const metadataKey = `${tag}|${videoName}`
+    if (!force && workspaceMetadataByKeyRef.current[metadataKey]) {
+      return Promise.resolve(workspaceMetadataByKeyRef.current[metadataKey])
+    }
+    if (!force && workspaceMetadataRequestRef.current[metadataKey]) {
+      return workspaceMetadataRequestRef.current[metadataKey]
+    }
+
+    setWorkspaceMetadataLoadingKey(metadataKey)
+    setWorkspaceMetadataError('')
+    const request = fetchJson<JockeyWorkspaceMetadataResponse>(
+      `/games/${encodeURIComponent(tag)}/videos/${encodeURIComponent(videoName)}/jockey-workspace`,
+    )
+      .then((body) => {
+        setWorkspaceMetadataByKey((current) => ({ ...current, [metadataKey]: body }))
+        return body
+      })
+      .catch((error: Error) => {
+        setWorkspaceMetadataError(error.message)
+        throw error
+      })
+      .finally(() => {
+        delete workspaceMetadataRequestRef.current[metadataKey]
+        setWorkspaceMetadataLoadingKey((current) => (current === metadataKey ? '' : current))
+      })
+
+    workspaceMetadataRequestRef.current[metadataKey] = request
+    return request
   }, [])
 
   const requestHighlightReels = useCallback((videoName?: string, options: HighlightReelRequestOptions = {}) => {
@@ -862,6 +1031,26 @@ function App() {
   }, [entityTrackingByKey, reelsByTag, selectedGame, selectedTag, workspaceIndexVideos])
 
   useEffect(() => {
+    if (!selectedTag || !activeVideoName) {
+      setWorkspaceMetadataLoadingKey('')
+      setWorkspaceMetadataError('')
+      return
+    }
+    void requestWorkspaceMetadata(selectedTag, activeVideoName, workspaceMetadataRefreshToken > 0).catch(() => undefined)
+  }, [activeVideoName, requestWorkspaceMetadata, selectedTag, workspaceMetadataRefreshToken])
+
+  useEffect(() => {
+    const handleSavedMetadata = (event: Event) => {
+      const detail = (event as CustomEvent<{ tag?: string; videoNames?: string[] }>).detail
+      if (!detail?.tag || detail.tag !== selectedTag || !activeVideoName) return
+      if (detail.videoNames?.length && !detail.videoNames.includes(activeVideoName)) return
+      setWorkspaceMetadataRefreshToken((value) => value + 1)
+    }
+    window.addEventListener(WORKSPACE_METADATA_SAVED_EVENT, handleSavedMetadata)
+    return () => window.removeEventListener(WORKSPACE_METADATA_SAVED_EVENT, handleSavedMetadata)
+  }, [activeVideoName, selectedTag])
+
+  useEffect(() => {
     if (workspaceUiHydrated) return
     const saved = loadWorkspaceUiSession()
     if (saved?.selectedSourceVideoName) setSelectedSourceVideoName(saved.selectedSourceVideoName)
@@ -957,26 +1146,37 @@ function App() {
     if (view !== 'workspace' || !selectedTag || !activeSearchMoment?.startTime || !selectedClipAnalysisKey) return
     if (clipAnalysesByKey[selectedClipAnalysisKey]) {
       setClipAnalysisError('')
+      setClipAnalysisPhaseByKey((current) => {
+        if (!current[selectedClipAnalysisKey]) return current
+        const next = { ...current }
+        delete next[selectedClipAnalysisKey]
+        return next
+      })
       return
     }
     let active = true
     setClipAnalysisLoadingKey(selectedClipAnalysisKey)
+    setClipAnalysisPhaseByKey((current) => ({ ...current, [selectedClipAnalysisKey]: 'metadata' }))
     setClipAnalysisError('')
-    fetchJson<SelectedClipAnalysis>(`/games/${encodeURIComponent(selectedTag)}/clip-analysis`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        video_name: activeSearchMoment.videoName,
-        video_reference: activeSearchMoment.videoReference,
-        start_time: activeSearchMoment.startTime,
-        end_time: activeSearchMoment.endTime,
-        asset_id: activeSearchMoment.sourceAssetId,
-        query: activeSearchMoment.query,
-        description: activeSearchMoment.description,
-        relevance: activeSearchMoment.relevance,
-      }),
-    })
-      .then((body) => {
+    const runSelectedClipAnalysis = async () => {
+      try {
+        await requestWorkspaceMetadata(selectedTag, activeSearchMoment.videoName).catch(() => undefined)
+        if (!active) return
+        setClipAnalysisPhaseByKey((current) => ({ ...current, [selectedClipAnalysisKey]: 'analysis' }))
+        const body = await fetchJson<SelectedClipAnalysis>(`/games/${encodeURIComponent(selectedTag)}/clip-analysis`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            video_name: activeSearchMoment.videoName,
+            video_reference: activeSearchMoment.videoReference,
+            start_time: activeSearchMoment.startTime,
+            end_time: activeSearchMoment.endTime,
+            asset_id: activeSearchMoment.sourceAssetId,
+            query: activeSearchMoment.query,
+            description: activeSearchMoment.description,
+            relevance: activeSearchMoment.relevance,
+          }),
+        })
         if (!active) return
         setClipAnalysesByKey((current) => ({ ...current, [selectedClipAnalysisKey]: body }))
         const provenance = body._jockey_metadata
@@ -1007,14 +1207,23 @@ function App() {
               }),
             }
           })
+          void requestWorkspaceMetadata(selectedTag, activeSearchMoment.videoName, true).catch(() => undefined)
         }
-      })
-      .catch((error: Error) => {
-        if (active) setClipAnalysisError(error.message)
-      })
-      .finally(() => {
-        if (active) setClipAnalysisLoadingKey((current) => (current === selectedClipAnalysisKey ? '' : current))
-      })
+      } catch (error) {
+        if (active) setClipAnalysisError(error instanceof Error ? error.message : 'Selected clip analysis failed')
+      } finally {
+        if (active) {
+          setClipAnalysisLoadingKey((current) => (current === selectedClipAnalysisKey ? '' : current))
+          setClipAnalysisPhaseByKey((current) => {
+            if (!current[selectedClipAnalysisKey]) return current
+            const next = { ...current }
+            delete next[selectedClipAnalysisKey]
+            return next
+          })
+        }
+      }
+    }
+    void runSelectedClipAnalysis()
     return () => {
       active = false
     }
@@ -1028,6 +1237,7 @@ function App() {
     activeSearchMoment?.videoName,
     activeSearchMoment?.videoReference,
     clipAnalysesByKey,
+    requestWorkspaceMetadata,
     selectedClipAnalysisKey,
     selectedTag,
     view,
@@ -1172,6 +1382,109 @@ function App() {
     }
   }
 
+  const runTutorialMarengoSearch = () => {
+    navigate('discover')
+    if (!selectedTag) return
+    updateDiscoverSession(selectedTag, {
+      searchQuery: TUTORIAL_DISCOVER_QUERY,
+      submittedSearchQuery: TUTORIAL_DISCOVER_QUERY,
+      searchResponse: null,
+      searchError: '',
+      activePreviewId: null,
+    })
+  }
+
+  const openFirstTutorialSearchResult = () => {
+    const item = selectedGame && activeDiscoverSession.searchResponse
+      ? searchResultItems(selectedGame, activeDiscoverSession.searchResponse).find((result) => result.resultType === 'search' && result.videoName)
+      : null
+    if (item) {
+      openSourceInWorkspace(item)
+      setTutorialStepIndex(2)
+      return
+    }
+    runTutorialMarengoSearch()
+  }
+
+  const insertTutorialJockeyPrompt = () => {
+    navigate('jockey')
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(JOCKEY_TUTORIAL_PROMPT_EVENT, {
+        detail: { prompt: TUTORIAL_JOCKEY_PROMPT },
+      }))
+    }, 120)
+  }
+
+  const handleTutorialAction = (step: TutorialStep) => {
+    if (step.id === 'marengo-search') {
+      runTutorialMarengoSearch()
+      return
+    }
+    if (step.id === 'analyze-clip') {
+      openFirstTutorialSearchResult()
+      return
+    }
+    if (step.id === 'jockey-chat') {
+      insertTutorialJockeyPrompt()
+    }
+  }
+
+  const startTutorial = () => {
+    setTutorialStepIndex(0)
+    navigate('discover')
+  }
+
+  const closeTutorial = () => {
+    setTutorialStepIndex(null)
+  }
+
+  const goToNextTutorialStep = () => {
+    if (tutorialStepIndex == null) return
+    const step = tutorialSteps[tutorialStepIndex]
+    if (step.id === 'marengo-search' && activeDiscoverSession.submittedSearchQuery !== TUTORIAL_DISCOVER_QUERY) {
+      runTutorialMarengoSearch()
+    }
+    if (step.id === 'analyze-clip') {
+      openFirstTutorialSearchResult()
+      return
+    }
+    if (tutorialStepIndex >= tutorialSteps.length - 1) {
+      closeTutorial()
+      return
+    }
+    setTutorialStepIndex(tutorialStepIndex + 1)
+  }
+
+  useEffect(() => {
+    if (!activeTutorialStep) return
+    if (activeTutorialStep.view !== view) {
+      navigate(activeTutorialStep.view)
+    }
+    if (activeTutorialStep.id === 'analyze-clip' && !activeDiscoverSession.submittedSearchQuery) {
+      runTutorialMarengoSearch()
+    }
+    if (['source-video', 'semantic-lane', 'entity-tracking', 'tag-reels'].includes(activeTutorialStep.id)) {
+      clearSelectedClipSession()
+      if (assemblyMode === 'wsc_baseline') setAssemblyMode('twelvelabs_enhanced')
+    }
+    if (activeTutorialStep.id === 'jockey-chat') {
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent(JOCKEY_TUTORIAL_PROMPT_EVENT, {
+          detail: { focusOnly: true },
+        }))
+      }, 180)
+    }
+  }, [activeTutorialStep?.id])
+
+  useEffect(() => {
+    const handleAnalyzeClip = () => {
+      if (tutorialStepIndex == null || tutorialSteps[tutorialStepIndex]?.id !== 'analyze-clip') return
+      setTutorialStepIndex(2)
+    }
+    window.addEventListener(TUTORIAL_ANALYZE_CLIP_EVENT, handleAnalyzeClip)
+    return () => window.removeEventListener(TUTORIAL_ANALYZE_CLIP_EVENT, handleAnalyzeClip)
+  }, [tutorialStepIndex])
+
   useEffect(() => {
     const handlePopState = () => {
       setView(viewFromPath(window.location.pathname))
@@ -1308,6 +1621,15 @@ function App() {
               </div>
               <button
                 type="button"
+                onClick={startTutorial}
+                className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-xs font-semibold text-text-secondary transition-colors hover:border-accent hover:bg-accent-light hover:text-brand-charcoal sm:px-3 sm:text-sm"
+                title="Start guided tutorial"
+              >
+                <StrandIcon name="help" className="h-4 w-4" />
+                <span>Tutorial</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setUploadModalOpen(true)}
                 disabled={!selectedGame || loadingGames}
                 className={[
@@ -1400,10 +1722,14 @@ function App() {
             selectedSearchMoment={activeSearchMoment}
             selectedClipAnalysis={selectedClipAnalysis}
             selectedClipAnalysisLoading={selectedClipAnalysisLoading}
+            selectedClipAnalysisPhase={selectedClipAnalysisPhase}
             selectedClipAnalysisError={selectedClipAnalysisError}
             entityTracking={entityTracking}
             entityTrackingLoading={entityTrackingLoading}
             entityTrackingError={activeEntityTrackingError}
+            workspaceMetadata={activeWorkspaceMetadata}
+            workspaceMetadataLoading={workspaceMetadataLoading}
+            workspaceMetadataError={activeWorkspaceMetadataError}
             assemblyMode={assemblyMode}
             reelFormat={reelFormat}
             onOpenDiscover={() => navigate('discover')}
@@ -1426,9 +1752,273 @@ function App() {
             }}
           />
         )}
+        {activeTutorialStep && tutorialStepIndex != null && (
+          <GuidedTutorialOverlay
+            step={activeTutorialStep}
+            stepIndex={tutorialStepIndex}
+            totalSteps={tutorialSteps.length}
+            onAction={handleTutorialAction}
+            onNext={goToNextTutorialStep}
+            onClose={closeTutorial}
+          />
+        )}
       </div>
     </main>
   )
+}
+
+function GuidedTutorialOverlay({
+  step,
+  stepIndex,
+  totalSteps,
+  onAction,
+  onNext,
+  onClose,
+}: {
+  step: TutorialStep
+  stepIndex: number
+  totalSteps: number
+  onAction: (step: TutorialStep) => void
+  onNext: () => void
+  onClose: () => void
+}) {
+  const [targetRect, setTargetRect] = useState<DOMRect | null>(null)
+  const [panelHeight, setPanelHeight] = useState(240)
+  const panelRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    let disposed = false
+    let timeoutId: number | null = null
+    let activeTarget: HTMLElement | null = null
+    let originalStyle: Partial<Record<'outline' | 'outlineOffset' | 'boxShadow' | 'position' | 'zIndex' | 'scrollMarginTop' | 'transition', string>> = {}
+
+    const clearTargetStyle = () => {
+      if (!activeTarget) return
+      activeTarget.style.outline = originalStyle.outline || ''
+      activeTarget.style.outlineOffset = originalStyle.outlineOffset || ''
+      activeTarget.style.boxShadow = originalStyle.boxShadow || ''
+      activeTarget.style.position = originalStyle.position || ''
+      activeTarget.style.zIndex = originalStyle.zIndex || ''
+      activeTarget.style.scrollMarginTop = originalStyle.scrollMarginTop || ''
+      activeTarget.style.transition = originalStyle.transition || ''
+      activeTarget = null
+      originalStyle = {}
+    }
+
+    const attachTargetStyle = (target: HTMLElement) => {
+      if (activeTarget === target) return
+      clearTargetStyle()
+      activeTarget = target
+      originalStyle = {
+        outline: target.style.outline,
+        outlineOffset: target.style.outlineOffset,
+        boxShadow: target.style.boxShadow,
+        position: target.style.position,
+        zIndex: target.style.zIndex,
+        scrollMarginTop: target.style.scrollMarginTop,
+        transition: target.style.transition,
+      }
+      if (window.getComputedStyle(target).position === 'static') {
+        target.style.position = 'relative'
+      }
+      target.style.zIndex = '136'
+      target.style.outline = '2px solid #00DC82'
+      target.style.outlineOffset = '6px'
+      target.style.boxShadow = '0 0 0 6px rgba(0,220,130,0.12), 0 18px 36px rgba(29,28,27,0.16)'
+      target.style.scrollMarginTop = 'calc(var(--sj-header-height) + var(--sj-lane-height) + 24px)'
+      target.style.transition = 'outline-color 160ms ease, box-shadow 180ms ease'
+    }
+
+    const updateTarget = (scrollTarget = false) => {
+      const target = document.querySelector(`[data-tour-id="${step.targetId}"]`) as HTMLElement | null
+      if (!target) {
+        clearTargetStyle()
+        setTargetRect(null)
+        return
+      }
+      attachTargetStyle(target)
+      if (scrollTarget) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' })
+      }
+      window.requestAnimationFrame(() => {
+        if (!disposed) setTargetRect(target.getBoundingClientRect())
+      })
+    }
+    const measureTarget = () => updateTarget(false)
+
+    timeoutId = window.setTimeout(() => updateTarget(true), 180)
+    window.addEventListener('resize', measureTarget)
+    window.addEventListener('scroll', measureTarget, true)
+    return () => {
+      disposed = true
+      if (timeoutId) window.clearTimeout(timeoutId)
+      window.removeEventListener('resize', measureTarget)
+      window.removeEventListener('scroll', measureTarget, true)
+      clearTargetStyle()
+    }
+  }, [step.id, step.targetId])
+
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!panel) return
+
+    let frameId: number | null = null
+    const measurePanel = () => {
+      if (frameId) window.cancelAnimationFrame(frameId)
+      frameId = window.requestAnimationFrame(() => {
+        const nextHeight = Math.ceil(panel.getBoundingClientRect().height)
+        if (nextHeight > 0) {
+          setPanelHeight(nextHeight)
+        }
+      })
+    }
+
+    measurePanel()
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measurePanel) : null
+    resizeObserver?.observe(panel)
+    window.addEventListener('resize', measurePanel)
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId)
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', measurePanel)
+    }
+  }, [step.id])
+
+  const nextLabel = stepIndex >= totalSteps - 1 ? 'Finish' : step.id === 'analyze-clip' ? 'Open and Continue' : 'Next'
+  const panelStyle = tutorialPanelStyle(targetRect, panelHeight)
+
+  return (
+    <>
+      <div className="pointer-events-none fixed inset-0 z-[130] bg-brand-charcoal/10" />
+      <section
+        ref={panelRef}
+        data-tour-panel="true"
+        className="fixed z-[140] max-h-[calc(100vh-32px)] overflow-y-auto rounded-md border border-border bg-surface p-4 shadow-[0_18px_48px_rgba(29,28,27,0.22)] transition-[left,top,transform] duration-300 ease-out"
+        style={panelStyle}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
+              Tutorial · Step {stepIndex + 1} of {totalSteps}
+            </p>
+            <h2 className="mt-1 text-base font-semibold text-text-primary">{step.title}</h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border-light bg-card text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+            aria-label="Close tutorial"
+            title="Close tutorial"
+          >
+            <StrandIcon name="close" className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <p className="mt-3 text-sm leading-6 text-text-secondary">{step.body}</p>
+        {!targetRect && (
+          <p className="mt-2 rounded-sm border border-border-light bg-card px-2.5 py-1.5 text-xs font-semibold text-text-tertiary">
+            This step appears once the related UI is available.
+          </p>
+        )}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-1.5">
+            {tutorialSteps.map((item, index) => (
+              <span
+                key={item.id}
+                className={[
+                  'h-1.5 rounded-full transition-all',
+                  index === stepIndex ? 'w-6 bg-accent' : 'w-1.5 bg-border',
+                ].join(' ')}
+              />
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {step.actionLabel && (
+              <button
+                type="button"
+                onClick={() => onAction(step)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border-light bg-card px-3 text-xs font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+              >
+                <StrandIcon name={step.id === 'jockey-chat' ? 'speech' : 'generate'} className="h-3.5 w-3.5" />
+                {step.actionLabel}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onNext}
+              className="inline-flex h-9 items-center gap-1.5 rounded-md border border-accent bg-accent-light px-3 text-xs font-semibold text-brand-charcoal hover:bg-accent"
+            >
+              {nextLabel}
+              <StrandIcon name={stepIndex >= totalSteps - 1 ? 'checkmark' : 'arrow-box-right'} className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      </section>
+    </>
+  )
+}
+
+function tutorialPanelStyle(targetRect: DOMRect | null, measuredPanelHeight = 240): CSSProperties {
+  const viewportWidth = typeof window === 'undefined' ? 1200 : window.innerWidth
+  const viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight
+  const width = Math.min(420, viewportWidth - 32)
+  const gap = 18
+  const pageMargin = 16
+  const estimatedHeight = clamp(measuredPanelHeight, 180, Math.max(180, viewportHeight - pageMargin * 2))
+  const maxLeft = Math.max(pageMargin, viewportWidth - width - pageMargin)
+  const maxTop = Math.max(pageMargin, viewportHeight - estimatedHeight - pageMargin)
+
+  if (!targetRect) {
+    return {
+      bottom: 20,
+      right: 20,
+      width,
+    }
+  }
+
+  const canSitRight = targetRect.right + gap + width <= viewportWidth - pageMargin
+  const canSitLeft = targetRect.left - gap - width >= pageMargin
+  const canSitBelow = targetRect.bottom + gap + estimatedHeight <= viewportHeight - pageMargin
+  const canSitAbove = targetRect.top - gap - estimatedHeight >= pageMargin
+  const centeredLeft = clamp(targetRect.left + (targetRect.width / 2) - (width / 2), pageMargin, maxLeft)
+  const centeredTop = clamp(targetRect.top + (targetRect.height / 2) - (estimatedHeight / 2), pageMargin, maxTop)
+
+  if (canSitRight) {
+    return {
+      left: targetRect.right + gap,
+      top: centeredTop,
+      width,
+    }
+  }
+
+  if (canSitLeft) {
+    return {
+      left: targetRect.left - gap - width,
+      top: centeredTop,
+      width,
+    }
+  }
+
+  if (canSitBelow) {
+    return {
+      left: centeredLeft,
+      top: targetRect.bottom + gap,
+      width,
+    }
+  }
+
+  if (canSitAbove) {
+    return {
+      left: centeredLeft,
+      top: targetRect.top - estimatedHeight - gap,
+      width,
+    }
+  }
+
+  return {
+    left: centeredLeft,
+    top: centeredTop,
+    width,
+  }
 }
 
 function JockeyPage({
@@ -1496,10 +2086,14 @@ function ProducerCockpit({
   selectedSearchMoment,
   selectedClipAnalysis,
   selectedClipAnalysisLoading,
+  selectedClipAnalysisPhase,
   selectedClipAnalysisError,
   entityTracking,
   entityTrackingLoading,
   entityTrackingError,
+  workspaceMetadata,
+  workspaceMetadataLoading,
+  workspaceMetadataError,
   assemblyMode,
   reelFormat,
   onOpenDiscover,
@@ -1532,10 +2126,14 @@ function ProducerCockpit({
   selectedSearchMoment: SearchMoment | null
   selectedClipAnalysis?: SelectedClipAnalysis
   selectedClipAnalysisLoading: boolean
+  selectedClipAnalysisPhase?: ClipAnalysisPhase
   selectedClipAnalysisError: string
   entityTracking?: EntityTrackingResponse
   entityTrackingLoading: boolean
   entityTrackingError: string
+  workspaceMetadata?: JockeyWorkspaceMetadataResponse
+  workspaceMetadataLoading: boolean
+  workspaceMetadataError: string
   assemblyMode: AssemblyModeKey
   reelFormat: ReelFormatKey
   onOpenDiscover: () => void
@@ -1597,16 +2195,29 @@ function ProducerCockpit({
       {!isSelectedClipMode && reels && !hasHighlightAnalysis && <AnalysisIndexNotice game={selectedGame} />}
 
       {isSelectedClipMode && selectedSearchMoment && selectedGame && (
-        <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+        <div className="grid min-w-0 gap-4">
           <SelectedClipAnalysisSection
             game={selectedGame}
             searchMoment={selectedSearchMoment}
             analysis={selectedClipAnalysis}
             loading={selectedClipAnalysisLoading}
+            loadingPhase={selectedClipAnalysisPhase}
             error={selectedClipAnalysisError}
             hasCachedMetadata={hasCachedClipAnalysisMetadata}
+            workspaceMetadata={workspaceMetadata}
+            workspaceMetadataLoading={workspaceMetadataLoading}
+            workspaceMetadataError={workspaceMetadataError}
+            onBackToSearch={onOpenDiscover}
           />
-        </section>
+          <SavedWorkspaceMetadataPanel
+            game={selectedGame}
+            videoName={selectedSearchMoment.videoName}
+            metadata={workspaceMetadata}
+            loading={workspaceMetadataLoading}
+            error={workspaceMetadataError}
+            variant="selected_clip"
+          />
+        </div>
       )}
 
       <div
@@ -1686,6 +2297,15 @@ function ProducerCockpit({
                     category={enhancedCategory}
                     format={reelFormat}
                     onFormatChange={onReelFormatChange}
+                  />
+                )}
+                {activeVideoName && (
+                  <SavedWorkspaceMetadataPanel
+                    game={selectedGame}
+                    videoName={activeVideoName}
+                    metadata={workspaceMetadata}
+                    loading={workspaceMetadataLoading}
+                    error={workspaceMetadataError}
                   />
                 )}
               </div>
@@ -1803,6 +2423,7 @@ function WorkspaceLaneBar({
   return (
     <section
       ref={measureRef}
+      data-tour-id="semantic-lane"
       className="sticky top-[var(--sj-header-height)] z-40 w-full border-y border-x-0 bg-surface px-4 py-2 shadow-[0_8px_18px_rgba(29,28,27,0.08)] sm:px-6"
       style={{ borderColor: activeColor.border }}
     >
@@ -1937,7 +2558,7 @@ function SplitComparisonStage({
   const rightClip = assemblyMode === 'wsc_baseline' ? standardClip : enhancedClip
 
   return (
-    <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.06)] xl:max-h-[calc(100vh-var(--sj-explainability-top)-24px)] xl:overflow-y-auto">
+    <section data-tour-id="source-video" className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.06)] xl:max-h-[calc(100vh-var(--sj-explainability-top)-24px)] xl:overflow-y-auto">
       <div className="grid gap-4 border-b border-border-light bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary">Split-View Player</p>
@@ -2386,6 +3007,19 @@ function ProducerChatPanel({
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [exchanges, loading, showSuggestions])
 
+  useEffect(() => {
+    const handleTutorialPrompt = (event: Event) => {
+      const detail = (event as CustomEvent<{ prompt?: string; focusOnly?: boolean }>).detail
+      if (!detail?.focusOnly) {
+        setActiveSkillKey('')
+        setDraft(detail?.prompt || TUTORIAL_JOCKEY_PROMPT)
+      }
+      window.requestAnimationFrame(() => composerRef.current?.focus())
+    }
+    window.addEventListener(JOCKEY_TUTORIAL_PROMPT_EVENT, handleTutorialPrompt)
+    return () => window.removeEventListener(JOCKEY_TUTORIAL_PROMPT_EVENT, handleTutorialPrompt)
+  }, [])
+
   const loadSkillPrompt = (skill: (typeof jockeyProducerSkills)[number]) => {
     setActiveSkillKey(skill.key)
     setDraft(skill.prompt)
@@ -2477,7 +3111,7 @@ function ProducerChatPanel({
       </div>
 
       <div className="sticky bottom-0 border-t border-border-light bg-background/95 px-1 py-4 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-5xl items-end gap-3 rounded-md border border-border bg-surface px-3 py-2 shadow-[0_10px_30px_rgba(29,28,27,0.08)]">
+        <div data-tour-id="jockey-composer" className="mx-auto flex max-w-5xl items-end gap-3 rounded-md border border-border bg-surface px-3 py-2 shadow-[0_10px_30px_rgba(29,28,27,0.08)]">
           <textarea
             ref={composerRef}
             value={draft}
@@ -2660,6 +3294,7 @@ function JockeySaveTurnButton({
         throw new Error('No video-specific Jockey turn was saved')
       }
       setSaved(true)
+      notifyWorkspaceMetadataSaved(game.tag, body.saved.map((item) => item.video_name).filter(Boolean))
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Save failed')
     } finally {
@@ -3042,51 +3677,90 @@ function OverviewPage({
   reels?: HighlightReels
   loading: boolean
 }) {
-  const comparisonRows = [
+  const problemPoints = [
     {
-      label: 'Core job',
-      standard: 'Automated sports highlight creation, personalization, and distribution at real-time scale.',
-      enhanced: 'The same event baseline, plus search and reasoning over the meaning inside the footage.',
+      icon: 'hourglass',
+      title: 'Highlights move faster than review',
+      body: 'Sports teams need publishable clips quickly, but high-value moments are often hidden between official event tags.',
     },
     {
-      label: 'Signal depth',
-      standard: 'Sport-trained event indexing: plays, game-state changes, and metadata that move quickly to publish.',
-      enhanced: 'Multimodal semantics: actions, speech, audio, OCR, emotion, crowd, scene context, and timestamped citations.',
+      icon: 'search-v2',
+      title: 'Editors search by intent',
+      body: 'A producer asks for pressure, rivalry, relief, player reaction, crowd energy, or setup, not only a timestamp.',
     },
     {
-      label: 'Search',
-      standard: 'Best when the moment is already known by feed label, event type, player, or timestamp.',
-      enhanced: 'Best when the editor asks for intent: pressure, rivalry, atmosphere, celebration, setup, or narrative payoff.',
-    },
-    {
-      label: 'Editorial review',
-      standard: 'Fast clipping and format workflows for high-volume publishing.',
-      enhanced: 'Playable evidence with selection rationale, so teams can see why a clip belongs in the story.',
-    },
-    {
-      label: 'Edge',
-      standard: 'Speed, scale, rights-holder workflows, and platform delivery.',
-      enhanced: 'Long-tail discovery, explainability, and richer fan stories beyond the scoreboard event.',
+      icon: 'document-list',
+      title: 'Every clip needs evidence',
+      body: 'The final choice should show why it belongs in the story, what appears on screen, and where the source footage supports it.',
     },
   ]
-  const jockeyAdds = [
-    { icon: 'search', label: 'Natural-language moment search' },
-    { icon: 'vision', label: 'Visual, speech, audio, and text understanding' },
-    { icon: 'speech', label: 'Emotion and atmosphere retrieval' },
-    { icon: 'document-list', label: 'Grounded clip rationale' },
+  const workflow = [
+    {
+      icon: 'search-v2',
+      label: 'Marengo',
+      title: 'Discover the moment',
+      body: 'Search indexed video by visual and audio meaning, then open the exact result as a selected clip.',
+    },
+    {
+      icon: 'analyze',
+      label: 'Pegasus 1.5',
+      title: 'Explain the clip',
+      body: 'Generate clip-only metadata: tone, key action, score context, people, tags, boundaries, and grounded evidence.',
+    },
+    {
+      icon: 'entity-collection',
+      label: 'Jockey',
+      title: 'Structure the story',
+      body: 'Build semantic lanes, entity relationships, tag reels, and saved workspace memory for repeated editorial work.',
+    },
+  ]
+  const extensionPoints = [
+    {
+      icon: 'usage',
+      baseline: 'Known event',
+      lift: 'Searchable intent',
+      body: 'The event feed keeps the production anchor. Jockey adds search for emotion, pressure, relief, atmosphere, and story beats.',
+    },
+    {
+      icon: 'analyze',
+      baseline: 'Timestamped clip',
+      lift: 'Grounded explanation',
+      body: 'Pegasus turns the selected segment into tone, action, score context, participants, boundaries, and evidence.',
+    },
+    {
+      icon: 'entity-collection',
+      baseline: 'Visible people',
+      lift: 'Entity graph',
+      body: 'Teams, players, officials, fan groups, and interactions become timestamped signals instead of loose observations.',
+    },
+    {
+      icon: 'document-list',
+      baseline: 'One-time package',
+      lift: 'Reusable memory',
+      body: 'Selected clip analysis and Jockey chat turns are saved back to the source video for later reels and review.',
+    },
+  ]
+  const outcomes = [
+    { icon: 'play-boxed', label: 'Selected clip analysis', body: 'Clip playback and Pegasus response appear together, so review happens against the actual source moment.' },
+    { icon: 'list', label: 'Semantic lanes', body: 'Best Plays, Emotion, Fans, and Behind the Scenes become scannable producer paths.' },
+    { icon: 'entity-collection', label: 'Entity tracking', body: 'People, teams, officials, fan groups, and interactions are grounded to timestamps.' },
+    { icon: 'devices', label: 'Tag reels', body: 'The same evidence can become 9:16 reels, recaps, feed cuts, or reaction inserts.' },
   ]
 
   return (
     <div className="flex flex-1 bg-background">
-      <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-6 px-6 py-6">
-        <section className="grid gap-5 border-b border-border pb-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+      <div className="mx-auto flex w-full max-w-[1240px] flex-col px-6 py-7">
+        <section className="grid gap-6 border-b border-border pb-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-end">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-text-tertiary">Overview</p>
-            <h2 className="mt-2 max-w-3xl text-3xl font-semibold leading-tight text-text-primary">
-              WSC Standard vs TwelveLabs Jockey
+            <div className="inline-flex items-center gap-2 rounded-sm border border-border bg-surface px-2.5 py-1.5 text-xs font-semibold text-text-secondary">
+              <ModeGlyph mode="twelvelabs_enhanced" icon="vision" className="h-4 w-5 text-brand-charcoal" />
+              TwelveLabs Jockey
+            </div>
+            <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-[1.08] text-text-primary">
+              Explainable sports discovery on top of fast highlight automation.
             </h2>
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-text-secondary">
-              WSC is the speed-and-scale benchmark for automated sports highlights. Jockey keeps that event baseline, then adds multimodal search, semantic context, and clip-level reasoning for the moments the feed does not fully explain.
+            <p className="mt-4 max-w-3xl text-base leading-7 text-text-secondary">
+              WSC-style workflows are excellent at turning known events into publishable clips. Sports Jockey adds TwelveLabs video understanding so producers can find the emotional, visual, and narrative moments that are not fully described by the event feed.
             </p>
           </div>
           <div className="flex flex-wrap gap-2 lg:justify-end">
@@ -3095,172 +3769,178 @@ function OverviewPage({
               onClick={() => onNavigate('discover')}
               className="inline-flex h-10 items-center gap-2 rounded-md border border-accent bg-accent-light px-4 text-sm font-semibold text-brand-charcoal hover:bg-accent"
             >
-              <StrandIcon name="search" className="h-4 w-4" />
-              Discover
+              <StrandIcon name="search-v2" className="h-4 w-4" />
+              Discover moments
             </button>
             <button
               type="button"
               onClick={() => onNavigate('workspace')}
-              className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:border-accent hover:bg-accent-light"
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
             >
-              <StrandIcon name="play-boxed" className="h-4 w-4" />
-              Workspace
+              <StrandIcon name="dashboard" className="h-4 w-4" />
+              Open dashboard
             </button>
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-          <div className="grid md:grid-cols-2">
-            <div className="border-b border-border-light bg-card p-5 md:border-b-0 md:border-r">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-text-tertiary">Baseline</p>
-                  <h3 className="mt-1 text-base font-semibold text-text-primary">WSC Standard</h3>
-                </div>
-                <StrandIcon name="usage" className="h-5 w-5 text-text-tertiary" />
-              </div>
-              <div className="mt-4 aspect-video rounded-md border border-dashed border-border bg-surface" />
-            </div>
-
-            <div className="bg-card p-5">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-text-tertiary">Enhanced</p>
-                  <h3 className="mt-1 text-base font-semibold text-text-primary">TwelveLabs Jockey</h3>
-                </div>
-                <StrandIcon name="vision" className="h-5 w-5 text-text-tertiary" />
-              </div>
-              <div className="mt-4 aspect-video rounded-md border border-dashed border-border bg-surface" />
-            </div>
+        <section className="grid gap-8 border-b border-border py-8 lg:grid-cols-[0.82fr_1.18fr]">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary">The problem</p>
+            <h3 className="mt-2 max-w-md text-2xl font-semibold leading-tight text-text-primary">Event data says what happened. Editors still need why it matters.</h3>
+            <p className="mt-3 max-w-lg text-sm leading-6 text-text-secondary">
+              The baseline can identify the obvious scoring moment. The editorial value often sits around it: the buildup, the reaction, the crowd swing, and the evidence that makes the clip trustworthy.
+            </p>
+          </div>
+          <div className="overflow-hidden rounded-md border border-border bg-surface">
+            {problemPoints.map((item, index) => (
+              <OverviewProblemRow key={item.title} index={index + 1} {...item} />
+            ))}
           </div>
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_360px]">
-          <div className="rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-            <div className="border-b border-border-light bg-card px-5 py-4">
+        <section className="border-b border-border py-8">
+          <div className="max-w-3xl">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary">The solution</p>
+            <h3 className="mt-2 text-2xl font-semibold leading-tight text-text-primary">A semantic production loop layered over the baseline.</h3>
+            <p className="mt-3 text-sm leading-6 text-text-secondary">
+              Producers move from discovery to clip explanation to reusable Jockey memory without losing the speed of the original highlight workflow.
+            </p>
+          </div>
+          <div className="mt-5 grid gap-3 lg:grid-cols-3">
+            {workflow.map((item, index) => (
+              <OverviewWorkflowStep key={item.title} index={index + 1} {...item} />
+            ))}
+          </div>
+        </section>
+
+        <section className="grid gap-6 border-b border-border py-8 xl:grid-cols-[minmax(300px,0.72fr)_minmax(0,1.28fr)]">
+          <div className="min-w-0">
+            <div className="mb-4 flex min-w-0 items-center gap-2">
+              <StrandIcon name="scalable" className="h-4 w-4 text-accent" />
+              <h3 className="text-base font-semibold text-text-primary">Where TwelveLabs Jockey extends the baseline</h3>
+            </div>
+            <div className="rounded-md border border-border bg-brand-charcoal px-5 py-5 text-white">
               <div className="flex items-center gap-2">
-                <StrandIcon name="scalable" className="h-4 w-4 text-accent" />
-                <h3 className="text-base font-semibold text-text-primary">Comparison Matrix</h3>
+                <ModeGlyph mode="twelvelabs_enhanced" icon="vision" className="h-5 w-6 text-accent" />
+                <h4 className="text-sm font-semibold">Core promise</h4>
               </div>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
-                WSC is strongest at real-time automated production. Jockey is strongest when editors need the why behind a moment, not only the event that triggered it.
+              <p className="mt-4 text-2xl font-semibold leading-tight">Move from “show me the goal” to “show me the story around the goal.”</p>
+              <p className="mt-3 text-sm leading-6 text-white/72">
+                Every answer stays grounded to playable footage, timestamped evidence, and saved metadata, so teams can trust the recommendation.
               </p>
             </div>
-            <div className="divide-y divide-border-light">
-              {comparisonRows.map((row) => (
-                <OverviewComparisonRow key={row.label} label={row.label} standard={row.standard} enhanced={row.enhanced} />
-              ))}
-            </div>
           </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {extensionPoints.map((item, index) => (
+              <OverviewExtensionCard key={item.lift} index={index + 1} {...item} />
+            ))}
+          </div>
+        </section>
 
-          <aside className="rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-            <div className="border-b border-border-light bg-card px-5 py-4">
-              <div className="flex items-center gap-2">
-                <StrandIcon name="generate" className="h-4 w-4 text-accent" />
-                <h3 className="text-base font-semibold text-text-primary">What Jockey Adds</h3>
-              </div>
-            </div>
-            <div className="grid gap-3 p-5">
-              {jockeyAdds.map((item) => (
-                <div key={item.label} className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md border border-border-light bg-card px-3 py-3">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
-                    <StrandIcon name={item.icon} className="h-4 w-4" />
-                  </span>
-                  <span className="text-sm font-semibold leading-5 text-text-primary">{item.label}</span>
-                </div>
-              ))}
-            </div>
-          </aside>
+        <section className="py-8">
+          <div className="mb-4 flex min-w-0 items-center gap-2">
+            <StrandIcon name="generate" className="h-4 w-4 text-accent" />
+            <h3 className="text-base font-semibold text-text-primary">What the producer gets</h3>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {outcomes.map((item) => (
+              <OverviewOutcome key={item.label} {...item} />
+            ))}
+          </div>
         </section>
       </div>
     </div>
   )
 }
 
-function OverviewMetric({ icon, label, value }: { icon: string; label: string; value: string }) {
+function OverviewProblemRow({ icon, title, body, index }: { icon: string; title: string; body: string; index: number }) {
   return (
-    <div className="min-w-0 rounded-md border border-border-light bg-surface px-3 py-3">
-      <div className="flex items-center gap-2">
-        <StrandIcon name={icon} className="h-4 w-4 text-accent" />
-        <p className="truncate text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
-      </div>
-      <p className="mt-2 truncate text-base font-semibold text-text-primary">{value}</p>
-    </div>
-  )
-}
-
-function OverviewField({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="border-b border-border-light pb-3 last:border-b-0 last:pb-0">
-      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
-      <p className={['mt-1 break-words text-sm font-semibold text-text-primary', mono ? 'font-mono' : ''].join(' ')}>{value}</p>
-    </div>
-  )
-}
-
-function OverviewCount({ icon, label, value, detail }: { icon: string; label: string; value: number; detail: string }) {
-  return (
-    <div className="min-w-0 border-l border-border pl-3">
-      <div className="flex items-center gap-2">
-        <StrandIcon name={icon} className="h-4 w-4 text-accent" />
-        <p className="truncate text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
-      </div>
-      <p className="mt-1 text-xl font-semibold leading-none text-text-primary">{value}</p>
-      <p className="mt-1 truncate text-xs text-text-tertiary">{detail}</p>
-    </div>
-  )
-}
-
-function OverviewComparisonSide({ icon, title, label, body }: { icon: string; title: string; label: string; body: string }) {
-  return (
-    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-3 px-5 py-5">
+    <article className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-3 border-t border-border-light px-4 py-4 first:border-t-0">
       <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-text-secondary">
         <StrandIcon name={icon} className="h-4 w-4" />
       </span>
       <div className="min-w-0">
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
-        <h4 className="mt-1 text-base font-semibold text-text-primary">{title}</h4>
-        <p className="mt-2 max-w-xl text-sm leading-6 text-text-secondary">{body}</p>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="font-mono text-[10px] font-semibold text-text-tertiary">{String(index).padStart(2, '0')}</span>
+          <h4 className="text-sm font-semibold text-text-primary">{title}</h4>
+        </div>
+        <p className="mt-1 text-sm leading-6 text-text-secondary">{body}</p>
       </div>
-    </div>
+    </article>
   )
 }
 
-function OverviewComparisonRow({ label, standard, enhanced }: { label: string; standard: string; enhanced: string }) {
+function OverviewWorkflowStep({
+  icon,
+  label,
+  title,
+  body,
+  index,
+}: {
+  icon: string
+  label: string
+  title: string
+  body: string
+  index: number
+}) {
   return (
-    <div className="grid gap-3 px-5 py-4 md:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)] md:items-start">
-      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
-      <p className="text-sm leading-6 text-text-secondary">{standard}</p>
-      <p className="text-sm font-medium leading-6 text-text-primary">{enhanced}</p>
-    </div>
+    <article className="min-w-0 rounded-md border border-border-light bg-surface px-4 py-4">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <span className="flex h-10 w-10 items-center justify-center rounded-md border border-accent/30 bg-accent-light text-brand-charcoal">
+          <StrandIcon name={icon} className="h-4 w-4" />
+        </span>
+        <span className="font-mono text-[11px] font-semibold text-text-tertiary">{String(index).padStart(2, '0')}</span>
+      </div>
+      <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
+      <h4 className="mt-1 text-sm font-semibold text-text-primary">{title}</h4>
+      <p className="mt-2 text-sm leading-6 text-text-secondary">{body}</p>
+    </article>
   )
 }
 
-function OverviewLaneRow({ icon, label, count, width }: { icon: string; label: string; count: number; width: number }) {
+function OverviewExtensionCard({
+  icon,
+  baseline,
+  lift,
+  body,
+  index,
+}: {
+  icon: string
+  baseline: string
+  lift: string
+  body: string
+  index: number
+}) {
   return (
-    <div className="grid min-w-0 grid-cols-[156px_minmax(0,1fr)_44px] items-center gap-3">
-      <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text-secondary">
-        <StrandIcon name={icon} className="h-4 w-4 text-accent" />
-        <span className="truncate">{label}</span>
+    <article className="min-w-0 rounded-md border border-border-light bg-surface px-4 py-4">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-accent">
+          <StrandIcon name={icon} className="h-4 w-4" />
+        </span>
+        <span className="font-mono text-[10px] font-semibold text-text-tertiary">{String(index).padStart(2, '0')}</span>
       </div>
-      <div className="h-2 overflow-hidden rounded-sm bg-border-light">
-        <span className="block h-full rounded-sm bg-accent" style={{ width: `${width}%` }} />
+      <div className="mt-4 grid gap-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{baseline}</p>
+        <div className="flex items-center gap-2 text-accent">
+          <span className="h-px flex-1 bg-accent/45" />
+          <StrandIcon name="arrow-box-right" className="h-4 w-4" />
+          <span className="h-px flex-1 bg-accent/45" />
+        </div>
+        <h4 className="text-base font-semibold text-text-primary">{lift}</h4>
       </div>
-      <span className="text-right text-sm font-semibold text-text-primary">{count}</span>
-    </div>
+      <p className="mt-3 text-sm leading-6 text-text-secondary">{body}</p>
+    </article>
   )
 }
 
-function OverviewStage({ icon, title, detail }: { icon: string; title: string; detail: string }) {
+function OverviewOutcome({ icon, label, body }: { icon: string; label: string; body: string }) {
   return (
-    <article className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 px-5 py-4">
+    <article className="min-w-0 rounded-md border border-border-light bg-surface px-4 py-4">
       <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-text-secondary">
         <StrandIcon name={icon} className="h-4 w-4" />
       </span>
-      <div className="min-w-0">
-        <h4 className="text-sm font-semibold text-text-primary">{title}</h4>
-        <p className="mt-1 text-sm leading-5 text-text-secondary">{detail}</p>
-      </div>
+      <h4 className="mt-3 text-sm font-semibold text-text-primary">{label}</h4>
+      <p className="mt-2 text-sm leading-6 text-text-secondary">{body}</p>
     </article>
   )
 }
@@ -3816,7 +4496,7 @@ function DiscoverPage({
               </div>
             </div>
           ) : items.length > 0 ? (
-            <div className="grid auto-rows-fr gap-5 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid auto-rows-fr gap-4 md:grid-cols-2 xl:grid-cols-3">
               {items.map((item) => (
                 <DiscoverResultCard
                   key={item.id}
@@ -3864,7 +4544,7 @@ function DiscoverSearchPanel({
   onPresetSelect: (value: string) => void
 }) {
   return (
-    <div className="grid gap-4 rounded-md border border-border bg-card p-4 shadow-[0_8px_24px_rgba(29,28,27,0.045)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+    <div data-tour-id="marengo-search" className="grid gap-4 rounded-md border border-border bg-card p-4 shadow-[0_8px_24px_rgba(29,28,27,0.045)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
       <label htmlFor="discover-search" className="sr-only">
         Search source videos
       </label>
@@ -3880,7 +4560,7 @@ function DiscoverSearchPanel({
               if (event.key === 'Escape') onClear()
             }}
             className="min-w-0 flex-1 bg-transparent text-base font-medium text-text-primary outline-none placeholder:text-text-tertiary"
-            placeholder="Search visual/audio moments: player celebration, crowd roar, diving save..."
+            placeholder="Search visual/audio moments - player celebration, crowd roar, diving save..."
           />
           {value && (
             <button
@@ -3981,12 +4661,12 @@ function DiscoverResultCard({
       }
     : undefined
   const primaryMatch = item.matches[0]
-  const showLabel = item.label !== 'Indexed Video'
+  const showLabel = item.label !== 'Indexed Video' && item.resultType !== 'search'
   const showSubtitle = Boolean(item.subtitle && item.subtitle.toLowerCase() !== 'ready')
 
   return (
     <article className="group flex min-w-0 flex-col overflow-hidden rounded-md border border-border bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="relative m-3 overflow-hidden rounded-md border border-border-light bg-card">
+      <div className="relative m-2.5 overflow-hidden rounded-md border border-border-light bg-card">
         {canPreviewSegment && isPreviewActive ? (
           <div className="aspect-video">
             <TwelveLabsVideoPlayer
@@ -4031,38 +4711,53 @@ function DiscoverResultCard({
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col px-5 pb-5 pt-1">
-        <div className="flex min-w-0 items-start justify-between gap-3">
+      <div className="flex flex-1 flex-col px-4 pb-4 pt-1">
+        <div className="flex min-w-0 items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             {showLabel && <p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-tertiary">{item.label}</p>}
-            <h4 className={[showLabel ? 'mt-2' : '', 'line-clamp-2 text-lg font-semibold leading-6 text-text-primary'].join(' ')}>{item.title}</h4>
-            {showSubtitle && <p className="mt-2 line-clamp-2 text-sm leading-5 text-text-secondary">{item.subtitle}</p>}
+            <h4 className={[showLabel ? 'mt-1.5' : '', 'line-clamp-2 text-lg font-semibold leading-6 text-text-primary'].join(' ')}>{item.title}</h4>
+            {showSubtitle && <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-text-secondary">{item.subtitle}</p>}
           </div>
         </div>
 
         {item.resultType === 'search' && primaryMatch?.text && (
-          <p className="mt-4 rounded-md border border-border-light bg-surface px-3 py-3 text-sm font-medium leading-5 text-text-primary">
-            {primaryMatch.text}
+          <div className="mt-3 rounded-md border border-border-light px-3 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Transcription</p>
+            <p className="mt-1.5 text-sm font-medium leading-5 text-text-primary">
+              {primaryMatch.text}
+            </p>
+          </div>
+        )}
+
+        {item.resultType === 'search' && item.searchRank != null && (
+          <p className="mt-3 text-center text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
+            Rank #{item.searchRank}
           </p>
         )}
 
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
           {category && <DiscoverBadge icon={category.icon}>{category.label}</DiscoverBadge>}
           {item.sourceType && <DiscoverBadge icon="vision">{sourceLabel(item.sourceType)}</DiscoverBadge>}
         </div>
 
-        <DiscoverMatchList heading={item.matchHeading} matches={item.matches} />
+        {item.resultType !== 'search' && (
+          <DiscoverMatchList heading={item.matchHeading} matches={item.matches} />
+        )}
 
         {item.resultType === 'search' && (
-          <div className="mt-auto flex flex-wrap gap-2 pt-5">
+          <div className="mt-auto flex flex-wrap gap-2 pt-3">
             <button
               type="button"
-              onClick={() => onOpenInWorkspace(item)}
+              data-tour-id="analyze-clip"
+              onClick={() => {
+                onOpenInWorkspace(item)
+                window.dispatchEvent(new CustomEvent(TUTORIAL_ANALYZE_CLIP_EVENT))
+              }}
               disabled={!canOpen}
               className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal disabled:cursor-not-allowed disabled:opacity-60"
             >
               <StrandIcon name="analyze" className="h-4 w-4" />
-              Analyze
+              Analyze Clip
             </button>
           </div>
         )}
@@ -4110,9 +4805,9 @@ function DiscoverSearchSegmentMarker({ range }: { range: SegmentRange }) {
 function DiscoverMatchList({ heading, matches }: { heading: string; matches: DiscoverMatch[] }) {
   if (matches.length === 0) return null
   return (
-    <div className="mt-4 border-t border-border-light pt-4">
+    <div className="mt-3 border-t border-border-light pt-3">
       <p className="text-xs font-semibold uppercase tracking-[0.1em] text-text-tertiary">{heading}</p>
-      <div className="mt-3 flex flex-col gap-3">
+      <div className="mt-2 flex flex-col gap-2">
         {matches.map((match) => (
           <div key={match.id} className="min-w-0">
             <div className="flex min-w-0 items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
@@ -4848,15 +5543,25 @@ function SelectedClipAnalysisSection({
   searchMoment,
   analysis,
   loading,
+  loadingPhase,
   error,
   hasCachedMetadata = false,
+  workspaceMetadata,
+  workspaceMetadataLoading = false,
+  workspaceMetadataError = '',
+  onBackToSearch,
 }: {
   game: Game | null
   searchMoment: SearchMoment
   analysis?: SelectedClipAnalysis
   loading: boolean
+  loadingPhase?: ClipAnalysisPhase
   error: string
   hasCachedMetadata?: boolean
+  workspaceMetadata?: JockeyWorkspaceMetadataResponse
+  workspaceMetadataLoading?: boolean
+  workspaceMetadataError?: string
+  onBackToSearch?: () => void
 }) {
   const evidenceRows = analysis
     ? [
@@ -4876,13 +5581,16 @@ function SelectedClipAnalysisSection({
         endLabel: searchMoment.endTime,
       }
     : undefined
+  const activeLoadingPhase: ClipAnalysisPhase = loadingPhase
+    || (hasCachedMetadata || analysis?._jockey_metadata?.from_user_metadata ? 'metadata' : 'analysis')
   return (
-    <div
+    <section
       id="selected-clip-analysis"
+      data-tour-id="selected-clip-analysis"
       tabIndex={-1}
-      className="scroll-mt-40 px-5 py-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+      className="scroll-mt-40 overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)] outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="grid gap-3 border-b border-border-light bg-card px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
             <StrandIcon name="analyze" className="h-4 w-4 shrink-0 text-accent" />
@@ -4904,103 +5612,305 @@ function SelectedClipAnalysisSection({
         </div>
       </div>
 
-      <div className="mt-4 min-w-0 overflow-hidden rounded-md border border-border-light bg-card">
-        <div className="border-b border-border-light px-3 py-2">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Selected Search Clip</p>
-        </div>
-        <div className="aspect-video bg-card">
-          {clipStreamInfoUrl ? (
-            <TwelveLabsVideoPlayer
-              key={`${searchMoment.videoName}-${searchMoment.startTime || 'start'}-${searchMoment.endTime || 'end'}`}
-              streamInfoUrl={clipStreamInfoUrl}
-              startSeconds={clipStartSeconds}
-              endSeconds={clipEndSeconds}
-              posterUrl={game ? thumbnailForVideoName(game, searchMoment.videoName) : undefined}
-              segmentRange={clipSegmentRange}
-              variant="minimal"
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-text-secondary">
-              Selected clip playback is unavailable.
+      <div className="grid min-w-0 xl:grid-cols-[minmax(320px,0.72fr)_minmax(0,1.28fr)] xl:items-start">
+        <div className="min-w-0 bg-card xl:sticky xl:top-24 xl:border-r xl:border-border-light">
+          <div className="flex items-center justify-between gap-2 border-b border-border-light px-3 py-2">
+            <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Selected Search Clip</p>
+            <span className="shrink-0 rounded-sm bg-surface px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
+              {searchMoment.startTime}{searchMoment.endTime ? ` - ${searchMoment.endTime}` : ''}
+            </span>
+          </div>
+          <div className="aspect-video bg-card">
+            {clipStreamInfoUrl ? (
+              <TwelveLabsVideoPlayer
+                key={`${searchMoment.videoName}-${searchMoment.startTime || 'start'}-${searchMoment.endTime || 'end'}`}
+                streamInfoUrl={clipStreamInfoUrl}
+                startSeconds={clipStartSeconds}
+                endSeconds={clipEndSeconds}
+                posterUrl={game ? thumbnailForVideoName(game, searchMoment.videoName) : undefined}
+                segmentRange={clipSegmentRange}
+                variant="minimal"
+                showSegmentControls
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-text-secondary">
+                Selected clip playback is unavailable.
+              </div>
+            )}
+          </div>
+          <div className="border-t border-border-light px-3 py-3">
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold text-text-primary">{searchMoment.title}</p>
+                <p className="mt-0.5 truncate text-[11px] font-semibold text-text-tertiary">{searchMoment.videoName}</p>
+              </div>
+              {onBackToSearch ? (
+                <button
+                  type="button"
+                  onClick={onBackToSearch}
+                  className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-secondary transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+                >
+                  <StrandIcon name="arrow-box-left" className="h-4 w-4" />
+                  Back to Search
+                </button>
+              ) : null}
             </div>
-          )}
+            <div className="mt-3">
+              <SelectedClipVideoMetadataPanel
+                metadata={workspaceMetadata}
+                loading={workspaceMetadataLoading || (loading && activeLoadingPhase === 'metadata')}
+                error={workspaceMetadataError}
+                searchMoment={searchMoment}
+                analysis={analysis}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid min-w-0 gap-3 p-3">
+          <section className="min-w-0">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <StrandIcon name="vision" className="h-4 w-4 shrink-0 text-accent" />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-text-primary">Pegasus 1.5 Response</p>
+                  <p className="inline-flex max-w-full items-center gap-1 truncate rounded-sm border border-border-light bg-surface px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
+                    <StrandIcon name="checkmark" className="h-3 w-3 text-accent" />
+                    Selected clip only — no whole-video Jockey analysis
+                  </p>
+                </div>
+              </div>
+              <SelectedClipAnalysisSaveButton game={game} searchMoment={searchMoment} analysis={analysis} />
+            </div>
+            {loading ? (
+              <SelectedClipAnalysisLoader phase={activeLoadingPhase} />
+            ) : analysis ? (
+              <div className="grid gap-3">
+                <SelectedClipNarrative analysis={analysis} />
+                <div className="grid gap-2 2xl:grid-cols-[minmax(0,1fr)_minmax(260px,0.82fr)]">
+                  <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+                    <SelectedClipToneTags value={analysis.emotional_tone} />
+                    <SelectedClipActionSignal value={analysis.key_action} />
+                    <SelectedClipScoreSignal value={analysis.score_context} />
+                  </div>
+                  <SelectedClipParticipants participants={analysis.participants} />
+                </div>
+                <div className="grid gap-2 lg:grid-cols-3">
+                  <SelectedClipTagGroup icon="flame" label="Moment types" values={analysis.moment_types} />
+                  <SelectedClipTagGroup icon="filter" label="Producer tags" values={analysis.tags} />
+                  <SelectedClipTagGroup icon="devices" label="Recommended formats" values={analysis.recommended_formats} />
+                </div>
+                <div className="grid gap-2 xl:grid-cols-[minmax(220px,0.72fr)_minmax(0,1.28fr)]">
+                  <div className="grid min-w-0 gap-2">
+                    <SelectedClipNote icon="hourglass" label="Boundaries" value={analysis.clip_boundary_notes} />
+                    <SelectedClipNote icon="warning" label="Review notes" value={analysis.rights_safety_notes} />
+                  </div>
+                  <SelectedClipEvidenceGroup rows={evidenceRows} />
+                </div>
+              </div>
+            ) : error ? (
+              <div className="rounded-md border border-error bg-error-light px-3 py-2 text-sm font-semibold text-error-dark">
+                {error}
+              </div>
+            ) : (
+              <p className="text-sm font-semibold text-text-tertiary">Choose Analyze from Discover to run Pegasus 1.5 on a selected clip.</p>
+            )}
+          </section>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function SelectedClipVideoMetadataPanel({
+  metadata,
+  loading,
+  error,
+  searchMoment,
+  analysis,
+}: {
+  metadata?: JockeyWorkspaceMetadataResponse
+  loading: boolean
+  error: string
+  searchMoment: SearchMoment
+  analysis?: SelectedClipAnalysis
+}) {
+  const items = savedWorkspaceItems(metadata)
+  const clipItems = savedWorkspaceItemsByKind(items, 'clip_analysis')
+  const turnItems = savedWorkspaceItemsByKind(items, 'jockey_turn')
+  const counts = metadata?.summary?.counts || {}
+  const total = counts.total ?? items.length
+  const hasMetadata = Boolean(metadata)
+  const matchingClipItem = selectedSearchClipWorkspaceItem(metadata, searchMoment)
+  const storedByCurrentAnalysis = Boolean(analysis?._jockey_metadata?.stored_to_user_metadata)
+  const clipStatus = matchingClipItem
+    ? {
+        icon: 'checkmark',
+        tone: 'ready',
+        label: 'Selected clip metadata found',
+        detail: matchingClipItem.saved_at ? `Saved ${formatWorkspaceSavedAt(matchingClipItem.saved_at)}` : 'Already saved on the source video.',
+      }
+    : storedByCurrentAnalysis
+      ? {
+          icon: 'checkmark',
+          tone: 'ready',
+          label: 'Selected clip metadata saved',
+          detail: 'Pegasus generated and stored this clip metadata. Refreshing whole-video metadata in the background.',
+        }
+      : !hasMetadata
+        ? {
+            icon: loading ? 'spinner' : 'info',
+            tone: loading ? 'loading' : 'pending',
+            label: loading ? 'Checking selected clip metadata' : 'Whole-video metadata pending',
+            detail: loading
+              ? 'Reading whole-video metadata from the indexed asset before Pegasus runs.'
+              : 'The source metadata has not returned yet, so the exact selected-clip entry cannot be checked.',
+          }
+      : {
+          icon: loading ? 'spinner' : 'info',
+          tone: loading ? 'loading' : 'pending',
+          label: loading ? 'Checking selected clip metadata' : 'No saved clip metadata for this timestamp yet',
+          detail: loading
+            ? 'Reading whole-video metadata from the indexed asset before Pegasus runs.'
+            : 'Pegasus 1.5 will generate the selected-clip metadata for this exact search result.',
+        }
+  const latestItem = items[0]
+  const latestSummary = latestItem ? savedWorkspaceItemSummary(latestItem) : null
+
+  return (
+    <section className="rounded-md border border-border-light bg-card px-3 py-2.5">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <StrandIcon name="document-list" className="h-4 w-4 shrink-0 text-accent" />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-text-primary">Whole-video metadata</p>
+            <p className="truncate text-[11px] font-semibold text-text-tertiary">{metadata?.video_name || searchMoment.videoName}</p>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+          <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+            {loading ? 'Loading' : error ? 'Unavailable' : hasMetadata ? 'Loaded' : 'Pending'}
+          </span>
+          <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+            {loading ? '...' : `${total} saved`}
+          </span>
+          <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+            {loading ? '...' : `${counts.clip_analysis ?? clipItems.length} clips`}
+          </span>
+          <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+            {loading ? '...' : `${counts.jockey_turn ?? turnItems.length} chats`}
+          </span>
         </div>
       </div>
 
-      <div className="mt-4 rounded-md border border-border-light bg-card px-4 py-4">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <StrandIcon name="vision" className="h-4 w-4 shrink-0 text-accent" />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-text-primary">Pegasus 1.5 Response</p>
-              <p className="inline-flex max-w-full items-center gap-1 truncate rounded-sm border border-border-light bg-surface px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
-                <StrandIcon name="checkmark" className="h-3 w-3 text-accent" />
-                Selected clip only — no whole-video Jockey analysis
-              </p>
+      {error ? (
+        <p className="mt-3 rounded-sm border border-error bg-error-light px-2.5 py-1.5 text-xs font-semibold text-error-dark">{error}</p>
+      ) : (
+        <>
+          <div
+            className={[
+              'mt-2 rounded-sm border px-2.5 py-2',
+              clipStatus.tone === 'ready'
+                ? 'border-accent/35 bg-accent-light text-brand-charcoal'
+                : 'border-border-light bg-surface text-text-secondary',
+            ].join(' ')}
+          >
+            <div className="flex min-w-0 items-start gap-2">
+              <StrandIcon
+                name={clipStatus.icon}
+                className={['mt-0.5 h-3.5 w-3.5', clipStatus.tone === 'loading' ? 'animate-spin text-accent' : ''].join(' ')}
+              />
+              <div className="min-w-0">
+                <p className="text-xs font-semibold">{clipStatus.label}</p>
+                <p className="mt-0.5 text-xs leading-5 opacity-80">{clipStatus.detail}</p>
+              </div>
             </div>
           </div>
-          <SelectedClipAnalysisSaveButton game={game} searchMoment={searchMoment} analysis={analysis} />
+
+          {!loading && latestItem && latestSummary && (
+            <div className="mt-2 flex min-w-0 items-center gap-2 text-[11px] font-semibold text-text-tertiary">
+              <StrandIcon name={latestSummary.icon} className="h-3.5 w-3.5 shrink-0 text-accent" />
+              <span className="shrink-0">Latest</span>
+              <span className="min-w-0 truncate text-text-secondary">{latestSummary.title}</span>
+              {savedWorkspaceRange(latestItem) ? <span className="shrink-0 font-mono">{savedWorkspaceRange(latestItem)}</span> : null}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function SelectedClipAnalysisLoader({ phase }: { phase: ClipAnalysisPhase }) {
+  const isMetadataPhase = phase === 'metadata'
+  return (
+    <div className="rounded-md border border-border-light bg-surface px-3 py-3">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent/30 bg-accent-light text-brand-charcoal">
+          <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-text-primary">
+            {isMetadataPhase ? 'Loading video metadata first' : 'Analyzing selected clip'}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-text-secondary">
+            {isMetadataPhase
+              ? 'Reading saved indexed metadata before the clip response is shown.'
+              : 'Pegasus 1.5 is now generating the selected-clip response.'}
+          </p>
         </div>
-        {loading ? (
-          <div className="inline-flex items-center gap-2 rounded-md border border-border-light bg-surface px-3 py-2 text-sm font-semibold text-text-secondary">
-            <StrandIcon name="spinner" className="h-4 w-4 animate-spin text-accent" />
-            {hasCachedMetadata || analysis?._jockey_metadata?.from_user_metadata
-              ? 'Loading saved clip analysis'
-              : 'Pegasus 1.5 is analyzing the selected clip'}
-          </div>
-        ) : analysis ? (
-          <div className="grid gap-4">
-            <SelectedClipNarrative analysis={analysis} />
-            <div className="grid gap-2 sm:grid-cols-3">
-              <SelectedClipToneTags value={analysis.emotional_tone} />
-              <SelectedClipActionSignal value={analysis.key_action} />
-              <SelectedClipScoreSignal value={analysis.score_context} />
-            </div>
-            <SelectedClipParticipants participants={analysis.participants} />
-            <SelectedClipTagGroup icon="flame" label="Moment types" values={analysis.moment_types} />
-            <SelectedClipTagGroup icon="filter" label="Producer tags" values={analysis.tags} />
-            <SelectedClipTagGroup icon="devices" label="Recommended formats" values={analysis.recommended_formats} />
-            <div className="grid gap-2 sm:grid-cols-2">
-              <SelectedClipNote icon="hourglass" label="Boundaries" value={analysis.clip_boundary_notes} />
-              <SelectedClipNote icon="warning" label="Review notes" value={analysis.rights_safety_notes} />
-            </div>
-            <SelectedClipEvidenceGroup rows={evidenceRows} />
-          </div>
-        ) : error ? (
-          <div className="rounded-md border border-error bg-error-light px-3 py-2 text-sm font-semibold text-error-dark">
-            {error}
-          </div>
-        ) : (
-          <p className="text-sm font-semibold text-text-tertiary">Choose Analyze from Discover to run Pegasus 1.5 on a selected clip.</p>
-        )}
+      </div>
+      <div className="mt-3 grid gap-2 text-xs font-semibold text-text-secondary sm:grid-cols-2">
+        <div className={['rounded-sm border px-2.5 py-2', isMetadataPhase ? 'border-accent/35 bg-accent-light text-brand-charcoal' : 'border-border-light bg-card'].join(' ')}>
+          <span className="flex items-center gap-1.5">
+            <StrandIcon name={isMetadataPhase ? 'spinner' : 'checkmark'} className={['h-3.5 w-3.5', isMetadataPhase ? 'animate-spin' : 'text-accent'].join(' ')} />
+            Metadata
+          </span>
+        </div>
+        <div className={['rounded-sm border px-2.5 py-2', !isMetadataPhase ? 'border-accent/35 bg-accent-light text-brand-charcoal' : 'border-border-light bg-card'].join(' ')}>
+          <span className="flex items-center gap-1.5">
+            <StrandIcon name={!isMetadataPhase ? 'spinner' : 'analyze'} className={['h-3.5 w-3.5', !isMetadataPhase ? 'animate-spin' : 'text-text-tertiary'].join(' ')} />
+            Pegasus response
+          </span>
+        </div>
       </div>
     </div>
   )
 }
 
 function SelectedClipNarrative({ analysis }: { analysis: SelectedClipAnalysis }) {
+  const primary = analysis.description.trim()
   const rows = [
-    { label: 'Clip read', icon: 'analyze', value: analysis.description, primary: true },
     { label: 'Producer angle', icon: 'document-list', value: analysis.producer_summary },
     { label: 'Story arc', icon: 'play-next', value: analysis.story_arc },
     { label: 'Editorial use', icon: 'share', value: analysis.editorial_use },
   ].filter((row) => row.value.trim())
 
   return (
-    <section aria-label="Selected clip narrative" className="grid gap-2">
-      {rows.map((row) => (
-        <article key={row.label} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-2 rounded-md border border-border-light bg-surface px-3 py-2">
-          <span className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-sm border border-border-light bg-card text-accent">
-            <StrandIcon name={row.icon} className="h-3.5 w-3.5" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{row.label}</p>
-            <p className={['mt-1 text-sm leading-6', row.primary ? 'font-semibold text-text-primary' : 'text-text-secondary'].join(' ')}>
-              {row.value}
-            </p>
-          </div>
-        </article>
-      ))}
+    <section aria-label="Selected clip narrative" className="rounded-md border border-border-light bg-surface px-3 py-3">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="flex h-7 w-7 items-center justify-center rounded-sm border border-border-light bg-card text-accent">
+          <StrandIcon name="analyze" className="h-3.5 w-3.5" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Clip story</p>
+          <h4 className="truncate text-sm font-semibold text-text-primary">Pegasus read of the selected timestamp</h4>
+        </div>
+      </div>
+      {primary && <p className="mt-3 text-sm font-semibold leading-6 text-text-primary">{primary}</p>}
+      {rows.length > 0 && (
+        <div className="mt-3 grid gap-2 lg:grid-cols-3">
+          {rows.map((row) => (
+            <article key={row.label} className="min-w-0 border-l border-border-light pl-3">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <StrandIcon name={row.icon} className="h-3.5 w-3.5 text-accent" />
+                <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{row.label}</p>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-text-secondary">{row.value}</p>
+            </article>
+          ))}
+        </div>
+      )}
     </section>
   )
 }
@@ -5051,7 +5961,7 @@ function SelectedClipScoreSignal({ value }: { value: string }) {
   const score = selectedClipScoreParts(value)
   if (!score) return <SelectedClipSignal icon="trophy" label="Score" value={value} />
   return (
-    <div className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
+    <div className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2 sm:col-span-2">
       <div className="flex min-w-0 items-center gap-1.5">
         <StrandIcon name="trophy" className="h-3.5 w-3.5 text-accent" />
         <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Score</p>
@@ -5144,11 +6054,11 @@ function selectedClipScoreParts(value: string) {
 function SelectedClipParticipants({ participants }: { participants: SelectedClipAnalysis['participants'] }) {
   if (!participants.length) return null
   return (
-    <section className="min-w-0">
+    <section className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
       <SelectedClipGroupHeader icon="members" label="Participants" count={participants.length} />
-      <div className="mt-2 grid gap-2">
+      <div className="mt-2 grid gap-1.5 sm:grid-cols-2 2xl:grid-cols-1">
         {participants.map((participant, index) => (
-          <article key={`${participant.name}-${participant.role}-${index}`} className="min-w-0 rounded-md border border-border-light bg-surface px-3 py-2">
+          <article key={`${participant.name}-${participant.role}-${index}`} className="min-w-0 rounded-sm border border-border-light bg-card px-2.5 py-2">
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <span className="min-w-0 truncate text-sm font-semibold text-text-primary">{participant.name}</span>
               {participant.role && (
@@ -5163,9 +6073,9 @@ function SelectedClipParticipants({ participants }: { participants: SelectedClip
               )}
             </div>
             {participant.evidence && (
-              <p className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-1.5 text-xs leading-5 text-text-secondary">
+              <p className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-1.5 text-xs leading-5 text-text-secondary">
                 <StrandIcon name="checkmark" className="mt-0.5 h-3.5 w-3.5 text-accent" />
-                <span>{participant.evidence}</span>
+                <span className="line-clamp-2">{participant.evidence}</span>
               </p>
             )}
           </article>
@@ -5179,13 +6089,13 @@ function SelectedClipTagGroup({ icon, label, values }: { icon: string; label: st
   const tags = values.filter((value) => value.trim())
   if (!tags.length) return null
   return (
-    <section className="min-w-0">
+    <section className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
       <SelectedClipGroupHeader icon={icon} label={label} count={tags.length} />
       <div className="mt-2 flex flex-wrap gap-1.5">
         {tags.map((value, index) => (
           <span
             key={`${label}-${value}-${index}`}
-            className="inline-flex max-w-full items-center gap-1 rounded-sm border border-border-light bg-surface px-2 py-1 text-xs font-semibold text-text-secondary"
+            className="inline-flex max-w-full items-center gap-1 rounded-sm border border-border-light bg-card px-2 py-1 text-xs font-semibold text-text-secondary"
             title={value}
           >
             <StrandIcon name="checkmark" className="h-3 w-3 text-accent" />
@@ -5299,6 +6209,7 @@ function SelectedClipAnalysisSaveButton({
         },
       )
       setSaved(true)
+      notifyWorkspaceMetadataSaved(game.tag, [searchMoment.videoName])
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Save failed')
     } finally {
@@ -5328,6 +6239,453 @@ function SelectedClipAnalysisSaveButton({
       {error ? <span className="max-w-[220px] truncate text-[10px] font-semibold text-error">{error}</span> : null}
     </div>
   )
+}
+
+function SavedWorkspaceMetadataPanel({
+  game,
+  videoName,
+  metadata,
+  loading,
+  error,
+  variant = 'dashboard',
+}: {
+  game: Game | null
+  videoName: string
+  metadata?: JockeyWorkspaceMetadataResponse
+  loading: boolean
+  error: string
+  variant?: 'dashboard' | 'selected_clip'
+}) {
+  const items = savedWorkspaceItems(metadata)
+  const clipItems = savedWorkspaceItemsByKind(items, 'clip_analysis')
+  const turnItems = savedWorkspaceItemsByKind(items, 'jockey_turn')
+  const counts = metadata?.summary?.counts || {}
+  const total = counts.total ?? items.length
+  const selectedClipVariant = variant === 'selected_clip'
+  const visibleItems = selectedClipVariant ? items : items.slice(0, 4)
+  const [expandedItemId, setExpandedItemId] = useState('')
+
+  useEffect(() => {
+    if (expandedItemId && !items.some((item) => item.id === expandedItemId)) {
+      setExpandedItemId('')
+    }
+  }, [expandedItemId, items])
+
+  if (!loading && !error && total === 0) return null
+  const title = selectedClipVariant ? 'Source video metadata' : 'Selected clip and Jockey chat memory'
+  const eyebrow = 'Saved metadata'
+  const description = selectedClipVariant
+    ? 'Same saved metadata ledger shown on the Dashboard for this source video.'
+    : ''
+  const renderLedgerItems = (groupItems: JockeyWorkspaceItem[]) => groupItems.map((item) => (
+    <SavedMetadataLedgerItem
+      key={item.id}
+      game={game}
+      fallbackVideoName={videoName}
+      item={item}
+      expanded={expandedItemId === item.id}
+      onToggle={() => setExpandedItemId((current) => (current === item.id ? '' : item.id))}
+    />
+  ))
+
+  return (
+    <section className="rounded-md border border-border bg-surface px-4 py-3 shadow-[0_6px_18px_rgba(29,28,27,0.035)]">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <StrandIcon name="document-list" className="h-4 w-4 text-accent" />
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{eyebrow}</p>
+            <h3 className="truncate text-sm font-semibold text-text-primary">{title}</h3>
+            {description ? <p className="mt-0.5 truncate text-xs font-medium text-text-secondary">{description}</p> : null}
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+          {selectedClipVariant && (
+            <span className="rounded-sm border border-border-light bg-card px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+              {total} saved total
+            </span>
+          )}
+          {(selectedClipVariant || typeof counts.clip_analysis === 'number') && (
+            <span className="rounded-sm border border-border-light bg-card px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+              {counts.clip_analysis ?? clipItems.length} Pegasus clips
+            </span>
+          )}
+          {(selectedClipVariant || typeof counts.jockey_turn === 'number') && (
+            <span className="rounded-sm border border-border-light bg-card px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+              {counts.jockey_turn ?? turnItems.length} Jockey curated
+            </span>
+          )}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="mt-3 inline-flex items-center gap-2 rounded-sm border border-border-light bg-card px-2.5 py-1.5 text-xs font-semibold text-text-secondary">
+          <StrandIcon name="spinner" className="h-3.5 w-3.5 animate-spin text-accent" />
+          Loading saved metadata
+        </div>
+      ) : error ? (
+        <p className="mt-3 rounded-sm border border-error bg-error-light px-2.5 py-1.5 text-xs font-semibold text-error-dark">{error}</p>
+      ) : !clipItems.length && !turnItems.length ? (
+        <p className="mt-3 rounded-sm border border-border-light bg-card px-2.5 py-1.5 text-xs font-semibold text-text-secondary">
+          Saved workspace metadata exists, but no clip analysis or Jockey chat entries were returned for this video.
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 overflow-hidden rounded-sm border border-border-light bg-card">
+            {renderLedgerItems(visibleItems)}
+          </div>
+          {items.length > visibleItems.length && (
+            <p className="mt-2 text-[11px] font-semibold text-text-tertiary">
+              Showing latest {visibleItems.length} of {items.length} saved metadata entries.
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function SavedMetadataLedgerItem({
+  game,
+  fallbackVideoName,
+  item,
+  expanded,
+  onToggle,
+}: {
+  game: Game | null
+  fallbackVideoName: string
+  item: JockeyWorkspaceItem
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const summary = savedWorkspaceItemSummary(item)
+  const range = savedWorkspaceRange(item)
+  return (
+    <article className="border-t border-border-light first:border-t-0">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={onToggle}
+        className="grid w-full min-w-0 gap-2 px-3 py-2.5 text-left hover:bg-surface"
+      >
+        <div className="flex min-w-0 items-start gap-2">
+          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-sm border border-border-light bg-surface text-accent">
+            <StrandIcon name={summary.icon} className="h-3.5 w-3.5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="rounded-sm border border-border-light bg-surface px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
+                {summary.kindLabel}
+              </span>
+              {range && <span className="font-mono text-[11px] font-semibold text-text-tertiary">{range}</span>}
+              {item.saved_at && <span className="text-[11px] font-semibold text-text-tertiary">{formatWorkspaceSavedAt(item.saved_at)}</span>}
+            </div>
+            <p className="mt-1 line-clamp-1 text-sm font-semibold text-text-primary">{summary.title}</p>
+            {summary.detail ? <p className="mt-0.5 line-clamp-1 text-xs leading-5 text-text-secondary">{summary.detail}</p> : null}
+          </div>
+          <StrandIcon name={expanded ? 'collapse' : 'expand'} className="mt-1 h-3.5 w-3.5 shrink-0 text-text-tertiary" />
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="grid gap-3 border-t border-border-light bg-surface px-3 py-3 lg:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.1fr)]">
+          <SavedMetadataClipPreview game={game} fallbackVideoName={fallbackVideoName} item={item} />
+          <SavedMetadataDetail item={item} />
+        </div>
+      )}
+    </article>
+  )
+}
+
+function SavedMetadataClipPreview({
+  game,
+  fallbackVideoName,
+  item,
+}: {
+  game: Game | null
+  fallbackVideoName: string
+  item: JockeyWorkspaceItem
+}) {
+  const sourceName = savedWorkspaceVideoName(item, fallbackVideoName)
+  const range = savedWorkspacePreviewRange(item)
+  const startSeconds = range?.startTime ? secondsFromTime(range.startTime) : 0
+  const rawEndSeconds = range?.endTime ? secondsFromTime(range.endTime) : undefined
+  const endSeconds = rawEndSeconds && rawEndSeconds > startSeconds ? rawEndSeconds : undefined
+  const streamInfoUrl = game && sourceName ? streamInfoForVideoName(game, sourceName) : null
+  const posterUrl = game && sourceName ? thumbnailForVideoName(game, sourceName) : undefined
+  const segmentRange = range
+    ? {
+        startSeconds,
+        endSeconds,
+        startLabel: range.startTime,
+        endLabel: range.endTime,
+      }
+    : undefined
+
+  return (
+    <div className="min-w-0 overflow-hidden rounded-sm border border-border-light bg-card">
+      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-border-light px-2.5 py-2">
+        <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Clip stream</p>
+        {range && (
+          <span className="shrink-0 font-mono text-[10px] font-semibold text-text-tertiary">
+            {savedWorkspaceRange(item)}
+          </span>
+        )}
+      </div>
+      <div className="aspect-video bg-card">
+        {streamInfoUrl && range ? (
+          <TwelveLabsVideoPlayer
+            key={`${item.id}-${sourceName}-${range.startTime}-${range.endTime || 'open'}`}
+            streamInfoUrl={streamInfoUrl}
+            startSeconds={startSeconds}
+            endSeconds={endSeconds}
+            posterUrl={posterUrl}
+            segmentRange={segmentRange}
+            variant="minimal"
+            fit="cover"
+            showSegmentControls
+          />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+            <StrandIcon name="vision-disabled" className="h-5 w-5 text-text-tertiary" />
+            <p className="text-xs font-semibold leading-5 text-text-secondary">No timestamped stream clip was saved for this entry.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SavedMetadataDetail({ item }: { item: JockeyWorkspaceItem }) {
+  return item.kind === 'jockey_turn'
+    ? <SavedJockeyTurnDetail item={item} />
+    : <SavedClipAnalysisDetail item={item} />
+}
+
+function SavedClipAnalysisDetail({ item }: { item: JockeyWorkspaceItem }) {
+  const analysis = item.payload?.analysis || {}
+  const context = item.payload?.search_context || {}
+  const title = cleanString(item.title) || cleanString(context.title) || cleanString(analysis.key_action) || 'Selected clip analysis'
+  const rows = [
+    { label: 'Read', value: cleanString(analysis.description) || cleanString(context.description) },
+    { label: 'Action', value: cleanString(analysis.key_action) },
+    { label: 'Tone', value: cleanString(analysis.emotional_tone) },
+    { label: 'Score', value: cleanString(analysis.score_context) },
+    { label: 'Use', value: cleanString(analysis.editorial_use) },
+  ].filter((row) => row.value)
+  const tags = [
+    ...savedWorkspaceStringList(analysis.moment_types),
+    ...savedWorkspaceStringList(analysis.tags),
+    ...savedWorkspaceStringList(analysis.recommended_formats),
+  ].slice(0, 8)
+  const evidence = [
+    ...savedWorkspaceStringList(analysis.visual_evidence),
+    ...savedWorkspaceStringList(analysis.audio_evidence),
+    ...savedWorkspaceStringList(analysis.transcript_evidence),
+  ].slice(0, 5)
+
+  return (
+    <article className="min-w-0 rounded-sm border border-border-light bg-card px-3 py-3">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Pegasus 1.5 detail</p>
+      <h4 className="mt-1 text-sm font-semibold text-text-primary">{title}</h4>
+      <div className="mt-3 grid gap-2">
+        {rows.map((row) => (
+          <div key={row.label} className="grid gap-1 sm:grid-cols-[4.5rem_minmax(0,1fr)]">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{row.label}</p>
+            <p className="text-xs leading-5 text-text-secondary">{row.value}</p>
+          </div>
+        ))}
+      </div>
+      {tags.length ? (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {tags.map((tag, index) => (
+            <span key={`${tag}-${index}`} className="rounded-sm border border-border-light bg-surface px-1.5 py-0.5 text-[11px] font-semibold text-text-tertiary">
+              {tag}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {evidence.length ? (
+        <ul className="mt-3 grid gap-1.5">
+          {evidence.map((value, index) => (
+            <li key={`${value}-${index}`} className="grid grid-cols-[auto_minmax(0,1fr)] gap-1.5 text-xs leading-5 text-text-secondary">
+              <StrandIcon name="checkmark" className="mt-0.5 h-3 w-3 text-accent" />
+              <span>{value}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </article>
+  )
+}
+
+function SavedJockeyTurnDetail({ item }: { item: JockeyWorkspaceItem }) {
+  const payload = item.payload || {}
+  const clips = Array.isArray(payload.clips) ? payload.clips : []
+  const title = cleanString(payload.prompt) || cleanString(item.title) || 'Jockey chat turn'
+  const detail = cleanString(payload.narrative_summary)
+  return (
+    <article className="min-w-0 rounded-sm border border-border-light bg-card px-3 py-3">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Jockey chat detail</p>
+      <h4 className="mt-1 text-sm font-semibold text-text-primary">{title}</h4>
+      {detail ? <p className="mt-2 text-xs leading-5 text-text-secondary">{detail}</p> : null}
+      {clips.length ? (
+        <div className="mt-3 grid gap-2">
+          {clips.slice(0, 4).map((clip, index) => {
+            const start = cleanString(clip.start_time)
+            const end = cleanString(clip.end_time)
+            return (
+              <div key={`${start}-${end}-${index}`} className="rounded-sm border border-border-light bg-surface px-2.5 py-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <span className="font-mono text-[11px] font-semibold text-text-tertiary">
+                    {end ? `${start} - ${end}` : start || `Clip ${index + 1}`}
+                  </span>
+                  {cleanString(clip.moment_type) && (
+                    <span className="rounded-sm bg-card px-1.5 py-0.5 text-[11px] font-semibold text-text-tertiary">
+                      {cleanString(clip.moment_type)}
+                    </span>
+                  )}
+                </div>
+                {cleanString(clip.jockey_rationale) && (
+                  <p className="mt-1 text-xs leading-5 text-text-secondary">{cleanString(clip.jockey_rationale)}</p>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
+function savedWorkspaceItemSummary(item: JockeyWorkspaceItem) {
+  if (item.kind === 'jockey_turn') {
+    const payload = item.payload || {}
+    const clips = Array.isArray(payload.clips) ? payload.clips : []
+    return {
+      kindLabel: 'Jockey chat',
+      icon: 'speech',
+      title: cleanString(payload.prompt) || cleanString(item.title) || 'Jockey chat turn',
+      detail: cleanString(payload.narrative_summary) || `${clips.length} saved clips`,
+    }
+  }
+  const analysis = item.payload?.analysis || {}
+  const context = item.payload?.search_context || {}
+  return {
+    kindLabel: 'Clip analysis',
+    icon: 'analyze',
+    title: cleanString(item.title) || cleanString(context.title) || cleanString(analysis.key_action) || 'Selected clip analysis',
+    detail: cleanString(analysis.key_action) || cleanString(analysis.description) || cleanString(context.description),
+  }
+}
+
+function savedWorkspaceVideoName(item: JockeyWorkspaceItem, fallbackVideoName: string) {
+  const primaryClip = savedWorkspacePrimaryClip(item)
+  return cleanString(primaryClip?.video_name) || cleanString(item.video_name) || fallbackVideoName
+}
+
+function savedWorkspacePrimaryClip(item: JockeyWorkspaceItem) {
+  const clips = item.payload?.clips
+  if (!Array.isArray(clips)) return null
+  return clips.find((clip) => cleanString(clip.start_time) || cleanString(clip.end_time)) || clips[0] || null
+}
+
+function savedWorkspacePreviewRange(item: JockeyWorkspaceItem): { startTime: string; endTime?: string } | null {
+  const primaryClip = item.kind === 'jockey_turn' ? savedWorkspacePrimaryClip(item) : null
+  const start = cleanString(primaryClip?.start_time)
+    || cleanString(item.clip_bounds?.start_time)
+    || cleanString(item.payload?.analysis?.start_time)
+  const end = cleanString(primaryClip?.end_time)
+    || cleanString(item.clip_bounds?.end_time)
+    || cleanString(item.payload?.analysis?.end_time)
+  if (!start && !end) return null
+  return { startTime: start || '0:00', endTime: end || undefined }
+}
+
+function savedWorkspaceStringList(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value.map(cleanString).filter(Boolean)
+}
+
+function savedWorkspaceItems(metadata?: JockeyWorkspaceMetadataResponse) {
+  const items = metadata?.workspace?.saved_items
+  if (!Array.isArray(items)) return []
+  return items
+    .filter((item): item is JockeyWorkspaceItem => Boolean(item && typeof item === 'object' && item.id))
+    .slice()
+    .sort((left, right) => workspaceSavedAtSortValue(right.saved_at) - workspaceSavedAtSortValue(left.saved_at))
+}
+
+function savedWorkspaceItemsByKind(items: JockeyWorkspaceItem[], kind: JockeyWorkspaceItem['kind']) {
+  return items.filter((item) => item.kind === kind)
+}
+
+function selectedSearchClipWorkspaceItem(metadata: JockeyWorkspaceMetadataResponse | undefined, searchMoment: SearchMoment) {
+  if (!searchMoment.startTime) return null
+  const targetStart = secondsFromTime(searchMoment.startTime)
+  const targetEnd = searchMoment.endTime ? secondsFromTime(searchMoment.endTime) : null
+  const targetQuery = cleanString(searchMoment.query).toLowerCase()
+  const targetTitle = cleanString(searchMoment.title).toLowerCase()
+  const targetLabels = [targetQuery, targetTitle].filter(Boolean)
+
+  return savedWorkspaceItemsByKind(savedWorkspaceItems(metadata), 'clip_analysis').find((item) => {
+    const range = savedWorkspacePreviewRange(item)
+    if (!range?.startTime) return false
+
+    const itemStart = secondsFromTime(range.startTime)
+    const itemEnd = range.endTime ? secondsFromTime(range.endTime) : null
+    const startsMatch = Math.abs(itemStart - targetStart) <= 1
+    const endsMatch = targetEnd === null || itemEnd === null || Math.abs(itemEnd - targetEnd) <= 1
+    if (!startsMatch || !endsMatch) return false
+
+    const context = item.payload?.search_context || {}
+    const itemLabels = [
+      cleanString(context.query),
+      cleanString(context.title),
+      cleanString(item.title),
+    ].map((value) => value.toLowerCase()).filter(Boolean)
+
+    if (!targetLabels.length || !itemLabels.length) return true
+    return targetLabels.some((target) =>
+      itemLabels.some((label) => label === target || label.includes(target) || target.includes(label)),
+    )
+  }) || null
+}
+
+function savedWorkspaceRange(item: JockeyWorkspaceItem) {
+  const range = savedWorkspacePreviewRange(item)
+  if (!range) return ''
+  return range.endTime ? `${range.startTime} - ${range.endTime}` : range.startTime
+}
+
+function workspaceSavedAtSortValue(value?: string | null) {
+  if (!value) return 0
+  const normalized = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/)
+  if (normalized) {
+    return Date.UTC(
+      Number(normalized[1]),
+      Number(normalized[2]) - 1,
+      Number(normalized[3]),
+      Number(normalized[4]),
+      Number(normalized[5]),
+      Number(normalized[6]),
+    )
+  }
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? 0 : parsed
+}
+
+function formatWorkspaceSavedAt(value: string) {
+  const normalized = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/)
+  if (normalized) return `${normalized[1]}-${normalized[2]}-${normalized[3]} ${normalized[4]}:${normalized[5]}`
+  return value
+}
+
+function notifyWorkspaceMetadataSaved(tag: string, videoNames: string[]) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent(WORKSPACE_METADATA_SAVED_EVENT, {
+    detail: { tag, videoNames: Array.from(new Set(videoNames.filter(Boolean))) },
+  }))
 }
 
 function EntityTrackingSection({
@@ -5361,7 +6719,7 @@ function EntityTrackingSection({
   }
 
   return (
-    <section id="entity-tracking" className="overflow-hidden rounded-md border border-border shadow-[0_6px_18px_rgba(29,28,27,0.03)]">
+    <section id="entity-tracking" data-tour-id="entity-tracking" className="overflow-hidden rounded-md border border-border shadow-[0_6px_18px_rgba(29,28,27,0.03)]">
       <div className={['grid gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start', collapsed ? '' : 'border-b border-border-light'].join(' ')}>
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2.5">
@@ -6168,7 +7526,7 @@ function ReelBuilder({
   const lastClip = category.clips[category.clips.length - 1]
   const reelRange = firstClip && lastClip ? `${firstClip.start_time} - ${lastClip.start_time}` : 'No clips'
   return (
-    <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+    <section data-tour-id="tag-reels" className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
       <div className="grid gap-4 border-b border-border-light bg-surface px-5 py-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)] xl:items-end">
         <div className="min-w-0">
           <div className="flex min-w-0 items-start gap-3">
@@ -6981,7 +8339,7 @@ function shortIndexId(value?: string | null) {
   return `${cleanValue.slice(0, 6)}...${cleanValue.slice(-4)}`
 }
 
-function cleanString(value?: string | null) {
+function cleanString(value?: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : ''
 }
 
@@ -7135,6 +8493,7 @@ function discoverItemFromSearchResult(
     resultType: 'search',
     startTime,
     endTime,
+    searchRank: typeof result.rank === 'number' ? result.rank : index + 1,
     searchMoment,
   }
 }
