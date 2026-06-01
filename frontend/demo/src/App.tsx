@@ -68,7 +68,6 @@ type AssemblyModeKey = 'wsc_baseline' | 'twelvelabs_enhanced' | 'hyper_personali
 type ViewKey = 'discover' | 'workspace' | 'jockey' | 'overview'
 type ReelFormatKey = '9x16' | '16x9' | '1x1' | '4x5'
 type HighlightReelRequestOptions = { silent?: boolean }
-type ClipAnalysisPhase = 'metadata' | 'analysis'
 type TutorialStep = {
   id: string
   view: ViewKey
@@ -741,16 +740,18 @@ const sourceColors: Record<Clip['source_type'], { bg: string; border: string; te
 
 function viewFromPath(pathname: string): ViewKey {
   if (pathname.includes('discover')) return 'discover'
+  if (pathname.includes('dashboard') || pathname.includes('workspace')) return 'workspace'
   if (pathname.includes('jockey')) return 'jockey'
   if (pathname.includes('overview')) return 'overview'
-  return 'workspace'
+  return 'discover'
 }
 
 function pathForView(view: ViewKey) {
   if (view === 'discover') return '/discover'
+  if (view === 'workspace') return '/dashboard'
   if (view === 'jockey') return '/jockey'
   if (view === 'overview') return '/overview'
-  return '/'
+  return '/discover'
 }
 
 function navButtonClass(currentView: ViewKey, itemView: ViewKey) {
@@ -785,7 +786,6 @@ function App() {
   const [selectedSearchMoment, setSelectedSearchMoment] = useState<SearchMoment | null>(null)
   const [clipAnalysesByKey, setClipAnalysesByKey] = useState<Record<string, SelectedClipAnalysis>>({})
   const [clipAnalysisLoadingKey, setClipAnalysisLoadingKey] = useState('')
-  const [clipAnalysisPhaseByKey, setClipAnalysisPhaseByKey] = useState<Record<string, ClipAnalysisPhase>>({})
   const [clipAnalysisError, setClipAnalysisError] = useState('')
   const [entityTrackingByKey, setEntityTrackingByKey] = useState<Record<string, EntityTrackingResponse>>({})
   const [entityTrackingLoadingKey, setEntityTrackingLoadingKey] = useState('')
@@ -833,7 +833,6 @@ function App() {
   const selectedClipAnalysisKey = selectedTag && activeSearchMoment ? selectedClipAnalysisCacheKey(selectedTag, activeSearchMoment) : ''
   const selectedClipAnalysis = selectedClipAnalysisKey ? clipAnalysesByKey[selectedClipAnalysisKey] : undefined
   const selectedClipAnalysisLoading = Boolean(selectedClipAnalysisKey && clipAnalysisLoadingKey === selectedClipAnalysisKey)
-  const selectedClipAnalysisPhase = selectedClipAnalysisKey ? clipAnalysisPhaseByKey[selectedClipAnalysisKey] : undefined
   const selectedClipAnalysisError = selectedClipAnalysisKey ? clipAnalysisError : ''
   const entityTrackingKey = selectedTag && activeVideoName ? `${selectedTag}|${activeVideoName}` : ''
   const entityTracking = entityTrackingKey ? entityTrackingByKey[entityTrackingKey] : undefined
@@ -893,7 +892,6 @@ function App() {
     setSelectedSearchMoment(null)
     setClipAnalysisError('')
     setClipAnalysisLoadingKey('')
-    setClipAnalysisPhaseByKey({})
   }, [])
 
   useEffect(() => {
@@ -1146,23 +1144,15 @@ function App() {
     if (view !== 'workspace' || !selectedTag || !activeSearchMoment?.startTime || !selectedClipAnalysisKey) return
     if (clipAnalysesByKey[selectedClipAnalysisKey]) {
       setClipAnalysisError('')
-      setClipAnalysisPhaseByKey((current) => {
-        if (!current[selectedClipAnalysisKey]) return current
-        const next = { ...current }
-        delete next[selectedClipAnalysisKey]
-        return next
-      })
       return
     }
     let active = true
     setClipAnalysisLoadingKey(selectedClipAnalysisKey)
-    setClipAnalysisPhaseByKey((current) => ({ ...current, [selectedClipAnalysisKey]: 'metadata' }))
     setClipAnalysisError('')
     const runSelectedClipAnalysis = async () => {
       try {
         await requestWorkspaceMetadata(selectedTag, activeSearchMoment.videoName).catch(() => undefined)
         if (!active) return
-        setClipAnalysisPhaseByKey((current) => ({ ...current, [selectedClipAnalysisKey]: 'analysis' }))
         const body = await fetchJson<SelectedClipAnalysis>(`/games/${encodeURIComponent(selectedTag)}/clip-analysis`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1214,12 +1204,6 @@ function App() {
       } finally {
         if (active) {
           setClipAnalysisLoadingKey((current) => (current === selectedClipAnalysisKey ? '' : current))
-          setClipAnalysisPhaseByKey((current) => {
-            if (!current[selectedClipAnalysisKey]) return current
-            const next = { ...current }
-            delete next[selectedClipAnalysisKey]
-            return next
-          })
         }
       }
     }
@@ -1722,7 +1706,6 @@ function App() {
             selectedSearchMoment={activeSearchMoment}
             selectedClipAnalysis={selectedClipAnalysis}
             selectedClipAnalysisLoading={selectedClipAnalysisLoading}
-            selectedClipAnalysisPhase={selectedClipAnalysisPhase}
             selectedClipAnalysisError={selectedClipAnalysisError}
             entityTracking={entityTracking}
             entityTrackingLoading={entityTrackingLoading}
@@ -1738,6 +1721,14 @@ function App() {
             onAssemblyModeChange={setAssemblyMode}
             onReelFormatChange={setReelFormat}
             onSelectSignal={selectSignal}
+            onSelectEnhancedCategoryClip={(categoryKey, index) => {
+              setSelectedSearchMoment(null)
+              setSelectedCategory(categoryKey)
+              setSelectedEnhancedClipIndex(index)
+              setFeaturedSignalCategory(categoryKey)
+              if (assemblyMode === 'wsc_baseline') setAssemblyMode('twelvelabs_enhanced')
+              scrollWorkspaceDetailsIntoView()
+            }}
             onSelectStandardClip={(index) => {
               setSelectedSearchMoment(null)
               setSelectedStandardClipIndex(index)
@@ -1821,7 +1812,7 @@ function GuidedTutorialOverlay({
       if (window.getComputedStyle(target).position === 'static') {
         target.style.position = 'relative'
       }
-      target.style.zIndex = '136'
+      target.style.zIndex = '45'
       target.style.outline = '2px solid #00DC82'
       target.style.outlineOffset = '6px'
       target.style.boxShadow = '0 0 0 6px rgba(0,220,130,0.12), 0 18px 36px rgba(29,28,27,0.16)'
@@ -1889,7 +1880,7 @@ function GuidedTutorialOverlay({
 
   return (
     <>
-      <div className="pointer-events-none fixed inset-0 z-[130] bg-brand-charcoal/10" />
+      <div className="pointer-events-none fixed inset-0 z-[35] bg-brand-charcoal/10" />
       <section
         ref={panelRef}
         data-tour-panel="true"
@@ -2086,7 +2077,6 @@ function ProducerCockpit({
   selectedSearchMoment,
   selectedClipAnalysis,
   selectedClipAnalysisLoading,
-  selectedClipAnalysisPhase,
   selectedClipAnalysisError,
   entityTracking,
   entityTrackingLoading,
@@ -2102,6 +2092,7 @@ function ProducerCockpit({
   onAssemblyModeChange,
   onReelFormatChange,
   onSelectSignal,
+  onSelectEnhancedCategoryClip,
   onSelectStandardClip,
   onSelectEnhancedClip,
 }: {
@@ -2126,7 +2117,6 @@ function ProducerCockpit({
   selectedSearchMoment: SearchMoment | null
   selectedClipAnalysis?: SelectedClipAnalysis
   selectedClipAnalysisLoading: boolean
-  selectedClipAnalysisPhase?: ClipAnalysisPhase
   selectedClipAnalysisError: string
   entityTracking?: EntityTrackingResponse
   entityTrackingLoading: boolean
@@ -2142,6 +2132,7 @@ function ProducerCockpit({
   onAssemblyModeChange: (mode: AssemblyModeKey) => void
   onReelFormatChange: (format: ReelFormatKey) => void
   onSelectSignal: (categoryKey: MapCategoryKey, index: number) => void
+  onSelectEnhancedCategoryClip: (categoryKey: CategoryKey, index: number) => void
   onSelectStandardClip: (index: number) => void
   onSelectEnhancedClip: (index: number) => void
 }) {
@@ -2201,7 +2192,6 @@ function ProducerCockpit({
             searchMoment={selectedSearchMoment}
             analysis={selectedClipAnalysis}
             loading={selectedClipAnalysisLoading}
-            loadingPhase={selectedClipAnalysisPhase}
             error={selectedClipAnalysisError}
             hasCachedMetadata={hasCachedClipAnalysisMetadata}
             workspaceMetadata={workspaceMetadata}
@@ -2209,14 +2199,16 @@ function ProducerCockpit({
             workspaceMetadataError={workspaceMetadataError}
             onBackToSearch={onOpenDiscover}
           />
-          <SavedWorkspaceMetadataPanel
-            game={selectedGame}
-            videoName={selectedSearchMoment.videoName}
-            metadata={workspaceMetadata}
-            loading={workspaceMetadataLoading}
-            error={workspaceMetadataError}
-            variant="selected_clip"
-          />
+          {!selectedClipAnalysisLoading && (
+            <SavedWorkspaceMetadataPanel
+              game={selectedGame}
+              videoName={selectedSearchMoment.videoName}
+              metadata={workspaceMetadata}
+              loading={workspaceMetadataLoading}
+              error={workspaceMetadataError}
+              variant="selected_clip"
+            />
+          )}
         </div>
       )}
 
@@ -2241,6 +2233,7 @@ function ProducerCockpit({
                 enhancedIndex={selectedEnhancedClipIndex}
                 onStandardSelect={onSelectStandardClip}
                 onEnhancedSelect={onSelectEnhancedClip}
+                onEmotionalSelect={(index) => onSelectEnhancedCategoryClip('emotional_moments', index)}
                 emptyText={isLoadingReels ? 'Generating PRD highlight lanes' : 'No clips returned for this source'}
               />
             </div>
@@ -2259,7 +2252,7 @@ function ProducerCockpit({
 
           {showProductionTools && selectedGame && reels && (
             <section id="assembly-highlights" className="flex min-w-0 scroll-mt-[calc(var(--sj-explainability-top)+24px)] flex-col gap-4">
-              <ProductionSection icon="play-next" title="Assembly Highlights" detail="Semantic scenes stitched together">
+              <ProductionSection icon="play-next" title="Assembly Panel" detail="All semantic lanes clubbed into one playable video">
                 <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-6">
                   <ReelSequencePlayer
                     variant="sidecar"
@@ -2529,6 +2522,7 @@ function SplitComparisonStage({
   enhancedIndex,
   onStandardSelect,
   onEnhancedSelect,
+  onEmotionalSelect,
   emptyText,
 }: {
   game: Game | null
@@ -2542,6 +2536,7 @@ function SplitComparisonStage({
   enhancedIndex: number
   onStandardSelect: (index: number) => void
   onEnhancedSelect: (index: number) => void
+  onEmotionalSelect?: (index: number) => void
   emptyText: string
 }) {
   const category = reels?.[selectedCategory]
@@ -2556,21 +2551,32 @@ function SplitComparisonStage({
       ? 'Stats Only'
       : categories.find((item) => item.key === selectedCategory)?.label || 'Semantic'
   const rightClip = assemblyMode === 'wsc_baseline' ? standardClip : enhancedClip
+  const emotionalSegments =
+    selectedCategory !== 'emotional_moments' && reels?.emotional_moments.clips.length
+      ? reels.emotional_moments
+      : undefined
 
   return (
-    <section data-tour-id="source-video" className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_10px_30px_rgba(29,28,27,0.06)] xl:max-h-[calc(100vh-var(--sj-explainability-top)-24px)] xl:overflow-y-auto">
-      <div className="grid gap-4 border-b border-border-light bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary">Split-View Player</p>
-          <h2 className="mt-1 text-lg font-semibold text-text-primary">Stats baseline vs Jockey lift</h2>
+    <section data-tour-id="source-video" className="overflow-hidden rounded-md border border-border-light bg-card shadow-[0_12px_34px_rgba(29,28,27,0.055)] xl:max-h-[calc(100vh-var(--sj-explainability-top)-24px)] xl:overflow-y-auto">
+      <div className="grid gap-3 px-5 pb-4 pt-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-accent/70 bg-accent-light text-brand-charcoal shadow-[0_6px_16px_rgba(0,220,130,0.12)]">
+            <StrandIcon name="vision" className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">Split-view Player</p>
+            <h2 className="mt-1 text-lg font-semibold leading-6 text-text-primary">Stats baseline vs Jockey lift</h2>
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2 lg:justify-end">
-          <span className="inline-flex h-8 items-center rounded-sm border border-border bg-surface px-2.5 text-xs font-semibold text-text-secondary">
-            {activeVideoName || game?.label || 'Source footage'}
+        <div className="min-w-0 lg:max-w-[420px]">
+          <span className="inline-flex h-8 max-w-full items-center rounded-md border border-border-light bg-surface px-3 text-xs font-semibold text-text-secondary shadow-[0_1px_2px_rgba(29,28,27,0.035)]">
+            <span className="truncate">
+              {activeVideoName || game?.label || 'Source footage'}
+            </span>
           </span>
         </div>
       </div>
-      <div className="grid min-w-0 xl:grid-cols-2">
+      <div className="grid min-w-0 gap-3 px-3 pb-3 xl:grid-cols-2">
         <ComparisonPlayer
           label="Event Feed"
           title="Stats Baseline"
@@ -2593,6 +2599,9 @@ function SplitComparisonStage({
           clip={rightClip}
           timelineCategory={category}
           timelineLabel={rightEyebrow}
+          secondaryTimelineCategory={emotionalSegments}
+          secondaryTimelineLabel="Emotional Moments"
+          onSecondaryTimelineSelect={emotionalSegments ? onEmotionalSelect : undefined}
           selectedTimelineIndex={enhancedIndex}
           onTimelineSelect={onEnhancedSelect}
           emptyText={emptyText}
@@ -2611,6 +2620,9 @@ function ComparisonPlayer({
   clip,
   timelineCategory,
   timelineLabel,
+  secondaryTimelineCategory,
+  secondaryTimelineLabel,
+  onSecondaryTimelineSelect,
   selectedTimelineIndex,
   onTimelineSelect,
   emptyText,
@@ -2623,6 +2635,9 @@ function ComparisonPlayer({
   clip?: Clip
   timelineCategory?: HighlightCategory
   timelineLabel: string
+  secondaryTimelineCategory?: HighlightCategory
+  secondaryTimelineLabel?: string
+  onSecondaryTimelineSelect?: (index: number) => void
   selectedTimelineIndex: number
   onTimelineSelect: (index: number) => void
   emptyText: string
@@ -2639,55 +2654,66 @@ function ComparisonPlayer({
     : game && sourceName
       ? thumbnailForVideoName(game, sourceName)
       : undefined
-  const colorClass = tone === 'baseline' ? 'text-brand-charcoal' : 'text-accent'
+  const toneBadgeClass = tone === 'baseline'
+    ? 'border-border-light bg-card text-text-secondary'
+    : 'border-accent/50 bg-accent-light text-brand-charcoal'
   const hasPlayable = Boolean(streamInfoUrl && (clip || sourceName))
   const description = clip?.description || ''
   const metaLabel = clip ? `${sourceLabel(clip.source_type)} · ${cleanClipTypeLabel(clip.clip_type)}` : 'Source video'
 
   return (
-    <article className="min-w-0 border-b border-border-light last:border-b-0 xl:border-b-0 xl:border-r xl:last:border-r-0">
-      <div className="border-b border-border-light bg-surface px-4 py-3.5">
+    <article className="min-w-0 overflow-hidden rounded-md border border-border-light bg-surface shadow-[0_6px_18px_rgba(29,28,27,0.045)]">
+      <div className="px-4 py-3.5">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className={['text-xs font-semibold uppercase tracking-[0.1em]', colorClass].join(' ')}>{label}</p>
-            <h3 className="mt-1 truncate text-base font-semibold text-text-primary">{title}</h3>
+            <span className={['inline-flex h-6 max-w-full items-center rounded-md border px-2 text-[10px] font-semibold uppercase tracking-[0.08em]', toneBadgeClass].join(' ')}>
+              <span className="truncate">{label}</span>
+            </span>
+            <h3 className="mt-2 truncate text-base font-semibold text-text-primary">{title}</h3>
           </div>
           {startTime && (
-            <span className="shrink-0 rounded-sm border border-border bg-card px-2 py-1 font-mono text-xs font-semibold text-text-secondary">
+            <span className="shrink-0 rounded-md border border-border-light bg-card px-2.5 py-1.5 font-mono text-xs font-semibold text-text-secondary">
               {startTime}{endTime ? ` - ${endTime}` : ''}
             </span>
           )}
         </div>
       </div>
-      <div className="flex aspect-video items-center justify-center bg-card text-text-primary">
-        {hasPlayable && streamInfoUrl ? (
-          <TwelveLabsVideoPlayer
-            key={`${streamInfoUrl}-${startTime || 'source'}-${endTime || 'open'}`}
-            streamInfoUrl={streamInfoUrl}
-            startSeconds={startSeconds}
-            endSeconds={endSeconds}
-            posterUrl={posterUrl}
-            onDuration={() => undefined}
-          />
-        ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
-            <StrandIcon name="info" className="h-7 w-7 text-text-tertiary" />
-            <p className="max-w-sm text-sm font-semibold text-text-secondary">{emptyText}</p>
-          </div>
-        )}
+      <div className="mx-3 overflow-hidden rounded-md bg-brand-charcoal ring-1 ring-black/5">
+        <div className="flex aspect-video items-center justify-center text-text-primary">
+          {hasPlayable && streamInfoUrl ? (
+            <TwelveLabsVideoPlayer
+              key={`${streamInfoUrl}-${startTime || 'source'}-${endTime || 'open'}`}
+              streamInfoUrl={streamInfoUrl}
+              startSeconds={startSeconds}
+              endSeconds={endSeconds}
+              posterUrl={posterUrl}
+              onDuration={() => undefined}
+            />
+          ) : (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-card px-6 text-center">
+              <StrandIcon name="info" className="h-7 w-7 text-text-tertiary" />
+              <p className="max-w-sm text-sm font-semibold text-text-secondary">{emptyText}</p>
+            </div>
+          )}
+        </div>
       </div>
       {timelineCategory && (
         <ClipMarkerLane
           clips={timelineCategory.clips}
           label={timelineLabel}
+          secondaryClips={secondaryTimelineCategory?.clips}
+          secondaryLabel={secondaryTimelineLabel}
+          secondaryColor={signalColors.emotional_moments}
+          onSecondarySelect={onSecondaryTimelineSelect}
           selectedIndex={selectedTimelineIndex}
           durationSeconds={0}
           onSelect={onTimelineSelect}
+          variant="preview"
         />
       )}
-      <div className="grid gap-3 p-4">
-        <div className="min-w-0 rounded-md border border-border-light bg-card p-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{metaLabel}</p>
+      <div className="px-3 pb-3">
+        <div className="min-w-0 rounded-md bg-card px-3 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{metaLabel}</p>
           <p className="mt-2 line-clamp-3 text-sm font-semibold leading-5 text-text-primary">
             {description || 'No grounded clip description returned yet.'}
           </p>
@@ -2729,6 +2755,12 @@ function ReelSequencePlayer({
   onSelect?: (categoryKey: MapCategoryKey, index: number) => void
 }) {
   const [activeIndex, setActiveIndex] = useState(0)
+  const assemblyVideoRef = useRef<HTMLVideoElement | null>(null)
+  const [assemblyStatus, setAssemblyStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [assemblyCurrentSeconds, setAssemblyCurrentSeconds] = useState(0)
+  const [playlistAutoPlay, setPlaylistAutoPlay] = useState(false)
+  const assemblyLeftColumnRef = useRef<HTMLDivElement | null>(null)
+  const [assemblyLeftColumnHeight, setAssemblyLeftColumnHeight] = useState(0)
   const clipButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const pointerSelectHandledRef = useRef(false)
   const sequenceClips = useMemo(() => {
@@ -2772,7 +2804,41 @@ function ReelSequencePlayer({
       laneOrder[left.laneKey] - laneOrder[right.laneKey],
     )
   }, [game, mode, reels])
+  const assemblyClips = useMemo(() => deoverlapSequenceClips(sequenceClips), [sequenceClips])
   const activeClip = sequenceClips[activeIndex] || sequenceClips[0]
+  const sequenceTimeline = useMemo(() => {
+    let cursor = 0
+    return assemblyClips.map((clip) => {
+      const sourceStart = secondsFromTime(clip.startTime)
+      const sourceEnd = Math.max(secondsFromTime(clip.endTime), sourceStart + 1)
+      const duration = Math.max(1, sourceEnd - sourceStart)
+      const segment = {
+        ...clip,
+        duration,
+        offsetEnd: cursor + duration,
+        offsetStart: cursor,
+        sourceEnd,
+        sourceStart,
+      }
+      cursor += duration
+      return segment
+    })
+  }, [assemblyClips])
+  const assemblyDurationSeconds = sequenceTimeline.length
+    ? sequenceTimeline[sequenceTimeline.length - 1].offsetEnd
+    : 0
+  const assemblySourceName = assemblyClips[0]?.sourceName
+  const canUseAssemblyVideo = Boolean(
+    assemblySourceName && assemblyClips.length > 0 && assemblyClips.every((clip) => clip.sourceName === assemblySourceName),
+  )
+  const assemblyVideoUrl = canUseAssemblyVideo && assemblySourceName
+    ? assemblyReelUrl(game, assemblySourceName, assemblyClips, mode === 'wsc_baseline' ? 'event-feed-assembly' : 'semantic-assembly')
+    : ''
+  const assemblyDownloadUrl = canUseAssemblyVideo && assemblySourceName
+    ? assemblyReelUrl(game, assemblySourceName, assemblyClips, mode === 'wsc_baseline' ? 'event-feed-assembly' : 'semantic-assembly', true)
+    : ''
+  const compact = variant === 'sidecar'
+  const usingAssemblyVideo = Boolean(assemblyVideoUrl && assemblyStatus !== 'error')
 
   useEffect(() => {
     const selectedSequenceClipIndex = sequenceClips.findIndex((clip) =>
@@ -2795,6 +2861,36 @@ function ReelSequencePlayer({
     clipButtonRefs.current[activeClip.id]?.scrollIntoView({ block: 'nearest' })
   }, [activeClip])
 
+  useEffect(() => {
+    setAssemblyStatus(assemblyVideoUrl ? 'loading' : 'error')
+    setAssemblyCurrentSeconds(0)
+    setPlaylistAutoPlay(false)
+  }, [assemblyVideoUrl])
+
+  useEffect(() => {
+    if (!compact) return undefined
+    const node = assemblyLeftColumnRef.current
+    if (!node) return undefined
+
+    let frameId: number | null = null
+    const measure = () => {
+      if (frameId) window.cancelAnimationFrame(frameId)
+      frameId = window.requestAnimationFrame(() => {
+        setAssemblyLeftColumnHeight(Math.ceil(node.getBoundingClientRect().height))
+      })
+    }
+
+    measure()
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
+    resizeObserver?.observe(node)
+    window.addEventListener('resize', measure)
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId)
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [compact, activeClip?.id, assemblyStatus, usingAssemblyVideo])
+
   if (!activeClip) {
     return (
       <section className="rounded-md border border-border bg-surface p-5 text-sm text-text-tertiary shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
@@ -2806,41 +2902,181 @@ function ReelSequencePlayer({
   const streamInfoUrl = streamInfoForVideoName(game, activeClip.sourceName)
   const startSeconds = secondsFromTime(activeClip.startTime)
   const endSeconds = secondsFromTime(activeClip.endTime)
-  const compact = variant === 'sidecar'
-  const progress = ((activeIndex + 1) / Math.max(sequenceClips.length, 1)) * 100
+  const progress = usingAssemblyVideo && assemblyDurationSeconds > 0
+    ? clamp((assemblyCurrentSeconds / assemblyDurationSeconds) * 100, 0, 100)
+    : ((activeIndex + 1) / Math.max(sequenceClips.length, 1)) * 100
   const activeClipColor = signalColors[activeClip.laneKey]
+  const assemblyListStyle: CSSProperties | undefined = compact
+    ? {
+      height: assemblyLeftColumnHeight > 0 ? assemblyLeftColumnHeight : undefined,
+      maxHeight: assemblyLeftColumnHeight > 0 ? assemblyLeftColumnHeight : undefined,
+      minHeight: assemblyLeftColumnHeight > 0 ? assemblyLeftColumnHeight : undefined,
+      overscrollBehavior: 'contain',
+    }
+    : undefined
+  const assemblyIndexForClip = (clip: SequenceClip) => {
+    const exactIndex = sequenceTimeline.findIndex((segment) =>
+      segment.laneKey === clip.laneKey && segment.sourceIndex === clip.sourceIndex,
+    )
+    if (exactIndex >= 0) return exactIndex
+
+    const clipStart = secondsFromTime(clip.startTime)
+    const clipEnd = Math.max(secondsFromTime(clip.endTime), clipStart + 1)
+    const coveredIndex = sequenceTimeline.findIndex((segment) =>
+      segment.sourceName === clip.sourceName
+      && clipStart >= segment.sourceStart
+      && clipStart < segment.sourceEnd,
+    )
+    if (coveredIndex >= 0) return coveredIndex
+
+    let nearestIndex = -1
+    let nearestDistance = Number.POSITIVE_INFINITY
+    sequenceTimeline.forEach((segment, index) => {
+      if (segment.sourceName !== clip.sourceName) return
+      const distance = Math.min(Math.abs(segment.sourceStart - clipStart), Math.abs(segment.sourceEnd - clipEnd))
+      if (distance < nearestDistance) {
+        nearestDistance = distance
+        nearestIndex = index
+      }
+    })
+    return nearestIndex
+  }
+  const seekAssemblyToIndex = (index: number) => {
+    const offset = sequenceTimeline[index]?.offsetStart
+    if (usingAssemblyVideo && typeof offset === 'number' && assemblyVideoRef.current) {
+      assemblyVideoRef.current.currentTime = offset
+      setAssemblyCurrentSeconds(offset)
+    }
+  }
   const selectSequenceClip = (index: number, clip: SequenceClip) => {
     setActiveIndex(index)
+    const assemblyIndex = assemblyIndexForClip(clip)
+    if (assemblyIndex >= 0) seekAssemblyToIndex(assemblyIndex)
     onSelect?.(clip.laneKey, clip.sourceIndex)
   }
-
+  const selectAssemblySegment = (index: number) => {
+    const segment = sequenceTimeline[index]
+    if (!segment) return
+    const displayIndex = sequenceClips.findIndex((clip) =>
+      clip.laneKey === segment.laneKey && clip.sourceIndex === segment.sourceIndex,
+    )
+    if (displayIndex >= 0) setActiveIndex(displayIndex)
+    seekAssemblyToIndex(index)
+    onSelect?.(segment.laneKey, segment.sourceIndex)
+  }
+  const advanceFallbackPlaylist = () => {
+    const nextIndex = activeIndex + 1
+    if (nextIndex >= sequenceClips.length) {
+      setPlaylistAutoPlay(false)
+      return
+    }
+    const nextClip = sequenceClips[nextIndex]
+    setActiveIndex(nextIndex)
+    setPlaylistAutoPlay(true)
+    onSelect?.(nextClip.laneKey, nextClip.sourceIndex)
+  }
+  const syncAssemblyPlaybackPosition = () => {
+    const video = assemblyVideoRef.current
+    if (!video) return
+    const current = video.currentTime
+    setAssemblyCurrentSeconds(clamp(current, 0, Math.max(assemblyDurationSeconds, current)))
+    const segmentIndex = sequenceTimeline.findIndex((segment, index) => {
+      const isLast = index === sequenceTimeline.length - 1
+      return current >= segment.offsetStart && (current < segment.offsetEnd || isLast)
+    })
+    if (segmentIndex >= 0) {
+      const segment = sequenceTimeline[segmentIndex]
+      const displayIndex = sequenceClips.findIndex((clip) =>
+        clip.laneKey === segment.laneKey && clip.sourceIndex === segment.sourceIndex,
+      )
+      if (displayIndex === activeIndex) return
+      if (displayIndex >= 0) setActiveIndex(displayIndex)
+      onSelect?.(segment.laneKey, segment.sourceIndex)
+    }
+  }
   return (
     <section className="w-full max-w-full min-w-0 overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
       <div className="grid gap-4 bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <StrandIcon name="play-next" className="h-4 w-4 text-accent" />
-            <h2 className="text-base font-semibold text-text-primary">Assembly Highlights</h2>
+            <h2 className="text-base font-semibold text-text-primary">Assembly Lane Player</h2>
           </div>
-          {!compact && <p className="mt-1 text-sm text-text-secondary">Semantic scenes stitched into one source-guided sequence.</p>}
+          {!compact && <p className="mt-1 text-sm text-text-secondary">All semantic lane segments play together as one stitched preview.</p>}
         </div>
-        <span className="text-sm font-semibold text-text-tertiary">{activeIndex + 1} / {sequenceClips.length}</span>
+        <span className="text-sm font-semibold text-text-tertiary">
+          {formatSeconds(Math.round(assemblyCurrentSeconds))} / {formatSeconds(Math.round(assemblyDurationSeconds))}
+        </span>
       </div>
       <div className="h-1 bg-border-light">
         <span className="block h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
       </div>
-      <div className={compact ? 'grid w-full min-w-0 items-start [@media(min-width:720px)]:grid-cols-[minmax(340px,1.35fr)_minmax(260px,0.65fr)]' : 'grid w-full min-w-0 items-start lg:grid-cols-[minmax(0,1.2fr)_360px]'}>
-        <div className="flex min-w-0 flex-col bg-surface">
+      <div className={compact ? 'grid min-h-0 w-full min-w-0 items-start [@media(min-width:560px)]:grid-cols-[minmax(0,1fr)_minmax(210px,0.62fr)]' : 'grid w-full min-w-0 items-stretch lg:grid-cols-[minmax(0,1.2fr)_360px]'}>
+        <div ref={assemblyLeftColumnRef} className="flex min-w-0 self-start flex-col bg-surface">
           <div className="m-3 aspect-video min-w-0 overflow-hidden rounded-md bg-card">
-            <TwelveLabsVideoPlayer
-              key={`${streamInfoUrl}-${activeClip.id}`}
-              streamInfoUrl={streamInfoUrl}
-              startSeconds={startSeconds}
-              endSeconds={endSeconds}
-              posterUrl={thumbnailForVideoName(game, activeClip.sourceName)}
-              onDuration={() => undefined}
-              onRangeComplete={() => setActiveIndex((current) => (current + 1) % sequenceClips.length)}
-            />
+            {usingAssemblyVideo ? (
+              <div className="relative h-full w-full">
+                <video
+                  key={assemblyVideoUrl}
+                  ref={assemblyVideoRef}
+                  className="h-full w-full bg-brand-charcoal object-contain"
+                  controls
+                  playsInline
+                  preload="auto"
+                  poster={thumbnailForVideoName(game, assemblySourceName || activeClip.sourceName)}
+                  src={assemblyVideoUrl}
+                  onLoadStart={() => setAssemblyStatus('loading')}
+                  onLoadedMetadata={() => {
+                    setAssemblyStatus('ready')
+                    setAssemblyCurrentSeconds(0)
+                  }}
+                  onCanPlay={() => setAssemblyStatus('ready')}
+                  onTimeUpdate={syncAssemblyPlaybackPosition}
+                  onEnded={() => {
+                    setAssemblyCurrentSeconds(assemblyDurationSeconds)
+                    setActiveIndex(Math.max(0, sequenceClips.length - 1))
+                  }}
+                  onError={() => setAssemblyStatus('error')}
+                />
+                {assemblyDownloadUrl && (
+                  <a
+                    href={assemblyDownloadUrl}
+                    download
+                    aria-label="Download assembled highlight video"
+                    title="Download assembled highlight video"
+                    className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/24 bg-brand-charcoal/92 text-white shadow-[0_8px_18px_rgba(0,0,0,0.22)] backdrop-blur-sm transition hover:border-accent hover:bg-accent hover:text-brand-charcoal focus:outline-none focus:ring-2 focus:ring-accent/40"
+                  >
+                    <StrandIcon name="download" className="h-4 w-4" />
+                  </a>
+                )}
+                {assemblyStatus === 'loading' && (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-surface/94 px-6 text-center">
+                    <div className="inline-flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm font-semibold text-text-primary shadow-[0_8px_20px_rgba(29,28,27,0.12)]">
+                      <StrandIcon name="spinner" className="h-4 w-4 animate-spin text-accent" />
+                      Building lane assembly
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <TwelveLabsVideoPlayer
+                key={`${streamInfoUrl}-${activeClip.id}`}
+                streamInfoUrl={streamInfoUrl}
+                startSeconds={startSeconds}
+                endSeconds={endSeconds}
+                posterUrl={thumbnailForVideoName(game, activeClip.sourceName)}
+                segmentRange={{
+                  startSeconds,
+                  endSeconds,
+                  startLabel: activeClip.startTime,
+                  endLabel: activeClip.endTime,
+                }}
+                autoPlay={playlistAutoPlay}
+                onDuration={() => undefined}
+                onPlayingChange={setPlaylistAutoPlay}
+                onRangeComplete={advanceFallbackPlaylist}
+              />
+            )}
           </div>
           <div className="min-w-0 border-t border-border-light px-4 py-3">
             <div className="grid gap-3">
@@ -2882,10 +3118,45 @@ function ReelSequencePlayer({
             <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-border-light">
               <span className="block h-full rounded-full bg-accent" style={{ width: `${progress}%` }} />
             </div>
+            <div className="relative mt-3 h-8" aria-label="Assembled lane segment map">
+              <div className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-full bg-border-light" />
+              {sequenceTimeline.map((segment, index) => {
+                const color = signalColors[segment.laneKey]
+                const displayIndex = sequenceClips.findIndex((clip) =>
+                  clip.laneKey === segment.laneKey && clip.sourceIndex === segment.sourceIndex,
+                )
+                const selected = displayIndex === activeIndex
+                const left = assemblyDurationSeconds > 0 ? clamp((segment.offsetStart / assemblyDurationSeconds) * 100, 0, 99) : 0
+                const width = assemblyDurationSeconds > 0 ? clamp((segment.duration / assemblyDurationSeconds) * 100, 2, 100 - left) : 100
+                return (
+                  <button
+                    key={`${segment.id}-assembly-strip`}
+                    type="button"
+                    onClick={() => selectAssemblySegment(index)}
+                    className={[
+                      'absolute top-1/2 h-5 -translate-y-1/2 rounded-sm border transition-transform hover:scale-y-125',
+                      selected ? 'shadow-[0_0_0_3px_rgba(0,220,130,0.18)]' : '',
+                    ].join(' ')}
+                    style={{
+                      backgroundColor: selected ? color.bg : color.track,
+                      borderColor: color.border,
+                      left: `${left}%`,
+                      width: `${width}%`,
+                      minWidth: selected ? 18 : 12,
+                    }}
+                    title={`${segment.title}: ${formatSeconds(Math.round(segment.offsetStart))} - ${formatSeconds(Math.round(segment.offsetEnd))}`}
+                    aria-label={`Jump to assembly segment ${index + 1}`}
+                  />
+                )
+              })}
+            </div>
           </div>
         </div>
-        <div className={compact ? 'relative grid min-w-0 gap-2 border-t border-border-light px-4 py-3 [@media(min-width:720px)]:max-h-[560px] [@media(min-width:720px)]:overflow-y-auto [@media(min-width:720px)]:border-l [@media(min-width:720px)]:border-t-0 [@media(min-width:720px)]:px-2' : 'relative flex min-w-0 flex-col gap-2 border-t border-border-light px-3 py-4 lg:border-l lg:border-t-0'}>
-          <span className="pointer-events-none absolute bottom-5 left-[44px] top-5 z-0 w-px bg-border [@media(min-width:720px)]:left-[36px]" aria-hidden="true" />
+        <div
+          className={compact ? 'relative grid min-h-0 min-w-0 self-start content-start gap-2 overflow-y-auto border-t border-border-light px-4 py-3 [@media(min-width:560px)]:border-l [@media(min-width:560px)]:border-t-0 [@media(min-width:560px)]:px-2' : 'relative flex min-w-0 flex-col gap-2 border-t border-border-light px-3 py-4 lg:border-l lg:border-t-0'}
+          style={assemblyListStyle}
+        >
+          <span className="pointer-events-none absolute bottom-5 left-[44px] top-5 z-0 w-px bg-border [@media(min-width:560px)]:left-[36px]" aria-hidden="true" />
           {sequenceClips.map((clip, index) => {
             const active = index === activeIndex
             const selectedLane = mode === 'wsc_baseline' || clip.laneKey === categoryKey
@@ -3470,7 +3741,7 @@ function WorkspaceExplainabilityRail({
           title="Expand explainability"
         >
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border border-accent bg-accent-light text-brand-charcoal">
-            <StrandIcon name="vision" className="h-4 w-4" />
+            <StrandIcon name="explainability" className="h-4 w-4" />
           </span>
           <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] font-semibold uppercase tracking-[0.08em]">
             Explainability
@@ -3485,8 +3756,13 @@ function WorkspaceExplainabilityRail({
       <div className="px-4 py-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            <StrandIcon name="vision" className="h-4 w-4 shrink-0 text-accent" />
-            <h2 className="truncate text-base font-semibold text-text-primary">Explainability</h2>
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent/70 bg-accent-light text-brand-charcoal shadow-[0_6px_16px_rgba(0,220,130,0.12)]">
+              <StrandIcon name="explainability" className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-text-tertiary">Evidence trace</p>
+              <h2 className="truncate text-base font-semibold text-text-primary">Explainability</h2>
+            </div>
           </div>
           <button
             type="button"
@@ -3537,7 +3813,6 @@ function WorkspaceExplainabilityRail({
       </div>
 
       <div className="border-t border-border-light px-4">
-        <ReasonBlock title="Stats trigger" clip={standardClip} expectedSource="stats" />
         <ReasonBlock title="TwelveLabs signal" clip={enhancedClip} expectedSource="semantic" />
         {category?.assembly_notes.length ? (
           <div className="border-t border-border-light py-4">
@@ -3576,12 +3851,6 @@ function WorkspaceVideoCarousel({
     () => (videos.length ? uniqueIndexVideos(videos) : videoNames.map(fallbackIndexVideo)),
     [videoNames, videos],
   )
-  const loopVideos = useMemo(() => {
-    if (uniqueVideos.length === 0) return []
-    const minimumItems = Math.max(8, uniqueVideos.length)
-    return Array.from({ length: minimumItems }, (_, index) => uniqueVideos[index % uniqueVideos.length])
-  }, [uniqueVideos])
-
   if (loading && uniqueVideos.length === 0) {
     return (
       <section className="overflow-hidden rounded-md border border-border bg-card px-5 py-4 shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
@@ -3598,8 +3867,7 @@ function WorkspaceVideoCarousel({
   const renderVideoButton = (video: IndexVideo, index: number, group: string) => {
     const videoName = indexVideoWorkspaceName(game, video)
     const active = videoName === activeVideoName
-    const title = video.display_name || video.name || videoName
-    const subtitle = shortIndexId(video.indexed_asset_id || video.asset_id || video.id)
+    const title = cleanVideoCardTitle(video.display_name || video.name || videoName)
     const poster = video.thumbnail_url || ''
     return (
       <button
@@ -3625,9 +3893,19 @@ function WorkspaceVideoCarousel({
             <StrandIcon name="play-boxed" className="h-9 w-9 text-accent" />
           </div>
         )}
-        <span className="absolute inset-x-0 bottom-0 bg-surface/92 p-3 shadow-[0_-8px_24px_rgba(29,28,27,0.08)] backdrop-blur-sm">
-          <span className="line-clamp-2 text-xs font-semibold leading-4 text-text-primary">{title}</span>
-          {subtitle ? <span className="mt-1 block truncate font-mono text-[10px] font-semibold text-text-tertiary">{subtitle}</span> : null}
+        <span className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/58 to-transparent" />
+        <span className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/72 via-black/38 to-transparent" />
+        <span className="absolute inset-x-0 bottom-0 p-3 text-white">
+          <span
+            className={[
+              'block min-w-0 rounded-md border px-2.5 py-2 text-sm font-semibold leading-4 text-white shadow-[0_6px_14px_rgba(0,0,0,0.2)] backdrop-blur-sm',
+              active
+                ? 'border-accent/80 bg-brand-charcoal/90'
+                : 'border-white/24 bg-brand-charcoal/88',
+            ].join(' ')}
+          >
+            <span className="line-clamp-2 drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]">{title}</span>
+          </span>
         </span>
       </button>
     )
@@ -3635,14 +3913,9 @@ function WorkspaceVideoCarousel({
 
   return (
     <section className="overflow-hidden rounded-md border border-border bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="workspace-video-carousel relative overflow-hidden py-4">
+      <div className="workspace-video-carousel relative overflow-x-auto overflow-y-hidden py-4">
         <div className="workspace-video-carousel-track flex w-max gap-3 px-5">
-          <div className="flex shrink-0 gap-3">
-            {loopVideos.map((video, index) => renderVideoButton(video, index, 'a'))}
-          </div>
-          <div className="flex shrink-0 gap-3">
-            {loopVideos.map((video, index) => renderVideoButton(video, index, 'b'))}
-          </div>
+          {uniqueVideos.map((video, index) => renderVideoButton(video, index, 'source'))}
         </div>
       </div>
     </section>
@@ -4873,6 +5146,7 @@ function TwelveLabsVideoPlayer({
   onDuration,
   onRangeComplete,
   onStatusChange,
+  onPlayingChange,
   segmentRange,
   variant = 'default',
   fit = 'contain',
@@ -4890,6 +5164,7 @@ function TwelveLabsVideoPlayer({
   onDuration?: (duration: number) => void
   onRangeComplete?: () => void
   onStatusChange?: (status: 'loading' | 'ready' | 'error') => void
+  onPlayingChange?: (playing: boolean) => void
   segmentRange?: SegmentRange
   variant?: 'default' | 'minimal'
   fit?: 'contain' | 'cover'
@@ -5035,9 +5310,13 @@ function TwelveLabsVideoPlayer({
             setCurrentSeconds(startSeconds)
           }
           setPlaying(true)
+          onPlayingChange?.(true)
         }
         handlePause = () => {
-          if (!disposed) setPlaying(false)
+          if (!disposed) {
+            setPlaying(false)
+            if (!rangeCompleted) onPlayingChange?.(false)
+          }
         }
         video.addEventListener('loadedmetadata', handleMetadata)
         video.addEventListener('loadeddata', handleReadyFrame)
@@ -5109,7 +5388,7 @@ function TwelveLabsVideoPlayer({
       video.removeAttribute('src')
       video.load()
     }
-  }, [manifestUrl, streamInfoUrl, startSeconds, endSeconds, onDuration, onRangeComplete])
+  }, [manifestUrl, streamInfoUrl, startSeconds, endSeconds, onDuration, onPlayingChange, onRangeComplete])
 
   useEffect(() => {
     const video = videoRef.current
@@ -5543,7 +5822,6 @@ function SelectedClipAnalysisSection({
   searchMoment,
   analysis,
   loading,
-  loadingPhase,
   error,
   hasCachedMetadata = false,
   workspaceMetadata,
@@ -5555,7 +5833,6 @@ function SelectedClipAnalysisSection({
   searchMoment: SearchMoment
   analysis?: SelectedClipAnalysis
   loading: boolean
-  loadingPhase?: ClipAnalysisPhase
   error: string
   hasCachedMetadata?: boolean
   workspaceMetadata?: JockeyWorkspaceMetadataResponse
@@ -5581,8 +5858,7 @@ function SelectedClipAnalysisSection({
         endLabel: searchMoment.endTime,
       }
     : undefined
-  const activeLoadingPhase: ClipAnalysisPhase = loadingPhase
-    || (hasCachedMetadata || analysis?._jockey_metadata?.from_user_metadata ? 'metadata' : 'analysis')
+  const showVideoMetadataPanel = Boolean(!loading && (workspaceMetadata || workspaceMetadataError || analysis || hasCachedMetadata))
   return (
     <section
       id="selected-clip-analysis"
@@ -5655,15 +5931,17 @@ function SelectedClipAnalysisSection({
                 </button>
               ) : null}
             </div>
+            {showVideoMetadataPanel && (
             <div className="mt-3">
               <SelectedClipVideoMetadataPanel
                 metadata={workspaceMetadata}
-                loading={workspaceMetadataLoading || (loading && activeLoadingPhase === 'metadata')}
+                loading={workspaceMetadataLoading}
                 error={workspaceMetadataError}
                 searchMoment={searchMoment}
                 analysis={analysis}
               />
             </div>
+            )}
           </div>
         </div>
 
@@ -5683,7 +5961,7 @@ function SelectedClipAnalysisSection({
               <SelectedClipAnalysisSaveButton game={game} searchMoment={searchMoment} analysis={analysis} />
             </div>
             {loading ? (
-              <SelectedClipAnalysisLoader phase={activeLoadingPhase} />
+              <SelectedClipAnalysisLoader />
             ) : analysis ? (
               <div className="grid gap-3">
                 <SelectedClipNarrative analysis={analysis} />
@@ -5841,8 +6119,7 @@ function SelectedClipVideoMetadataPanel({
   )
 }
 
-function SelectedClipAnalysisLoader({ phase }: { phase: ClipAnalysisPhase }) {
-  const isMetadataPhase = phase === 'metadata'
+function SelectedClipAnalysisLoader() {
   return (
     <div className="rounded-md border border-border-light bg-surface px-3 py-3">
       <div className="flex items-start gap-3">
@@ -5850,27 +6127,17 @@ function SelectedClipAnalysisLoader({ phase }: { phase: ClipAnalysisPhase }) {
           <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
         </span>
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-text-primary">
-            {isMetadataPhase ? 'Loading video metadata first' : 'Analyzing selected clip'}
-          </p>
+          <p className="text-sm font-semibold text-text-primary">Analyzing selected clip</p>
           <p className="mt-1 text-xs leading-5 text-text-secondary">
-            {isMetadataPhase
-              ? 'Reading saved indexed metadata before the clip response is shown.'
-              : 'Pegasus 1.5 is now generating the selected-clip response.'}
+            Pegasus 1.5 is generating the selected-clip response.
           </p>
         </div>
       </div>
-      <div className="mt-3 grid gap-2 text-xs font-semibold text-text-secondary sm:grid-cols-2">
-        <div className={['rounded-sm border px-2.5 py-2', isMetadataPhase ? 'border-accent/35 bg-accent-light text-brand-charcoal' : 'border-border-light bg-card'].join(' ')}>
+      <div className="mt-3 text-xs font-semibold text-brand-charcoal">
+        <div className="rounded-sm border border-accent/35 bg-accent-light px-2.5 py-2">
           <span className="flex items-center gap-1.5">
-            <StrandIcon name={isMetadataPhase ? 'spinner' : 'checkmark'} className={['h-3.5 w-3.5', isMetadataPhase ? 'animate-spin' : 'text-accent'].join(' ')} />
-            Metadata
-          </span>
-        </div>
-        <div className={['rounded-sm border px-2.5 py-2', !isMetadataPhase ? 'border-accent/35 bg-accent-light text-brand-charcoal' : 'border-border-light bg-card'].join(' ')}>
-          <span className="flex items-center gap-1.5">
-            <StrandIcon name={!isMetadataPhase ? 'spinner' : 'analyze'} className={['h-3.5 w-3.5', !isMetadataPhase ? 'animate-spin' : 'text-text-tertiary'].join(' ')} />
-            Pegasus response
+            <StrandIcon name="spinner" className="h-3.5 w-3.5 animate-spin" />
+            Pegasus 1.5 response
           </span>
         </div>
       </div>
@@ -7446,24 +7713,36 @@ function FeaturedClipPanel({
 function ClipMarkerLane({
   clips,
   label,
+  secondaryClips = [],
+  secondaryLabel,
+  secondaryColor = signalColors.emotional_moments,
+  onSecondarySelect,
   selectedIndex,
   durationSeconds,
   onSelect,
+  variant = 'default',
 }: {
   clips: Clip[]
   label: string
+  secondaryClips?: Clip[]
+  secondaryLabel?: string
+  secondaryColor?: { bg: string; border: string; text: string; track: string }
+  onSecondarySelect?: (index: number) => void
   selectedIndex: number
   durationSeconds: number
   onSelect: (index: number) => void
+  variant?: 'default' | 'preview'
 }) {
   if (clips.length === 0) return null
   const selectedClip = clips[selectedIndex] || clips[0]
+  const timelineClips = [...clips, ...secondaryClips]
   const maxClipEnd = Math.max(
-    ...clips.map((clip) => Math.max(secondsFromTime(clip.end_time), secondsFromTime(clip.start_time) + 1)),
+    ...timelineClips.map((clip) => Math.max(secondsFromTime(clip.end_time), secondsFromTime(clip.start_time) + 1)),
   )
   const safeDuration = Math.max(durationSeconds, maxClipEnd, 1)
+  const preview = variant === 'preview'
   return (
-    <div className="border-b border-border bg-card px-4 py-3 text-text-secondary lg:border-b-0">
+    <div className={preview ? 'mx-3 mt-3 rounded-md bg-card px-3 py-3 text-text-secondary' : 'border-b border-border bg-card px-4 py-3 text-text-secondary lg:border-b-0'}>
       <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
         <span>{clips.length} {label} points</span>
         <span>
@@ -7472,6 +7751,44 @@ function ClipMarkerLane({
       </div>
       <div className="relative mt-3 h-7" aria-label={`${label} clip points on player timeline`}>
         <div className="absolute left-0 right-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-border-light" />
+        {secondaryClips.map((clip, index) => {
+          const start = secondsFromTime(clip.start_time)
+          const end = Math.max(secondsFromTime(clip.end_time), start + 1)
+          const left = clamp((start / safeDuration) * 100, 0, 98)
+          const width = clamp(((end - start) / safeDuration) * 100, 1.4, 100 - left)
+          const markerStyle: CSSProperties = {
+            left: `${left}%`,
+            width: `${width}%`,
+            minWidth: 14,
+            zIndex: 1,
+            backgroundColor: secondaryColor.bg,
+            borderColor: secondaryColor.border,
+            boxShadow: '0 0 12px rgba(250,186,23,0.28)',
+          }
+          const markerClass = 'absolute top-1/2 h-3 -translate-y-1/2 rounded-full border transition-transform hover:scale-y-150 focus:outline-none focus:ring-2 focus:ring-[rgba(250,186,23,0.35)]'
+          const markerLabel = `${secondaryLabel || 'Secondary'} point ${index + 1}: ${clip.start_time} to ${clip.end_time}`
+          if (!onSecondarySelect) {
+            return (
+              <span
+                key={`${clip.video_reference}-${clip.start_time}-${index}-secondary-marker`}
+                aria-hidden="true"
+                className={markerClass}
+                style={markerStyle}
+              />
+            )
+          }
+          return (
+            <button
+              key={`${clip.video_reference}-${clip.start_time}-${index}-secondary-marker`}
+              type="button"
+              onClick={() => onSecondarySelect(index)}
+              aria-label={markerLabel}
+              title={markerLabel}
+              className={markerClass}
+              style={markerStyle}
+            />
+          )
+        })}
         {clips.map((clip, index) => {
           const start = secondsFromTime(clip.start_time)
           const end = Math.max(secondsFromTime(clip.end_time), start + 1)
@@ -7718,10 +8035,7 @@ function ReelCard({
           </div>
         )}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/68 to-transparent" />
-        <div className="absolute bottom-3 left-3 right-3 flex min-w-0 items-center justify-between gap-2">
-          <span className="shrink-0 rounded-md border border-accent/70 bg-accent px-2 py-1.5 text-[10px] font-bold uppercase leading-none tracking-[0.08em] text-brand-charcoal shadow-[0_8px_18px_rgba(0,0,0,0.18)]">
-            Range
-          </span>
+        <div className="absolute bottom-3 left-3 right-3 flex min-w-0 items-center justify-end">
           <span
             className="min-w-0 truncate rounded-md border border-white/24 bg-brand-charcoal/92 px-2.5 py-1.5 font-mono text-[11px] font-bold leading-none tracking-[0.02em] text-white shadow-[0_8px_18px_rgba(0,0,0,0.2)] backdrop-blur-sm"
             title={`${formatSeconds(paddedRange.start)} - ${formatSeconds(paddedRange.end)}`}
@@ -7921,6 +8235,15 @@ function cleanClipTypeLabel(clipType?: string) {
   if (/^game event$/i.test(normalized)) return 'Event Moment'
   if (/^highlight$/i.test(normalized)) return 'Highlight Moment'
   return normalized.replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function cleanVideoCardTitle(videoName?: string) {
+  const normalized = cleanString(videoName)
+    .replace(/\.[a-z0-9]+$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return normalized || 'Source Video'
 }
 
 function displayAnalysisSummary(summary: string) {
@@ -8144,6 +8467,36 @@ function formatSeconds(totalSeconds: number) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
+function formatTimecodeLike(totalSeconds: number, template = '') {
+  const rounded = Math.max(0, Math.round(totalSeconds))
+  const wantsHours = template.split(':').length >= 3 || rounded >= 3600
+  if (!wantsHours) return formatSeconds(rounded)
+  const hours = Math.floor(rounded / 3600)
+  const minutes = Math.floor((rounded % 3600) / 60)
+  const seconds = rounded % 60
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function deoverlapSequenceClips(clips: SequenceClip[]) {
+  const lastEndBySource = new Map<string, number>()
+  return clips.flatMap((clip) => {
+    const sourceStart = secondsFromTime(clip.startTime)
+    const sourceEnd = Math.max(secondsFromTime(clip.endTime), sourceStart + 1)
+    const previousEnd = lastEndBySource.get(clip.sourceName) ?? -1
+    const trimmedStart = Math.max(sourceStart, previousEnd)
+    lastEndBySource.set(clip.sourceName, Math.max(previousEnd, sourceEnd))
+
+    if (sourceEnd <= trimmedStart + 0.5) return []
+    if (trimmedStart <= sourceStart + 0.05) return [clip]
+
+    return [{
+      ...clip,
+      id: `${clip.id}-trimmed-${Math.round(trimmedStart * 1000)}`,
+      startTime: formatTimecodeLike(trimmedStart, clip.startTime),
+    }]
+  })
+}
+
 function paddedRangeForClip(clip: Pick<Clip, 'start_time' | 'end_time'>) {
   const rawStart = secondsFromTime(clip.start_time)
   const rawEnd = Math.max(secondsFromTime(clip.end_time), rawStart + 1)
@@ -8201,6 +8554,23 @@ function reelPreviewUrl(
 ) {
   const params = reelClipParams(clip, categoryKey, index, format, false)
   return apiUrl(`/games/${encodeURIComponent(game.tag)}/reel/${encodeURIComponent(videoName)}?${params.toString()}`)
+}
+
+function assemblyReelUrl(game: Game, videoName: string, clips: SequenceClip[], name: string, download = false) {
+  const segments = clips
+    .map((clip) => {
+      const start = secondsFromTime(clip.startTime)
+      const end = Math.max(secondsFromTime(clip.endTime), start + 1)
+      return `${start.toFixed(3)}-${end.toFixed(3)}`
+    })
+    .join(';')
+  const params = new URLSearchParams({
+    segments,
+    format: '16x9',
+    name,
+  })
+  if (download) params.set('download', '1')
+  return apiUrl(`/games/${encodeURIComponent(game.tag)}/assembly-reel/${encodeURIComponent(videoName)}?${params.toString()}`)
 }
 
 function jockeyReelDownloadUrl(game: Game, videoName: string, clip: Pick<Clip, 'start_time' | 'end_time'>, index: number) {
@@ -8281,11 +8651,22 @@ function uniqueIndexVideos(videos: IndexVideo[]) {
   const seen = new Set<string>()
   const ordered = orderIndexVideosForMetadataFirst(videos)
   return ordered.filter((video) => {
-    const key = cleanString(video.indexed_asset_id) || cleanString(video.asset_id) || cleanString(video.id) || cleanString(video.name)
+    const key = indexVideoDedupeKey(video)
     if (!key || seen.has(key)) return false
     seen.add(key)
     return true
   })
+}
+
+function indexVideoDedupeKey(video: IndexVideo) {
+  const sourceKey =
+    cleanString(video.source_video_name)
+    || cleanString(video.metadata_source_video_name)
+    || cleanString(video.name)
+    || cleanString(video.display_name)
+  if (sourceKey) return `source:${sourceKey.toLowerCase()}`
+  const assetKey = cleanString(video.indexed_asset_id) || cleanString(video.asset_id) || cleanString(video.id)
+  return assetKey ? `asset:${assetKey.toLowerCase()}` : ''
 }
 
 function orderIndexVideosForMetadataFirst(videos: IndexVideo[]) {
@@ -8330,13 +8711,6 @@ function fallbackIndexVideo(videoName: string): IndexVideo {
     source_video_name: videoName,
     selectable: true,
   }
-}
-
-function shortIndexId(value?: string | null) {
-  const cleanValue = cleanString(value)
-  if (!cleanValue) return ''
-  if (cleanValue.length <= 12) return cleanValue
-  return `${cleanValue.slice(0, 6)}...${cleanValue.slice(-4)}`
 }
 
 function cleanString(value?: unknown) {

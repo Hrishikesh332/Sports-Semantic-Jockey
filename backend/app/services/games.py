@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -21,7 +22,6 @@ from app.integrations.twelvelabs import request_json as twelvelabs_request_json
 from app.integrations.twelvelabs import upload_asset_path
 from app.services.highlights import generate_highlight_reels, generate_pegasus_highlight_reels
 from app.services.jockey_workspace_metadata import (
-    append_saved_clip_analysis,
     find_saved_clip_analysis,
     jockey_entity_tracking_from_indexed_asset,
     jockey_entity_tracking_with_provenance,
@@ -2052,15 +2052,7 @@ def create_selected_clip_analysis(tag, payload=None):
         end_time = timecode_from_seconds(end_seconds)
 
     query = clean_optional_string(payload.get("query"))
-    search_context = {
-        "title": clean_optional_string(payload.get("title")),
-        "query": query,
-        "description": clean_optional_string(payload.get("description")),
-        "relevance": clean_optional_string(payload.get("relevance")),
-        "start_time": start_time,
-        "end_time": end_time,
-        "video_reference": video_reference,
-    }
+    title = clean_optional_string(payload.get("title"))
 
     if not force_generate:
         cached = find_saved_clip_analysis(
@@ -2068,7 +2060,7 @@ def create_selected_clip_analysis(tag, payload=None):
             video_name,
             start_time,
             end_time,
-            query=query or search_context.get("title"),
+            query=query or title,
         )
         if cached and isinstance(cached.get("analysis"), dict):
             cached_item = cached.get("item") if isinstance(cached.get("item"), dict) else {}
@@ -2140,42 +2132,10 @@ def create_selected_clip_analysis(tag, payload=None):
         analysis=analysis,
     )
 
-    stored_to_user_metadata = False
-    duplicate = False
-    workspace_item_id = None
-    saved_at = None
-    try:
-        store_result = append_saved_clip_analysis(
-            tag,
-            video_name,
-            {
-                "analysis": normalized,
-                "search_context": search_context,
-            },
-        )
-        if isinstance(store_result, dict):
-            stored_to_user_metadata = True
-            duplicate = bool(store_result.get("duplicate"))
-            stored_item = store_result.get("item") if isinstance(store_result.get("item"), dict) else {}
-            workspace_item_id = clean_optional_string(stored_item.get("id"))
-            saved_at = clean_optional_string(stored_item.get("saved_at"))
-            invalidate_index_videos_cache(tag)
-    except ApiError:
-        raise
-    except Exception as error:
-        logging.getLogger(__name__).warning(
-            "Selected clip analysis generated but could not be stored to user metadata: %s",
-            error,
-        )
-
     return selected_clip_analysis_with_provenance(
         normalized,
-        source="generated_and_stored_to_user_metadata" if stored_to_user_metadata else "pegasus_clip_analysis",
+        source="pegasus_clip_analysis",
         from_user_metadata=False,
-        saved_at=saved_at,
-        stored_to_user_metadata=stored_to_user_metadata,
-        duplicate=duplicate,
-        workspace_item_id=workspace_item_id,
     )
 
 
@@ -3319,6 +3279,35 @@ def generated_reel_clip(tag, video_name, start, end, format_name, clip_name=None
     return output_path, download_name
 
 
+def generated_assembly_reel(tag, video_name, segments, format_name, assembly_name=None):
+    game = get_game(tag)
+    video_name = validate_registered_video_name(game, video_name, status_code=404)
+    stream_info = twelvelabs_stream_info(tag, video_name)
+    source_input = stream_info["manifest_url"]
+    segment_ranges = parse_assembly_segments(segments)
+    total_duration = sum(end_seconds - start_seconds for start_seconds, end_seconds in segment_ranges)
+    if total_duration > 10 * 60:
+        raise ApiError("assembly duration must be 10 minutes or less", 400)
+
+    format_key = (format_name or "16x9").strip()
+    reel_format = REEL_FORMATS.get(format_key)
+    if not reel_format:
+        raise ApiError(f"unsupported reel format: {format_name}", 400)
+
+    REELS_DIR.mkdir(parents=True, exist_ok=True)
+    source_slug = slugify_filename(Path(video_name).stem)
+    safe_label = slugify_filename(assembly_name or "lane-assembly")
+    segment_signature = ";".join(f"{start_seconds:.3f}-{end_seconds:.3f}" for start_seconds, end_seconds in segment_ranges)
+    cache_hash = sha256(
+        f"{tag}|{video_name}|{stream_info.get('asset_id')}|hls|assembly-v3-fast|{segment_signature}|{format_key}".encode()
+    ).hexdigest()[:16]
+    output_path = REELS_DIR / f"{source_slug}-{safe_label}-assembly-{format_key}-{cache_hash}.mp4"
+    if not output_path.exists():
+        render_assembly_reel(source_input, output_path, segment_ranges, reel_format)
+    download_name = f"{source_slug}-{safe_label}-assembly-{reel_format['label'].replace(':', 'x')}.mp4"
+    return output_path, download_name
+
+
 def generated_reel_thumbnail(tag, video_name, time, format_name):
     game = get_game(tag)
     video_name = validate_registered_video_name(game, video_name, status_code=404)
@@ -3339,6 +3328,174 @@ def generated_reel_thumbnail(tag, video_name, time, format_name):
     if not output_path.exists():
         render_reel_thumbnail(source_input, output_path, time_seconds, reel_format)
     return output_path
+
+
+def render_assembly_reel(source_path, output_path, segments, reel_format):
+    try:
+        render_assembly_reel_fast(source_path, output_path, segments, reel_format, include_audio=True)
+        return
+    except ApiError as audio_error:
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            render_assembly_reel_fast(source_path, output_path, segments, reel_format, include_audio=False)
+            return
+        except ApiError as video_error:
+            try:
+                output_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            logging.warning("fast assembly render failed; falling back to segmented export: audio=%s video=%s", audio_error, video_error)
+
+    render_assembly_reel_segmented(source_path, output_path, segments, reel_format)
+
+
+def render_assembly_reel_fast(source_path, output_path, segments, reel_format, include_audio=True):
+    width = reel_format["width"]
+    height = reel_format["height"]
+    input_args = []
+    video_filters = []
+    audio_filters = []
+    concat_labels = []
+
+    for index, (start_seconds, end_seconds) in enumerate(segments):
+        duration = end_seconds - start_seconds
+        input_args.extend([
+            "-ss",
+            f"{start_seconds:.3f}",
+            "-t",
+            f"{duration:.3f}",
+            "-i",
+            str(source_path),
+        ])
+        video_filters.append(
+            f"[{index}:v:0]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},setsar=1,setpts=PTS-STARTPTS[v{index}]"
+        )
+        if include_audio:
+            audio_filters.append(f"[{index}:a:0]aresample=async=1:first_pts=0,asetpts=PTS-STARTPTS[a{index}]")
+            concat_labels.append(f"[v{index}][a{index}]")
+        else:
+            concat_labels.append(f"[v{index}]")
+
+    concat_filter = (
+        "".join(concat_labels)
+        + f"concat=n={len(segments)}:v=1:a={1 if include_audio else 0}"
+        + ("[v][a]" if include_audio else "[v]")
+    )
+    filter_complex = ";".join(video_filters + audio_filters + [concat_filter])
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        *input_args,
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v]",
+    ]
+    if include_audio:
+        command.extend(["-map", "[a]"])
+    command.extend([
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+    ])
+    if include_audio:
+        command.extend(["-c:a", "aac", "-b:a", "128k"])
+    command.extend(["-movflags", "+faststart", str(output_path)])
+
+    total_duration = sum(end - start for start, end in segments)
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=max(180, int(total_duration * 5) + len(segments) * 12 + 60),
+        check=False,
+    )
+    if result.returncode != 0:
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        detail = (result.stderr or result.stdout or "ffmpeg failed").strip()
+        mode = "audio/video" if include_audio else "video-only"
+        raise ApiError(f"assembly {mode} export failed: {detail}", 500)
+
+
+def render_assembly_reel_segmented(source_path, output_path, segments, reel_format):
+    temp_dir = output_path.parent / f".{output_path.stem}-parts"
+    try:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        segment_paths = []
+        for index, (start_seconds, end_seconds) in enumerate(segments):
+            segment_path = temp_dir / f"segment-{index:03d}.mp4"
+            render_reel_clip(source_path, segment_path, start_seconds, end_seconds - start_seconds, reel_format)
+            segment_paths.append(segment_path)
+
+        concat_list = temp_dir / "concat.txt"
+        concat_list.write_text(
+            "".join(f"file '{ffconcat_escape(path)}'\n" for path in segment_paths),
+            encoding="utf-8",
+        )
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_list),
+            "-fflags",
+            "+genpts",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=max(180, int(sum(end - start for start, end in segments) * 4) + 60),
+            check=False,
+        )
+        if result.returncode != 0:
+            try:
+                output_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            detail = (result.stderr or result.stdout or "ffmpeg failed").strip()
+            raise ApiError(f"assembly export failed: {detail}", 500)
+    finally:
+        try:
+            shutil.rmtree(temp_dir)
+        except OSError:
+            pass
 
 
 def render_reel_clip(source_path, output_path, start_seconds, duration, reel_format):
@@ -3439,6 +3596,36 @@ def parse_reel_seconds(value, field_name):
     if seconds < 0:
         raise ApiError(f"{field_name} must be zero or greater", 400)
     return seconds
+
+
+def parse_assembly_segments(value):
+    raw_value = (value or "").strip()
+    if not raw_value:
+        raise ApiError("segments are required", 400)
+
+    ranges = []
+    for index, raw_segment in enumerate(raw_value.split(";"), start=1):
+        segment = raw_segment.strip()
+        if not segment:
+            continue
+        if "-" not in segment:
+            raise ApiError(f"segment {index} must use start-end seconds", 400)
+        raw_start, raw_end = segment.split("-", 1)
+        start_seconds = parse_reel_seconds(raw_start.strip(), f"segment {index} start")
+        end_seconds = parse_reel_seconds(raw_end.strip(), f"segment {index} end")
+        if end_seconds <= start_seconds:
+            raise ApiError(f"segment {index} end must be greater than start", 400)
+        ranges.append((start_seconds, end_seconds))
+
+    if not ranges:
+        raise ApiError("segments are required", 400)
+    if len(ranges) > 80:
+        raise ApiError("assembly can include at most 80 segments", 400)
+    return ranges
+
+
+def ffconcat_escape(path):
+    return str(path).replace("'", "'\\''")
 
 
 def slugify_filename(value):

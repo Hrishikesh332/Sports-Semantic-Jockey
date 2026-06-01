@@ -433,8 +433,8 @@ Returns entity manifest with `_jockey_metadata` provenance.
 #### `POST /games/<tag>/clip-analysis`
 
 Selected-clip analysis for Discover. Uses Pegasus on a clip window only — not
-whole-video Jockey analysis. Metadata-first; auto-stores to workspace metadata
-on first generate.
+whole-video Jockey analysis. Generation is read-only; it does not write to
+workspace metadata until the user clicks Save.
 
 ```json
 {

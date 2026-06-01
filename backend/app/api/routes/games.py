@@ -11,6 +11,7 @@ from app.services.jockey_workspace_metadata import (
 from app.services.games import (
     THUMBNAILS_DIR,
     VIDEOS_DIR,
+    generated_assembly_reel,
     generated_reel_clip,
     generated_reel_thumbnail,
     create_entity_tracking_response,
@@ -154,6 +155,23 @@ def download_game_reel(tag, video_name):
         path,
         mimetype="video/mp4",
         as_attachment=request.args.get("download", "1") != "0",
+        download_name=download_name,
+    )
+
+
+@games_bp.get("/games/<tag>/assembly-reel/<video_name>")
+def show_game_assembly_reel(tag, video_name):
+    path, download_name = generated_assembly_reel(
+        tag=tag,
+        video_name=video_name,
+        segments=request.args.get("segments"),
+        format_name=request.args.get("format", "16x9"),
+        assembly_name=request.args.get("name"),
+    )
+    return send_file(
+        path,
+        mimetype="video/mp4",
+        as_attachment=request.args.get("download", "0") == "1",
         download_name=download_name,
     )
 

@@ -66,21 +66,5 @@ body {
 }
 
 .workspace-video-carousel-track {
-  animation: workspace-carousel-slide 34s linear infinite;
-  will-change: transform;
-}
-
-.workspace-video-carousel:hover .workspace-video-carousel-track,
-.workspace-video-carousel:focus-within .workspace-video-carousel-track {
-  animation-play-state: paused;
-}
-
-@keyframes workspace-carousel-slide {
-  0% {
-    transform: translateX(-50%);
-  }
-
-  100% {
-    transform: translateX(0);
-  }
+  scroll-snap-type: x proximity;
 }
