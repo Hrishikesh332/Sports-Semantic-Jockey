@@ -1,7 +1,12 @@
 <h1 align="center">Sports Jockey Intelligence</h1>
 
 <p align="center">
-  <img src="backend/src/illustration.png" alt="Sports Jockey Intelligence dashboard illustration" width="100%" />
+  <img
+    src="backend/src/illustration.png"
+    alt="Sports Jockey Intelligence dashboard illustration"
+    width="100%"
+    style="border: 1px solid #D3D1CF; border-radius: 48px;"
+  />
 </p>
 
 Search, analyze, and curate sports footage with TwelveLabs video understanding like a production workspace.
