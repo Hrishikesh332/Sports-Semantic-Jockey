@@ -278,6 +278,10 @@ type TwelveLabsStreamInfo = {
 const streamInfoCache = new Map<string, TwelveLabsStreamInfo>()
 const streamInfoRequests = new Map<string, Promise<TwelveLabsStreamInfo>>()
 const warmedManifestOrigins = new Set<string>()
+const HLS_DEFAULT_BUFFER_SECONDS = 36
+const HLS_SEGMENT_BUFFER_PADDING_SECONDS = 8
+const HLS_MAX_BUFFER_BYTES = 48 * 1000 * 1000
+const HLS_FATAL_RECOVERY_ATTEMPTS = 2
 
 type MarengoSearchResult = {
   id: string
@@ -815,9 +819,19 @@ function App() {
     () => (selectedGame ? workspaceVideoNamesFromIndex(selectedGame, workspaceIndexVideos) : []),
     [selectedGame, workspaceIndexVideos],
   )
-  const activeVideoName = workspaceVideoNames.includes(selectedSourceVideoName || '')
-    ? selectedSourceVideoName || undefined
-    : workspaceVideoNames[0]
+  const selectedSourceName = selectedSourceVideoName || ''
+  const activeVideoName = useMemo(() => {
+    if (selectedSearchMoment?.videoName) {
+      return selectedSearchMoment.videoName
+    }
+    if (workspaceVideoNames.includes(selectedSourceName)) {
+      return selectedSourceName
+    }
+    if (selectedGame?.source_videos?.includes(selectedSourceName)) {
+      return selectedSourceName
+    }
+    return workspaceVideoNames[0] || selectedSourceName
+  }, [selectedGame, selectedSearchMoment, selectedSourceName, workspaceVideoNames])
   const selectedReelsKey = selectedTag ? reelCacheKey(selectedTag, activeVideoName) : ''
   const reels = selectedReelsKey ? reelsByTag[selectedReelsKey] : undefined
   const scopedReels = useMemo(
@@ -828,7 +842,7 @@ function App() {
   const enhancedClip = enhancedCategory?.clips[selectedEnhancedClipIndex] || enhancedCategory?.clips[0]
   const standardClip = scopedReels?.standard_stats.clips[selectedStandardClipIndex] || scopedReels?.standard_stats.clips[0]
   const featuredClip = featuredSignalCategory === 'standard_stats' ? standardClip : enhancedClip
-  const activeSearchMoment = selectedSearchMoment && selectedSearchMoment.videoName === activeVideoName ? selectedSearchMoment : null
+  const activeSearchMoment = selectedSearchMoment
   const selectedClipAnalysisKey = selectedTag && activeSearchMoment ? selectedClipAnalysisCacheKey(selectedTag, activeSearchMoment) : ''
   const selectedClipAnalysis = selectedClipAnalysisKey ? clipAnalysesByKey[selectedClipAnalysisKey] : undefined
   const selectedClipAnalysisLoading = Boolean(selectedClipAnalysisKey && clipAnalysisLoadingKey === selectedClipAnalysisKey)
@@ -1283,6 +1297,10 @@ function App() {
     setView(nextView)
     window.history.pushState({}, '', pathForView(nextView))
   }
+  const goToDiscoverHome = useCallback(() => {
+    if (selectedTag) clearDiscoverSearch(selectedTag)
+    navigate('discover')
+  }, [clearDiscoverSearch, selectedTag])
   const scrollWorkspaceDetailsIntoView = () => {
     window.requestAnimationFrame(() => {
       document.getElementById('workspace-details')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -1323,7 +1341,10 @@ function App() {
     openVideoInWorkspace(item.videoName, item.openTarget, item.searchMoment)
   }
   const openVideoInWorkspace = (videoName: string, target?: DiscoverItem['openTarget'], searchMoment?: SearchMoment) => {
-    const dashboardVideoName = workspaceVideoNames.includes(videoName) ? videoName : workspaceVideoNames[0]
+    const resolvedVideoName = selectedGame
+      ? resolveWorkspaceVideoName(selectedGame, workspaceVideoNames, videoName, searchMoment)
+      : null
+    const dashboardVideoName = resolvedVideoName || (searchMoment ? videoName : workspaceVideoNames[0])
     if (!dashboardVideoName) {
       setSelectedSourceVideoName(null)
       setSelectedSearchMoment(null)
@@ -1335,10 +1356,16 @@ function App() {
       scrollWorkspaceDetailsIntoView()
       return
     }
-    const canUseRequestedVideo = dashboardVideoName === videoName
+    const canUseRequestedVideo = Boolean(searchMoment) || dashboardVideoName === videoName
     const shouldAnalyzeSelectedClip = canUseRequestedVideo && Boolean(searchMoment)
+    const selectedMoment = searchMoment
+      ? {
+          ...searchMoment,
+          videoName: dashboardVideoName,
+        }
+      : null
     setSelectedSourceVideoName(dashboardVideoName)
-    setSelectedSearchMoment(canUseRequestedVideo ? searchMoment || null : null)
+    setSelectedSearchMoment(canUseRequestedVideo ? selectedMoment : null)
     if (shouldAnalyzeSelectedClip) setAssemblyMode('twelvelabs_enhanced')
     if (target && canUseRequestedVideo) {
       suppressNextVideoReset.current = true
@@ -1570,11 +1597,12 @@ function App() {
             ].join(' ')}
           >
             <div className="flex items-center gap-4">
-              <span
-                className={[
-                  'logo-svg inline-flex h-9 w-[180px] shrink-0 items-center justify-center',
-                  'text-brand-charcoal',
-                ].join(' ')}
+              <button
+                type="button"
+                onClick={goToDiscoverHome}
+                className="logo-svg inline-flex h-9 w-[180px] shrink-0 items-center justify-center text-brand-charcoal transition-opacity hover:opacity-80"
+                aria-label="Back to Discover"
+                title="Back to Discover"
                 dangerouslySetInnerHTML={{ __html: logoFull }}
               />
               <div className="h-7 w-px bg-border" />
@@ -1702,7 +1730,7 @@ function App() {
             selectedCategory={selectedCategory}
             selectedEnhancedClipIndex={selectedEnhancedClipIndex}
             selectedStandardClipIndex={selectedStandardClipIndex}
-            selectedSearchMoment={activeSearchMoment}
+            selectedSearchMoment={selectedSearchMoment}
             selectedClipAnalysis={selectedClipAnalysis}
             selectedClipAnalysisLoading={selectedClipAnalysisLoading}
             selectedClipAnalysisError={selectedClipAnalysisError}
@@ -3880,10 +3908,51 @@ function WorkspaceVideoCarousel({
   loading: boolean
   onSelect: (videoName: string) => void
 }) {
+  const carouselRef = useRef<HTMLDivElement | null>(null)
+  const activeButtonRef = useRef<HTMLButtonElement | null>(null)
+  const [canScrollPrevious, setCanScrollPrevious] = useState(false)
+  const [canScrollNext, setCanScrollNext] = useState(false)
   const uniqueVideos = useMemo(
     () => (videos.length ? uniqueIndexVideos(videos) : videoNames.map(fallbackIndexVideo)),
     [videoNames, videos],
   )
+
+  const updateScrollState = useCallback(() => {
+    const carousel = carouselRef.current
+    if (!carousel) {
+      setCanScrollPrevious(false)
+      setCanScrollNext(false)
+      return
+    }
+    const maxScrollLeft = Math.max(0, carousel.scrollWidth - carousel.clientWidth)
+    setCanScrollPrevious(carousel.scrollLeft > 2)
+    setCanScrollNext(carousel.scrollLeft < maxScrollLeft - 2)
+  }, [])
+
+  const scrollCarousel = useCallback((direction: -1 | 1) => {
+    const carousel = carouselRef.current
+    if (!carousel) return
+    const distance = Math.max(240, carousel.clientWidth * 0.78)
+    carousel.scrollBy({ left: direction * distance, behavior: 'smooth' })
+    window.setTimeout(updateScrollState, 320)
+  }, [updateScrollState])
+
+  useEffect(() => {
+    updateScrollState()
+    const handleResize = () => updateScrollState()
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [uniqueVideos.length, updateScrollState])
+
+  useEffect(() => {
+    activeButtonRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+      inline: 'center',
+    })
+    window.setTimeout(updateScrollState, 260)
+  }, [activeVideoName, updateScrollState])
+
   if (loading && uniqueVideos.length === 0) {
     return (
       <section className="overflow-hidden rounded-md border border-border bg-card px-5 py-4 shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
@@ -3905,10 +3974,13 @@ function WorkspaceVideoCarousel({
     return (
       <button
         key={`${group}-${videoName}-${index}`}
+        ref={(node) => {
+          if (active) activeButtonRef.current = node
+        }}
         type="button"
         onClick={() => onSelect(videoName)}
         className={[
-          'group relative h-[118px] w-[210px] shrink-0 overflow-hidden rounded-md border bg-card text-left shadow-[0_8px_24px_rgba(29,28,27,0.08)]',
+          'group relative h-[118px] w-[210px] shrink-0 snap-start overflow-hidden rounded-md border bg-card text-left shadow-[0_8px_24px_rgba(29,28,27,0.08)]',
           active ? 'border-accent ring-2 ring-accent/35' : 'border-border-light hover:border-accent/80',
         ].join(' ')}
         aria-label={`Open ${videoName}`}
@@ -3945,12 +4017,40 @@ function WorkspaceVideoCarousel({
   }
 
   return (
-    <section className="overflow-hidden rounded-md border border-border bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="workspace-video-carousel relative overflow-x-auto overflow-y-hidden py-4">
+    <section className="relative overflow-hidden rounded-md border border-border bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+      <div
+        ref={carouselRef}
+        onScroll={updateScrollState}
+        className="workspace-video-carousel relative snap-x snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth py-4"
+      >
         <div className="workspace-video-carousel-track flex w-max gap-3 px-5">
           {uniqueVideos.map((video, index) => renderVideoButton(video, index, 'source'))}
         </div>
       </div>
+      {(canScrollPrevious || canScrollNext) && (
+        <div className="pointer-events-none absolute inset-y-0 left-0 right-0 hidden items-center justify-between px-2 sm:flex">
+          <button
+            type="button"
+            onClick={() => scrollCarousel(-1)}
+            disabled={!canScrollPrevious}
+            className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface/95 text-text-secondary shadow-[0_8px_20px_rgba(29,28,27,0.14)] backdrop-blur-sm transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal disabled:pointer-events-none disabled:opacity-0"
+            aria-label="Previous video"
+            title="Previous video"
+          >
+            <StrandIcon name="arrow-box-left" className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollCarousel(1)}
+            disabled={!canScrollNext}
+            className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface/95 text-text-secondary shadow-[0_8px_20px_rgba(29,28,27,0.14)] backdrop-blur-sm transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal disabled:pointer-events-none disabled:opacity-0"
+            aria-label="Next video"
+            title="Next video"
+          >
+            <StrandIcon name="arrow-box-right" className="h-4 w-4" />
+          </button>
+        </div>
+      )}
     </section>
   )
 }
@@ -4606,11 +4706,21 @@ function DiscoverPage({
     : 'Search source footage for visual and audio moments that are not captured in the event feed.'
 
   useEffect(() => {
-    const firstSearchItem = normalizedQuery ? items.find((item) => item.resultType === 'search') : null
-    const nextPreviewId = firstSearchItem?.id || null
-    if (nextPreviewId !== activePreviewId) {
-      onSessionChange({ activePreviewId: nextPreviewId })
+    if (!normalizedQuery) {
+      if (activePreviewId) {
+        onSessionChange({ activePreviewId: null })
+      }
+      return
     }
+    if (!activePreviewId) {
+      return
+    }
+    const itemIds = new Set(items.map((item) => item.id))
+    if (itemIds.has(activePreviewId)) {
+      return
+    }
+    const firstSearchItem = items.find((item) => item.resultType === 'search')
+    onSessionChange({ activePreviewId: firstSearchItem?.id || null })
   }, [activePreviewId, items, normalizedQuery, onSessionChange])
 
   const submitSearch = useCallback(() => {
@@ -4698,7 +4808,13 @@ function DiscoverPage({
       })
         .then((body) => {
           if (active && requestId === searchRequestRef.current) {
-            onSessionChange({ searchResponse: body, searchError: '' })
+            const searchItems = searchResultItems(game, body)
+            const firstPreview = searchItems.find((item) => item.resultType === 'search')
+            onSessionChange({
+              searchResponse: body,
+              searchError: '',
+              activePreviewId: firstPreview?.id || null,
+            })
           }
         })
         .catch((fetchError: Error) => {
@@ -4976,7 +5092,7 @@ function DiscoverResultCard({
         {canPreviewSegment && isPreviewActive ? (
           <div className="aspect-video">
             <TwelveLabsVideoPlayer
-              key={`${item.id}-${item.startTime || 'start'}-${item.endTime || 'end'}`}
+              key={item.media}
               streamInfoUrl={item.media}
               startSeconds={previewStartSeconds}
               endSeconds={previewEndSeconds}
@@ -5213,6 +5329,7 @@ function TwelveLabsVideoPlayer({
   const [durationSeconds, setDurationSeconds] = useState(0)
   const [currentSeconds, setCurrentSeconds] = useState(startSeconds)
   const [playing, setPlaying] = useState(false)
+  const hasSegmentRange = Boolean(segmentRange)
 
   useEffect(() => {
     onStatusChange?.(status)
@@ -5234,11 +5351,34 @@ function TwelveLabsVideoPlayer({
     let warmingFirstFrame = false
     let mutedBeforeWarm = muted
     let readinessPoll: number | null = null
+    let fatalRecoveryAttempts = 0
     const controller = new AbortController()
     const startLoadAt = Math.max(0, startSeconds)
-    const segmentBufferLength = segmentRange
-      ? clamp(((endSeconds && endSeconds > startLoadAt ? endSeconds : startLoadAt + 12) - startLoadAt) + 8, 12, 36)
-      : 36
+    const segmentEnd = endSeconds && endSeconds > startLoadAt ? endSeconds : startLoadAt + 12
+    const segmentBufferLength = hasSegmentRange
+      ? clamp(segmentEnd - startLoadAt + HLS_SEGMENT_BUFFER_PADDING_SECONDS, 12, HLS_DEFAULT_BUFFER_SECONDS)
+      : HLS_DEFAULT_BUFFER_SECONDS
+    const resetVideoElement = () => {
+      video.pause()
+      video.removeAttribute('src')
+      video.srcObject = null
+      video.load()
+    }
+    const stopHls = () => {
+      if (!hls) return
+      try {
+        hls.stopLoad()
+      } catch {
+        // hls.js can throw if the instance is already detached during a fast switch.
+      }
+      try {
+        hls.detachMedia()
+      } catch {
+        // Detach is best-effort cleanup before destroy.
+      }
+      hls.destroy()
+      hls = null
+    }
 
     setStatus('loading')
     setMessage(manifestUrl ? 'Loading TwelveLabs HLS stream...' : 'Resolving TwelveLabs stream...')
@@ -5246,9 +5386,7 @@ function TwelveLabsVideoPlayer({
     setCurrentSeconds(startSeconds)
     setPlaying(false)
     onDuration?.(0)
-    video.pause()
-    video.removeAttribute('src')
-    video.load()
+    resetVideoElement()
 
     const streamPromise = manifestUrl
       ? Promise.resolve(manifestUrl)
@@ -5312,8 +5450,8 @@ function TwelveLabsVideoPlayer({
           const duration = Number.isFinite(video.duration) ? video.duration : 0
           setDurationSeconds(duration)
           onDuration?.(duration)
-          video.currentTime = clamp(startLoadAt, 0, Math.max(duration, startLoadAt))
-          setCurrentSeconds(video.currentTime)
+          const seekedSeconds = seekVideoTo(video, startLoadAt, duration)
+          setCurrentSeconds(seekedSeconds)
           setMessage('Opening TwelveLabs stream...')
           if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) markReady()
         }
@@ -5335,12 +5473,10 @@ function TwelveLabsVideoPlayer({
           if (disposed) return
           rangeCompleted = false
           if (endSeconds && endSeconds > startSeconds && video.currentTime >= endSeconds - 0.15) {
-            video.currentTime = startSeconds
-            setCurrentSeconds(startSeconds)
+            setCurrentSeconds(seekVideoTo(video, startSeconds))
           }
           if (video.currentTime < startSeconds - 0.15) {
-            video.currentTime = startSeconds
-            setCurrentSeconds(startSeconds)
+            setCurrentSeconds(seekVideoTo(video, startSeconds))
           }
           setPlaying(true)
           onPlayingChange?.(true)
@@ -5374,24 +5510,43 @@ function TwelveLabsVideoPlayer({
           hls = new Hls({
             autoStartLoad: false,
             startPosition: startLoadAt,
+            startLevel: -1,
+            enableWorker: true,
+            capLevelToPlayerSize: true,
             maxBufferLength: segmentBufferLength,
             maxMaxBufferLength: Math.max(segmentBufferLength, 45),
-            backBufferLength: 0,
+            maxBufferSize: HLS_MAX_BUFFER_BYTES,
+            backBufferLength: hasSegmentRange ? 0 : 12,
             lowLatencyMode: true,
           })
           hls.on(Hls.Events.ERROR, (_event, data) => {
-            if (data.fatal && !disposed) {
-              setStatus('error')
-              setMessage('TwelveLabs HLS stream could not be played in this browser')
+            if (!data.fatal || disposed) return
+            if (fatalRecoveryAttempts < HLS_FATAL_RECOVERY_ATTEMPTS && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              fatalRecoveryAttempts += 1
+              setMessage('Recovering TwelveLabs stream...')
+              hls?.startLoad(Math.max(video.currentTime || startLoadAt, startLoadAt))
+              return
             }
+            if (fatalRecoveryAttempts < HLS_FATAL_RECOVERY_ATTEMPTS && data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              fatalRecoveryAttempts += 1
+              setMessage('Recovering TwelveLabs stream...')
+              hls?.recoverMediaError()
+              return
+            }
+            setStatus('error')
+            setMessage('TwelveLabs HLS stream could not be played in this browser')
+            stopHls()
+          })
+          hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+            if (!disposed) hls?.loadSource(hlsManifestUrl)
           })
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
             if (disposed) return
+            fatalRecoveryAttempts = 0
             hls?.startLoad(startLoadAt)
             warmFirstFrame()
             playWhenReady()
           })
-          hls.loadSource(hlsManifestUrl)
           hls.attachMedia(video)
           return
         }
@@ -5416,12 +5571,10 @@ function TwelveLabsVideoPlayer({
       if (handleTimeUpdate) video.removeEventListener('timeupdate', handleTimeUpdate)
       if (handlePlay) video.removeEventListener('play', handlePlay)
       if (handlePause) video.removeEventListener('pause', handlePause)
-      if (hls) hls.destroy()
-      video.pause()
-      video.removeAttribute('src')
-      video.load()
+      stopHls()
+      resetVideoElement()
     }
-  }, [manifestUrl, streamInfoUrl, startSeconds, endSeconds, onDuration, onPlayingChange, onRangeComplete])
+  }, [hasSegmentRange, manifestUrl, streamInfoUrl, startSeconds, endSeconds, onDuration, onPlayingChange, onRangeComplete, variant])
 
   useEffect(() => {
     const video = videoRef.current
@@ -5429,12 +5582,10 @@ function TwelveLabsVideoPlayer({
     if (autoPlay) {
       if (status === 'ready') {
         if (endSeconds && endSeconds > startSeconds && video.currentTime >= endSeconds - 0.15) {
-          video.currentTime = startSeconds
-          setCurrentSeconds(startSeconds)
+          setCurrentSeconds(seekVideoTo(video, startSeconds))
         }
         if (video.currentTime < startSeconds - 0.15) {
-          video.currentTime = startSeconds
-          setCurrentSeconds(startSeconds)
+          setCurrentSeconds(seekVideoTo(video, startSeconds))
         }
       }
       video.play().catch(() => undefined)
@@ -5448,12 +5599,10 @@ function TwelveLabsVideoPlayer({
     if (!video || status !== 'ready') return
     if (video.paused) {
       if (endSeconds && endSeconds > startSeconds && video.currentTime >= endSeconds - 0.15) {
-        video.currentTime = startSeconds
-        setCurrentSeconds(startSeconds)
+        setCurrentSeconds(seekVideoTo(video, startSeconds))
       }
       if (video.currentTime < startSeconds - 0.15) {
-        video.currentTime = startSeconds
-        setCurrentSeconds(startSeconds)
+        setCurrentSeconds(seekVideoTo(video, startSeconds))
       }
       video.play().catch(() => {
         setStatus('error')
@@ -5473,8 +5622,7 @@ function TwelveLabsVideoPlayer({
     const seekEnd = segmentRange
       ? Math.max(segmentRange.endSeconds ?? segmentRange.startSeconds + 1, segmentRange.startSeconds + 1)
       : Math.max(durationSeconds, endSeconds || startSeconds + 1, 1)
-    video.currentTime = seekStart + ratio * Math.max(1, seekEnd - seekStart)
-    setCurrentSeconds(video.currentTime)
+    setCurrentSeconds(seekVideoTo(video, seekStart + ratio * Math.max(1, seekEnd - seekStart), seekEnd))
   }, [durationSeconds, endSeconds, segmentRange, startSeconds, status])
 
   return (
@@ -5485,7 +5633,7 @@ function TwelveLabsVideoPlayer({
         controls={!segmentRange}
         muted={muted}
         playsInline
-        preload="auto"
+        preload={hasSegmentRange || autoPlay ? 'auto' : 'metadata'}
         poster={posterUrl}
       />
       {segmentRange && showSegmentControls && (
@@ -5882,7 +6030,7 @@ function SelectedClipAnalysisSection({
     : []
   const clipStartSeconds = searchMoment.startTime ? secondsFromTime(searchMoment.startTime) : 0
   const clipEndSeconds = searchMoment.endTime ? secondsFromTime(searchMoment.endTime) : undefined
-  const clipStreamInfoUrl = game ? streamInfoForVideoName(game, searchMoment.videoName) : null
+  const clipStreamInfoUrl = game ? streamInfoForSearchMoment(game, searchMoment) : null
   const clipSegmentRange: SegmentRange | undefined = searchMoment.startTime
     ? {
         startSeconds: clipStartSeconds,
@@ -5935,7 +6083,7 @@ function SelectedClipAnalysisSection({
           <div className="aspect-video bg-white">
             {clipStreamInfoUrl ? (
               <TwelveLabsVideoPlayer
-                key={`${searchMoment.videoName}-${searchMoment.startTime || 'start'}-${searchMoment.endTime || 'end'}`}
+                key={clipStreamInfoUrl || `${searchMoment.videoName}-${searchMoment.startTime || 'start'}-${searchMoment.endTime || 'end'}`}
                 streamInfoUrl={clipStreamInfoUrl}
                 startSeconds={clipStartSeconds}
                 endSeconds={clipEndSeconds}
@@ -7578,13 +7726,14 @@ function EntityMomentPreviewModal({
             <div className="aspect-video">
               {streamInfoUrl ? (
                 <TwelveLabsVideoPlayer
-                  key={`${videoName}-${moment.range.startSeconds}-${moment.range.endSeconds}`}
+                  key={`${streamInfoUrl}-${moment.range.startSeconds}-${moment.range.endSeconds}`}
                   streamInfoUrl={streamInfoUrl}
                   startSeconds={moment.range.startSeconds}
                   endSeconds={moment.range.endSeconds}
                   posterUrl={posterUrl}
                   segmentRange={segmentRange}
                   variant="minimal"
+                  statusOverlayStyle="loader"
                 />
               ) : (
                 <div className="flex h-full items-center justify-center px-4 text-center text-sm font-semibold text-text-secondary">
@@ -8737,6 +8886,22 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
 
+function seekVideoTo(video: HTMLVideoElement, seconds: number, fallbackDuration?: number) {
+  const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : fallbackDuration
+  const maxSeconds = duration && duration > 0 ? Math.max(duration, seconds) : Math.max(seconds, 0)
+  const targetSeconds = clamp(seconds, 0, maxSeconds)
+  if (typeof video.fastSeek === 'function') {
+    try {
+      video.fastSeek(targetSeconds)
+      return targetSeconds
+    } catch {
+      // Some HLS-backed media elements expose fastSeek but reject until enough data is buffered.
+    }
+  }
+  video.currentTime = targetSeconds
+  return targetSeconds
+}
+
 function isSelectedSignal(
   laneKey: MapCategoryKey,
   index: number,
@@ -8755,6 +8920,20 @@ function streamInfoForClip(game: Game, clip: Clip) {
 
 function streamInfoForVideoName(game: Game, videoName: string) {
   return apiUrl(`/games/${encodeURIComponent(game.tag)}/stream/${encodeURIComponent(videoName)}`)
+}
+
+function streamInfoForSearchMoment(
+  game: Game,
+  searchMoment: Pick<SearchMoment, 'videoName' | 'videoReference' | 'sourceAssetId'>,
+) {
+  const params = new URLSearchParams()
+  const reference = cleanString(searchMoment.sourceAssetId) || cleanString(searchMoment.videoReference)
+  if (reference) {
+    params.set('reference', reference)
+  }
+  const query = params.toString()
+  const base = `/games/${encodeURIComponent(game.tag)}/stream/${encodeURIComponent(searchMoment.videoName)}`
+  return apiUrl(query ? `${base}?${query}` : base)
 }
 
 function thumbnailForVideoName(game: Game, videoName: string) {
@@ -8825,6 +9004,54 @@ function orderIndexVideosForMetadataFirst(videos: IndexVideo[]) {
 
 function workspaceVideoNamesFromIndex(game: Game, videos: IndexVideo[]) {
   return uniqueVideoNames(uniqueIndexVideos(videos).map((video) => indexVideoWorkspaceName(game, video)))
+}
+
+function resolveWorkspaceVideoName(
+  game: Game,
+  workspaceVideoNames: string[],
+  requestedVideoName: string,
+  searchMoment?: SearchMoment,
+) {
+  const candidates = [
+    requestedVideoName,
+    searchMoment?.videoName,
+    searchMoment?.videoReference,
+    searchMoment?.sourceAssetId,
+  ]
+
+  for (const candidate of candidates) {
+    const directMatch = matchingWorkspaceVideoName(game, workspaceVideoNames, candidate)
+    if (directMatch) return directMatch
+
+    const mappedName = candidate ? videoNameForReference(game, candidate) : undefined
+    const mappedMatch = matchingWorkspaceVideoName(game, workspaceVideoNames, mappedName)
+    if (mappedMatch) return mappedMatch
+    if (mappedName && game.source_videos?.includes(mappedName)) return mappedName
+  }
+
+  return null
+}
+
+function matchingWorkspaceVideoName(game: Game, workspaceVideoNames: string[], candidate?: string | null) {
+  const cleanCandidate = cleanString(candidate)
+  if (!cleanCandidate) return null
+  if (workspaceVideoNames.includes(cleanCandidate)) return cleanCandidate
+  if (game.source_videos?.includes(cleanCandidate)) return cleanCandidate
+
+  const normalizedCandidate = normalizeSearchText(cleanCandidate)
+  const candidateStem = normalizeSearchText(videoNameStem(cleanCandidate))
+  return (
+    workspaceVideoNames.find((videoName) => {
+      const normalizedVideoName = normalizeSearchText(videoName)
+      const videoStem = normalizeSearchText(videoNameStem(videoName))
+      return normalizedVideoName === normalizedCandidate || videoStem === candidateStem
+    })
+    || null
+  )
+}
+
+function videoNameStem(value: string) {
+  return value.split('/').pop()?.replace(/\.[^.]+$/, '') || value
 }
 
 function indexVideoRequestPayload(game: Game | null, videos: IndexVideo[], videoName: string) {
@@ -8971,7 +9198,10 @@ function discoverItemFromSearchResult(
   result: MarengoSearchResult,
   index: number,
 ): DiscoverItem | null {
-  const videoName = result.video_name || videoNameForReference(game, result.video_reference)
+  const videoName =
+    videoNameForReference(game, result.video_reference)
+    || (result.source_asset_id ? videoNameForReference(game, result.source_asset_id) : undefined)
+    || cleanString(result.video_name)
   if (!videoName) return null
   const startTime = result.start_time || result.timestamp
   const endTime = result.end_time
@@ -8993,7 +9223,7 @@ function discoverItemFromSearchResult(
     label: 'Marengo Match',
     title,
     subtitle,
-    media: streamInfoForVideoName(game, videoName),
+    media: streamInfoForSearchMoment(game, searchMoment),
     poster: result.thumbnail_url || thumbnailForVideoName(game, videoName),
     videoName,
     knowledgeStoreId: game.knowledge_store_id,
@@ -9230,11 +9460,27 @@ async function fetchTwelveLabsStreamInfo(url: string, signal?: AbortSignal): Pro
     streamInfoRequests.set(url, request)
   }
 
-  const stream = await request
-  if (signal?.aborted) {
-    throw new DOMException('Request aborted', 'AbortError')
-  }
-  return stream
+  return abortablePromise(request, signal)
+}
+
+function abortablePromise<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(new DOMException('Request aborted', 'AbortError'))
+
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(new DOMException('Request aborted', 'AbortError'))
+    signal.addEventListener('abort', abort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', abort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', abort)
+        reject(error)
+      },
+    )
+  })
 }
 
 export default App

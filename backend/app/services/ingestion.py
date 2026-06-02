@@ -6,7 +6,9 @@ from pathlib import Path
 
 from app.core.errors import ApiError
 from app.domain.highlights import SPORTS_HIGHLIGHT_INGESTION_SCHEMA
-from app.integrations.twelvelabs import request_json as twelvelabs_request_json
+from app.integrations.twelvelabs import add_knowledge_store_item as twelvelabs_add_knowledge_store_item
+from app.integrations.twelvelabs import create_knowledge_store as twelvelabs_create_knowledge_store
+from app.integrations.twelvelabs import get_knowledge_store_item as twelvelabs_get_knowledge_store_item
 from app.integrations.twelvelabs import upload_asset_path
 from app.services.games import public_game, register_game
 
@@ -208,19 +210,15 @@ def ensure_video_links(source_videos, progress):
 def create_knowledge_store(spec):
     metadata = {"game_tag": spec["tag"], "source": "sports-jockey"}
     metadata.update({str(key): str(value) for key, value in spec["metadata"].items()})
-    return twelvelabs_request_json(
-        "post",
-        "/knowledge-stores",
-        {
-            "name": spec["knowledge_store_name"],
-            "ingestion_config": {
-                "enrichment_config": {
-                    "type": "json_schema",
-                    "json_schema": SPORTS_HIGHLIGHT_INGESTION_SCHEMA,
-                }
-            },
-            "metadata": metadata,
+    return twelvelabs_create_knowledge_store(
+        name=spec["knowledge_store_name"],
+        ingestion_config={
+            "enrichment_config": {
+                "type": "json_schema",
+                "json_schema": SPORTS_HIGHLIGHT_INGESTION_SCHEMA,
+            }
         },
+        metadata=metadata,
     )
 
 
@@ -271,11 +269,7 @@ def add_index_items(store_id, index_videos, state, progress):
         if state["item_ids"].get(video.name):
             progress(f"item already added for {video.name}: {state['item_ids'][video.name]}")
             continue
-        item = twelvelabs_request_json(
-            "post",
-            f"/knowledge-stores/{store_id}/items",
-            {"asset_id": state["asset_ids"][video.name]},
-        )
+        item = twelvelabs_add_knowledge_store_item(store_id, state["asset_ids"][video.name])
         state["item_ids"][video.name] = item["_id"]
         state.setdefault("items", {})[video.name] = item
         state["item_statuses"][video.name] = item.get("status", "unknown")
@@ -289,7 +283,7 @@ def poll_items_until_ready(store_id, state, poll_attempts, poll_interval_seconds
             current_status = state["item_statuses"].get(video_name)
             if current_status == "ready":
                 continue
-            item = twelvelabs_request_json("get", f"/knowledge-stores/{store_id}/items/{item_id}")
+            item = twelvelabs_get_knowledge_store_item(store_id, item_id)
             status = item.get("status", "unknown")
             state["item_statuses"][video_name] = status
             state.setdefault("item_status_bodies", {})[video_name] = item

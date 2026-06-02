@@ -10,6 +10,11 @@ def json_body():
     return body
 
 
+def optional_json_body():
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else {}
+
+
 def required_string(body, key):
     value = body.get(key)
     if not isinstance(value, str) or not value.strip():

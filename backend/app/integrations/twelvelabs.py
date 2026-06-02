@@ -1,3 +1,4 @@
+import json
 import mimetypes
 import os
 import time
@@ -11,15 +12,17 @@ from app.core.errors import ApiError
 
 
 UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
-DIRECT_UPLOAD_LIMIT_BYTES = int(os.environ.get("TWELVELABS_DIRECT_UPLOAD_LIMIT_BYTES", str(200 * 1024 * 1024)))
-CHUNK_UPLOAD_TIMEOUT_SECONDS = int(os.environ.get("TWELVELABS_CHUNK_UPLOAD_TIMEOUT_SECONDS", "180"))
-MULTIPART_STATUS_ATTEMPTS = int(os.environ.get("TWELVELABS_MULTIPART_STATUS_ATTEMPTS", "60"))
-MULTIPART_STATUS_INTERVAL_SECONDS = int(os.environ.get("TWELVELABS_MULTIPART_STATUS_INTERVAL_SECONDS", "10"))
-PRESIGNED_URL_BATCH_SIZE = int(os.environ.get("TWELVELABS_PRESIGNED_URL_BATCH_SIZE", "50"))
-CHUNK_UPLOAD_RETRY_ATTEMPTS = max(1, int(os.environ.get("TWELVELABS_CHUNK_UPLOAD_RETRY_ATTEMPTS", "4")))
-CHUNK_UPLOAD_RETRY_INTERVAL_SECONDS = float(os.environ.get("TWELVELABS_CHUNK_UPLOAD_RETRY_INTERVAL_SECONDS", "2"))
-ANALYZE_RETRY_ATTEMPTS = max(1, int(os.environ.get("TWELVELABS_ANALYZE_RETRY_ATTEMPTS", "2")))
-ANALYZE_RETRY_INTERVAL_SECONDS = float(os.environ.get("TWELVELABS_ANALYZE_RETRY_INTERVAL_SECONDS", "5"))
+DIRECT_UPLOAD_LIMIT_BYTES = 200 * 1024 * 1024
+CHUNK_UPLOAD_TIMEOUT_SECONDS = 180
+MULTIPART_STATUS_ATTEMPTS = 60
+MULTIPART_STATUS_INTERVAL_SECONDS = 10
+PRESIGNED_URL_BATCH_SIZE = 50
+CHUNK_UPLOAD_RETRY_ATTEMPTS = 4
+CHUNK_UPLOAD_RETRY_INTERVAL_SECONDS = 2
+ANALYZE_RETRY_ATTEMPTS = 2
+ANALYZE_RETRY_INTERVAL_SECONDS = 5
+INDEXED_ASSET_LIST_MAX_PAGES = 10
+PEGASUS_SOURCE_VIDEO_METADATA_FIELD = "sports_jockey_pegasus_source_video_v2"
 
 
 def json_headers():
@@ -80,6 +83,414 @@ def request_form(method, path, fields):
         raise ApiError(str(exc), 502) from exc
 
     return parse_response(response)
+
+
+def create_response(payload):
+    return request_json("post", "/responses", payload)
+
+
+def analyze_video(payload):
+    return request_json("post", "/analyze", payload)
+
+
+def search_index(fields):
+    return request_form("post", "/search", fields)
+
+
+def create_knowledge_store(name, ingestion_config=None, metadata=None):
+    payload = {"name": name}
+    if ingestion_config is not None:
+        payload["ingestion_config"] = ingestion_config
+    if metadata is not None:
+        payload["metadata"] = metadata
+    return request_json("post", "/knowledge-stores", payload)
+
+
+def add_knowledge_store_item(knowledge_store_id, asset_id):
+    return request_json(
+        "post",
+        f"/knowledge-stores/{knowledge_store_id}/items",
+        {"asset_id": asset_id},
+    )
+
+
+def get_knowledge_store_item(knowledge_store_id, item_id):
+    return request_json("get", f"/knowledge-stores/{knowledge_store_id}/items/{item_id}")
+
+
+def list_knowledge_store_items(knowledge_store_id):
+    try:
+        payload = request_json("get", f"/knowledge-stores/{knowledge_store_id}/items")
+    except ApiError:
+        return []
+    items = payload.get("data") if isinstance(payload, dict) else payload
+    return items if isinstance(items, list) else []
+
+
+def delete_knowledge_store_item(knowledge_store_id, item_id):
+    knowledge_store_id = clean_optional_string(knowledge_store_id)
+    item_id = clean_optional_string(item_id)
+    if not knowledge_store_id or not item_id:
+        return
+    if not item_id.startswith("ksi_"):
+        item_id = f"ksi_{item_id}"
+    try:
+        request_json("delete", f"/knowledge-stores/{knowledge_store_id}/items/{item_id}")
+    except ApiError as exc:
+        if exc.status_code != 404:
+            print(f"[cleanup] failed to delete knowledge store item {item_id}: {exc}", flush=True)
+
+
+def get_asset(asset_id):
+    return request_json("get", f"/assets/{asset_id}")
+
+
+def asset_exists(asset_id):
+    asset_id = clean_optional_string(asset_id)
+    if not asset_id:
+        return False
+    try:
+        get_asset(asset_id)
+    except ApiError:
+        return False
+    return True
+
+
+def asset_is_playable(asset_id):
+    asset_id = clean_optional_string(asset_id)
+    if not asset_id:
+        return False
+    try:
+        asset = get_asset(asset_id)
+    except ApiError:
+        return False
+    hls = asset.get("hls") or {}
+    return bool(hls.get("manifest_url") and hls.get("status") == "ready")
+
+
+def asset_duration_seconds(asset):
+    if not isinstance(asset, dict):
+        return None
+    for key in ("duration", "duration_seconds", "video_duration", "video_duration_seconds"):
+        duration = float_or_none(asset.get(key))
+        if duration and duration > 0:
+            return duration
+    metadata = asset.get("metadata")
+    if isinstance(metadata, dict):
+        for key in ("duration", "duration_seconds", "video_duration", "video_duration_seconds"):
+            duration = float_or_none(metadata.get(key))
+            if duration and duration > 0:
+                return duration
+    return None
+
+
+def list_asset_indexed_assets(asset_id):
+    payload = request_json("get", f"/assets/{asset_id}/indexed-assets")
+    data = payload.get("data") if isinstance(payload, dict) else None
+    return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+
+def add_indexed_asset(index_id, asset_id, enable_video_stream=True):
+    return request_json(
+        "post",
+        f"/indexes/{index_id}/indexed-assets",
+        {"asset_id": asset_id, "enable_video_stream": enable_video_stream},
+    )
+
+
+def get_indexed_asset(index_id, indexed_asset_id):
+    return request_json("get", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
+
+
+def update_indexed_asset_user_metadata(index_id, indexed_asset_id, user_metadata):
+    return request_json(
+        "patch",
+        f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}",
+        {"user_metadata": user_metadata},
+    )
+
+
+def delete_indexed_asset(index_id, indexed_asset_id):
+    index_id = clean_optional_string(index_id)
+    indexed_asset_id = clean_optional_string(indexed_asset_id)
+    if not index_id or not indexed_asset_id:
+        return
+    try:
+        request_json("delete", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
+    except ApiError as exc:
+        if exc.status_code != 404:
+            print(f"[cleanup] failed to delete indexed asset {indexed_asset_id}: {exc}", flush=True)
+
+
+def list_indexed_assets(index_id):
+    indexed_assets = []
+    page = 1
+    while page <= INDEXED_ASSET_LIST_MAX_PAGES:
+        path = f"/indexes/{index_id}/indexed-assets"
+        if page > 1:
+            path = f"{path}?page={page}"
+        body = request_json("get", path)
+        data = body.get("data")
+        if isinstance(data, list):
+            indexed_assets.extend(item for item in data if isinstance(item, dict))
+        page_info = body.get("page_info") if isinstance(body.get("page_info"), dict) else {}
+        total_pages = int(page_info.get("total_page") or page)
+        if page >= total_pages:
+            break
+        page += 1
+    return indexed_assets
+
+
+def indexed_asset_with_user_metadata(index_id, indexed_asset):
+    indexed_asset_id = response_id(indexed_asset)
+    if not indexed_asset_id or indexed_asset_user_metadata(indexed_asset):
+        return indexed_asset
+    try:
+        hydrated = get_indexed_asset(index_id, indexed_asset_id)
+    except ApiError:
+        return indexed_asset
+    return hydrated if isinstance(hydrated, dict) else indexed_asset
+
+
+def indexed_asset_for_reference(index_id, reference):
+    reference = clean_optional_string(reference)
+    if not reference:
+        return None
+
+    if "/" not in reference and "." not in reference:
+        try:
+            indexed_asset = get_indexed_asset(index_id, reference)
+            if isinstance(indexed_asset, dict) and response_id(indexed_asset):
+                return indexed_asset_with_user_metadata(index_id, indexed_asset)
+        except ApiError:
+            pass
+
+    reference_values = indexed_asset_reference_values_for_text(reference)
+    for indexed_asset in list_indexed_assets(index_id):
+        hydrated = indexed_asset_with_user_metadata(index_id, indexed_asset)
+        if indexed_asset_matches_reference(hydrated, reference_values):
+            return hydrated
+    return None
+
+
+def indexed_asset_matches_reference(indexed_asset, reference_values):
+    for value in indexed_asset_reference_values(indexed_asset):
+        if value in reference_values:
+            return True
+    return False
+
+
+def indexed_asset_reference_values(indexed_asset):
+    values = []
+    metadata = indexed_asset_user_metadata(indexed_asset)
+    for value in (
+        response_id(indexed_asset),
+        indexed_asset_asset_id(indexed_asset),
+        indexed_asset_filename(indexed_asset),
+        indexed_asset_display_name(indexed_asset),
+        clean_optional_string(metadata.get(PEGASUS_SOURCE_VIDEO_METADATA_FIELD)),
+    ):
+        values.extend(indexed_asset_reference_values_for_text(value))
+    return set(values)
+
+
+def indexed_asset_reference_values_for_text(value):
+    value = clean_optional_string(value)
+    if not value:
+        return set()
+    basename = Path(value).name
+    stem = Path(basename).stem
+    return {
+        value,
+        value.lower(),
+        basename,
+        basename.lower(),
+        stem,
+        stem.lower(),
+    }
+
+
+def indexed_asset_user_metadata(indexed_asset):
+    if not isinstance(indexed_asset, dict):
+        return {}
+    for key in ("user_metadata", "userMetadata"):
+        metadata = indexed_asset.get(key)
+        if isinstance(metadata, dict):
+            return metadata
+    metadata = indexed_asset.get("metadata")
+    if isinstance(metadata, dict):
+        for key in ("user_metadata", "userMetadata"):
+            nested = metadata.get(key)
+            if isinstance(nested, dict):
+                return nested
+    return {}
+
+
+def indexed_asset_asset_id(indexed_asset):
+    if not isinstance(indexed_asset, dict):
+        return None
+    asset_id = clean_optional_string(indexed_asset.get("asset_id")) or clean_optional_string(indexed_asset.get("assetId"))
+    if asset_id:
+        return asset_id
+    asset = indexed_asset.get("asset")
+    if isinstance(asset, dict):
+        return response_id(asset) or clean_optional_string(asset.get("asset_id")) or clean_optional_string(asset.get("assetId"))
+    return None
+
+
+def indexed_asset_display_name(indexed_asset):
+    if not isinstance(indexed_asset, dict):
+        return None
+    system_metadata = indexed_asset.get("system_metadata")
+    if isinstance(system_metadata, dict):
+        for key in ("name", "title", "filename"):
+            value = clean_optional_string(system_metadata.get(key))
+            if value:
+                return value
+    for key in ("name", "filename", "title"):
+        value = clean_optional_string(indexed_asset.get(key))
+        if value:
+            return value
+    asset = indexed_asset.get("asset")
+    if isinstance(asset, dict):
+        for key in ("filename", "name", "title"):
+            value = clean_optional_string(asset.get(key))
+            if value:
+                return value
+    return None
+
+
+def indexed_asset_workspace_video_name(indexed_asset, fallback=None):
+    metadata = indexed_asset_user_metadata(indexed_asset)
+    return (
+        clean_optional_string(metadata.get(PEGASUS_SOURCE_VIDEO_METADATA_FIELD))
+        or indexed_asset_filename(indexed_asset)
+        or indexed_asset_display_name(indexed_asset)
+        or clean_optional_string(fallback)
+        or response_id(indexed_asset)
+        or indexed_asset_asset_id(indexed_asset)
+        or "Indexed video"
+    )
+
+
+def indexed_asset_status(indexed_asset):
+    if not isinstance(indexed_asset, dict):
+        return None
+    for key in ("status", "asset_status", "assetStatus"):
+        value = clean_optional_string(indexed_asset.get(key))
+        if value:
+            return value
+    asset = indexed_asset.get("asset")
+    if isinstance(asset, dict):
+        return clean_optional_string(asset.get("status"))
+    return None
+
+
+def indexed_asset_thumbnail_url(indexed_asset):
+    if not isinstance(indexed_asset, dict):
+        return None
+    containers = [
+        indexed_asset,
+        indexed_asset.get("hls"),
+        indexed_asset.get("metadata"),
+        indexed_asset.get("system_metadata"),
+    ]
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        for key in ("thumbnail_url", "thumbnailUrl", "thumbnail", "thumbnail_urls", "thumbnailUrls", "thumbnails"):
+            thumbnail_url = thumbnail_url_from_value(container.get(key))
+            if thumbnail_url:
+                return thumbnail_url
+    asset = indexed_asset.get("asset")
+    if isinstance(asset, dict):
+        return indexed_asset_thumbnail_url(asset)
+    return None
+
+
+def thumbnail_url_from_value(value):
+    if isinstance(value, str):
+        return clean_optional_string(value)
+    if isinstance(value, list):
+        for item in value:
+            thumbnail_url = thumbnail_url_from_value(item)
+            if thumbnail_url:
+                return thumbnail_url
+    if isinstance(value, dict):
+        for key in ("url", "src", "default", "thumbnail_url", "thumbnailUrl", "thumbnail_urls", "thumbnailUrls"):
+            thumbnail_url = thumbnail_url_from_value(value.get(key))
+            if thumbnail_url:
+                return thumbnail_url
+    return None
+
+
+def indexed_asset_duration_seconds(indexed_asset):
+    if not isinstance(indexed_asset, dict):
+        return None
+    for key in ("duration", "duration_seconds", "durationSeconds", "video_duration", "video_duration_seconds"):
+        duration = float_or_none(indexed_asset.get(key))
+        if duration and duration > 0:
+            return duration
+    system_metadata = indexed_asset.get("system_metadata")
+    if isinstance(system_metadata, dict):
+        for key in ("duration", "duration_seconds", "durationSeconds", "video_duration", "video_duration_seconds"):
+            duration = float_or_none(system_metadata.get(key))
+            if duration and duration > 0:
+                return duration
+    asset = indexed_asset.get("asset")
+    if isinstance(asset, dict):
+        return indexed_asset_duration_seconds(asset)
+    return None
+
+
+def indexed_asset_filename(indexed_asset):
+    if not isinstance(indexed_asset, dict):
+        return None
+    system_metadata = indexed_asset.get("system_metadata")
+    if isinstance(system_metadata, dict):
+        filename = clean_optional_string(system_metadata.get("filename"))
+        if filename:
+            return filename
+    return clean_optional_string(indexed_asset.get("filename")) or clean_optional_string(indexed_asset.get("name"))
+
+
+def indexed_asset_index_id(indexed_asset):
+    if not isinstance(indexed_asset, dict):
+        return None
+    index = indexed_asset.get("index")
+    if isinstance(index, dict):
+        return clean_optional_string(index.get("_id")) or clean_optional_string(index.get("id"))
+    return clean_optional_string(indexed_asset.get("index_id")) or clean_optional_string(indexed_asset.get("indexId"))
+
+
+def response_id(value):
+    if not isinstance(value, dict):
+        return None
+    return clean_optional_string(value.get("_id")) or clean_optional_string(value.get("id"))
+
+
+def parse_json_object(value):
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def clean_optional_string(value):
+    if not isinstance(value, str):
+        return None
+    clean_value = value.strip()
+    return clean_value or None
+
+
+def float_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def upload_asset(file):

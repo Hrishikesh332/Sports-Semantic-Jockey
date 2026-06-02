@@ -17,9 +17,38 @@ import requests
 
 from app.core.config import TWELVELABS_MODEL, TWELVELABS_PEGASUS_MODEL, default_game_registrations, twelvelabs_index_id
 from app.core.errors import ApiError
-from app.integrations.twelvelabs import request_form as twelvelabs_request_form
-from app.integrations.twelvelabs import request_json as twelvelabs_request_json
-from app.integrations.twelvelabs import upload_asset_path
+from app.integrations.twelvelabs import (
+    add_indexed_asset as twelvelabs_add_indexed_asset,
+    add_knowledge_store_item as twelvelabs_add_knowledge_store_item,
+    analyze_video as twelvelabs_analyze_video,
+    asset_duration_seconds as twelvelabs_asset_duration_seconds,
+    asset_exists as twelvelabs_asset_exists,
+    asset_is_playable as twelvelabs_asset_is_playable,
+    create_response as twelvelabs_create_response,
+    delete_indexed_asset,
+    delete_knowledge_store_item,
+    get_asset as twelvelabs_get_asset,
+    get_indexed_asset as twelvelabs_get_indexed_asset,
+    indexed_asset_asset_id,
+    indexed_asset_display_name,
+    indexed_asset_duration_seconds,
+    indexed_asset_filename,
+    indexed_asset_for_reference,
+    indexed_asset_index_id,
+    indexed_asset_status,
+    indexed_asset_thumbnail_url,
+    indexed_asset_user_metadata,
+    indexed_asset_with_user_metadata,
+    indexed_asset_workspace_video_name,
+    list_asset_indexed_assets,
+    list_indexed_assets,
+    list_knowledge_store_items,
+    parse_json_object,
+    response_id,
+    search_index as twelvelabs_search_index,
+    update_indexed_asset_user_metadata,
+    upload_asset_path,
+)
 from app.services.highlights import generate_highlight_reels, generate_pegasus_highlight_reels
 from app.services.jockey_workspace_metadata import (
     find_saved_clip_analysis,
@@ -427,29 +456,6 @@ def discover_video_playback_status(game, tag, video_name, indexed=None):
     }
 
 
-def twelvelabs_asset_exists(asset_id):
-    asset_id = clean_optional_string(asset_id)
-    if not asset_id:
-        return False
-    try:
-        twelvelabs_request_json("get", f"/assets/{asset_id}")
-    except ApiError:
-        return False
-    return True
-
-
-def twelvelabs_asset_is_playable(asset_id):
-    asset_id = clean_optional_string(asset_id)
-    if not asset_id:
-        return False
-    try:
-        asset = twelvelabs_request_json("get", f"/assets/{asset_id}")
-    except ApiError:
-        return False
-    hls = asset.get("hls") or {}
-    return bool(hls.get("manifest_url") and hls.get("status") == "ready")
-
-
 def queue_game_video_repair(tag, video_name):
     game = get_game(tag)
     video_name = validate_registered_video_name(game, video_name, status_code=404)
@@ -499,44 +505,6 @@ def cleanup_remote_video_bindings(game, video_name):
 
     if search_index_id and indexed_asset_id:
         delete_indexed_asset(search_index_id, indexed_asset_id)
-
-
-def list_knowledge_store_items(knowledge_store_id):
-    try:
-        payload = twelvelabs_request_json("get", f"/knowledge-stores/{knowledge_store_id}/items")
-    except ApiError:
-        return []
-    items = payload.get("data") if isinstance(payload, dict) else payload
-    return items if isinstance(items, list) else []
-
-
-def delete_knowledge_store_item(knowledge_store_id, item_id):
-    knowledge_store_id = clean_optional_string(knowledge_store_id)
-    item_id = clean_optional_string(item_id)
-    if not knowledge_store_id or not item_id:
-        return
-    if not item_id.startswith("ksi_"):
-        item_id = f"ksi_{item_id}"
-    try:
-        twelvelabs_request_json("delete", f"/knowledge-stores/{knowledge_store_id}/items/{item_id}")
-    except ApiError as exc:
-        if exc.status_code != 404:
-            print(f"[cleanup] failed to delete knowledge store item {item_id}: {exc}", flush=True)
-
-
-def delete_indexed_asset(search_index_id, indexed_asset_id):
-    search_index_id = clean_optional_string(search_index_id)
-    indexed_asset_id = clean_optional_string(indexed_asset_id)
-    if not search_index_id or not indexed_asset_id:
-        return
-    try:
-        twelvelabs_request_json(
-            "delete",
-            f"/indexes/{search_index_id}/indexed-assets/{indexed_asset_id}",
-        )
-    except ApiError as exc:
-        if exc.status_code != 404:
-            print(f"[cleanup] failed to delete indexed asset {indexed_asset_id}: {exc}", flush=True)
 
 
 def clear_stale_video_bindings(tag, video_name):
@@ -848,7 +816,7 @@ def wait_for_uploaded_asset_ready(asset_id, uploaded_asset):
     for attempt in range(1, max(1, UPLOAD_ASSET_READY_POLL_ATTEMPTS) + 1):
         if attempt > 1 and UPLOAD_ASSET_READY_POLL_INTERVAL_SECONDS:
             time.sleep(UPLOAD_ASSET_READY_POLL_INTERVAL_SECONDS)
-        current_asset = twelvelabs_request_json("get", f"/assets/{asset_id}")
+        current_asset = twelvelabs_get_asset(asset_id)
         status = clean_optional_string(current_asset.get("status"))
         if status == "ready":
             return current_asset
@@ -878,19 +846,11 @@ def configured_search_index_id(game=None):
 
 
 def add_game_video_to_knowledge_store(knowledge_store_id, asset_id):
-    return twelvelabs_request_json(
-        "post",
-        f"/knowledge-stores/{knowledge_store_id}/items",
-        {"asset_id": asset_id},
-    )
+    return twelvelabs_add_knowledge_store_item(knowledge_store_id, asset_id)
 
 
 def add_game_video_to_search_index(search_index_id, asset_id):
-    return twelvelabs_request_json(
-        "post",
-        f"/indexes/{search_index_id}/indexed-assets",
-        {"asset_id": asset_id, "enable_video_stream": True},
-    )
+    return twelvelabs_add_indexed_asset(search_index_id, asset_id)
 
 
 def uploaded_game_payload(
@@ -955,12 +915,6 @@ def unique_preserving_order(values):
     return result
 
 
-def response_id(value):
-    if not isinstance(value, dict):
-        return None
-    return clean_optional_string(value.get("_id")) or clean_optional_string(value.get("id"))
-
-
 def pegasus_asset_contexts_for_game(game, video_name=None):
     source_videos = [video_name] if video_name else game.get("source_videos", [])
     contexts = []
@@ -975,7 +929,7 @@ def pegasus_asset_contexts_for_game(game, video_name=None):
 
 def pegasus_asset_contexts_for_video(game, source_video_name):
     asset_id = twelvelabs_asset_id_for_video(game, source_video_name)
-    asset = twelvelabs_request_json("get", f"/assets/{asset_id}")
+    asset = twelvelabs_get_asset(asset_id)
     status = clean_optional_string(asset.get("status"))
     if status and status != "ready":
         raise ApiError(
@@ -1001,7 +955,7 @@ def pegasus_asset_contexts_for_index_asset(indexed_asset, source_video_name):
     asset_id = indexed_asset_asset_id(indexed_asset)
     if not asset_id:
         raise ApiError("TwelveLabs asset id not found for indexed video", 404)
-    asset = twelvelabs_request_json("get", f"/assets/{asset_id}")
+    asset = twelvelabs_get_asset(asset_id)
     status = clean_optional_string(asset.get("status"))
     if status and status != "ready":
         raise ApiError(
@@ -1058,29 +1012,6 @@ def unique_pegasus_asset_contexts(contexts):
         seen.add(asset_id)
         unique_contexts.append(context)
     return sorted(unique_contexts, key=lambda item: (item.get("source_video_name", ""), float(item.get("offset_seconds") or 0)))
-
-
-def twelvelabs_asset_duration_seconds(asset):
-    if not isinstance(asset, dict):
-        return None
-    for key in ("duration", "duration_seconds", "video_duration", "video_duration_seconds"):
-        duration = float_or_none(asset.get(key))
-        if duration and duration > 0:
-            return duration
-    metadata = asset.get("metadata")
-    if isinstance(metadata, dict):
-        for key in ("duration", "duration_seconds", "video_duration", "video_duration_seconds"):
-            duration = float_or_none(metadata.get(key))
-            if duration and duration > 0:
-                return duration
-    return None
-
-
-def float_or_none(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def window_pegasus_asset_contexts(contexts):
@@ -1396,11 +1327,7 @@ def store_pegasus_reels_index_metadata(index_id, indexed_asset_id, asset_id, con
     if not is_complete_highlight_reels(reels):
         return {}
     user_metadata = pegasus_reels_index_user_metadata(index_id, indexed_asset_id, asset_id, context_hash, reels, video_name)
-    twelvelabs_request_json(
-        "patch",
-        f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}",
-        {"user_metadata": user_metadata},
-    )
+    update_indexed_asset_user_metadata(index_id, indexed_asset_id, user_metadata)
     verify_pegasus_reels_index_metadata(index_id, indexed_asset_id, user_metadata)
     return user_metadata
 
@@ -1459,7 +1386,7 @@ def verify_pegasus_reels_index_metadata(index_id, indexed_asset_id, expected_met
     expected_keys = set(expected_metadata)
     last_metadata = {}
     for attempt in range(1, max(1, PEGASUS_METADATA_VERIFY_ATTEMPTS) + 1):
-        indexed_asset = twelvelabs_request_json("get", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
+        indexed_asset = twelvelabs_get_indexed_asset(index_id, indexed_asset_id)
         last_metadata = indexed_asset_user_metadata(indexed_asset)
         if pegasus_reels_index_metadata_matches(last_metadata, expected_metadata):
             return
@@ -1588,32 +1515,6 @@ def pegasus_reels_metadata_fields():
     ]
 
 
-def parse_json_object(value):
-    if not isinstance(value, str) or not value.strip():
-        return {}
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def indexed_asset_user_metadata(indexed_asset):
-    if not isinstance(indexed_asset, dict):
-        return {}
-    for key in ("user_metadata", "userMetadata"):
-        metadata = indexed_asset.get(key)
-        if isinstance(metadata, dict):
-            return metadata
-    metadata = indexed_asset.get("metadata")
-    if isinstance(metadata, dict):
-        for key in ("user_metadata", "userMetadata"):
-            nested = metadata.get(key)
-            if isinstance(nested, dict):
-                return nested
-    return {}
-
-
 def indexed_assets_for_video_metadata(game, index_id, asset_id, video_name=None):
     candidates = []
     seen = set()
@@ -1626,20 +1527,19 @@ def indexed_assets_for_video_metadata(game, index_id, asset_id, video_name=None)
         seen.add(candidate_key)
         if indexed_asset_id and not indexed_asset_user_metadata(indexed_asset):
             try:
-                indexed_asset = twelvelabs_request_json("get", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
+                indexed_asset = twelvelabs_get_indexed_asset(index_id, indexed_asset_id)
             except ApiError:
                 pass
         candidates.append(indexed_asset)
 
-    indexed_assets = twelvelabs_request_json("get", f"/assets/{asset_id}/indexed-assets")
-    for indexed_asset in indexed_assets.get("data", []):
+    for indexed_asset in list_asset_indexed_assets(asset_id):
         if indexed_asset_index_id(indexed_asset) == index_id:
             add_candidate(indexed_asset)
 
     indexed_asset_id = marengo_video_id_for_video_name(game, video_name)
     if indexed_asset_id:
         try:
-            add_candidate(twelvelabs_request_json("get", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}"))
+            add_candidate(twelvelabs_get_indexed_asset(index_id, indexed_asset_id))
         except ApiError:
             pass
 
@@ -1648,25 +1548,6 @@ def indexed_assets_for_video_metadata(game, index_id, asset_id, video_name=None)
             add_candidate(indexed_asset)
 
     return candidates
-
-
-def list_indexed_assets(index_id):
-    indexed_assets = []
-    page = 1
-    while page <= 10:
-        path = f"/indexes/{index_id}/indexed-assets"
-        if page > 1:
-            path = f"{path}?page={page}"
-        body = twelvelabs_request_json("get", path)
-        data = body.get("data")
-        if isinstance(data, list):
-            indexed_assets.extend(item for item in data if isinstance(item, dict))
-        page_info = body.get("page_info") if isinstance(body.get("page_info"), dict) else {}
-        total_pages = int(page_info.get("total_page") or page)
-        if page >= total_pages:
-            break
-        page += 1
-    return indexed_assets
 
 
 def normalize_index_video(index_id, indexed_asset):
@@ -1714,192 +1595,6 @@ def normalize_index_video(index_id, indexed_asset):
     }
 
 
-def indexed_asset_with_user_metadata(index_id, indexed_asset):
-    indexed_asset_id = response_id(indexed_asset)
-    if not indexed_asset_id or indexed_asset_user_metadata(indexed_asset):
-        return indexed_asset
-    try:
-        hydrated = twelvelabs_request_json("get", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
-    except ApiError:
-        return indexed_asset
-    return hydrated if isinstance(hydrated, dict) else indexed_asset
-
-
-def indexed_asset_for_reference(index_id, reference):
-    reference = clean_optional_string(reference)
-    if not reference:
-        return None
-
-    if "/" not in reference and "." not in reference:
-        try:
-            indexed_asset = twelvelabs_request_json("get", f"/indexes/{index_id}/indexed-assets/{reference}")
-            if isinstance(indexed_asset, dict) and response_id(indexed_asset):
-                return indexed_asset_with_user_metadata(index_id, indexed_asset)
-        except ApiError:
-            pass
-
-    reference_values = indexed_asset_reference_values_for_text(reference)
-    for indexed_asset in list_indexed_assets(index_id):
-        hydrated = indexed_asset_with_user_metadata(index_id, indexed_asset)
-        if indexed_asset_matches_reference(hydrated, reference_values):
-            return hydrated
-    return None
-
-
-def indexed_asset_matches_reference(indexed_asset, reference_values):
-    for value in indexed_asset_reference_values(indexed_asset):
-        if value in reference_values:
-            return True
-    return False
-
-
-def indexed_asset_reference_values(indexed_asset):
-    values = []
-    metadata = indexed_asset_user_metadata(indexed_asset)
-    for value in (
-        response_id(indexed_asset),
-        indexed_asset_asset_id(indexed_asset),
-        indexed_asset_filename(indexed_asset),
-        indexed_asset_display_name(indexed_asset),
-        clean_optional_string(metadata.get(PEGASUS_REELS_SOURCE_VIDEO_METADATA_FIELD)),
-    ):
-        values.extend(indexed_asset_reference_values_for_text(value))
-    return set(values)
-
-
-def indexed_asset_reference_values_for_text(value):
-    value = clean_optional_string(value)
-    if not value:
-        return set()
-    basename = Path(value).name
-    stem = Path(basename).stem
-    return {
-        value,
-        value.lower(),
-        basename,
-        basename.lower(),
-        stem,
-        stem.lower(),
-    }
-
-
-def indexed_asset_asset_id(indexed_asset):
-    if not isinstance(indexed_asset, dict):
-        return None
-    asset_id = clean_optional_string(indexed_asset.get("asset_id")) or clean_optional_string(indexed_asset.get("assetId"))
-    if asset_id:
-        return asset_id
-    asset = indexed_asset.get("asset")
-    if isinstance(asset, dict):
-        return response_id(asset) or clean_optional_string(asset.get("asset_id")) or clean_optional_string(asset.get("assetId"))
-    return None
-
-
-def indexed_asset_display_name(indexed_asset):
-    if not isinstance(indexed_asset, dict):
-        return None
-    system_metadata = indexed_asset.get("system_metadata")
-    if isinstance(system_metadata, dict):
-        for key in ("name", "title", "filename"):
-            value = clean_optional_string(system_metadata.get(key))
-            if value:
-                return value
-    for key in ("name", "filename", "title"):
-        value = clean_optional_string(indexed_asset.get(key))
-        if value:
-            return value
-    asset = indexed_asset.get("asset")
-    if isinstance(asset, dict):
-        for key in ("filename", "name", "title"):
-            value = clean_optional_string(asset.get(key))
-            if value:
-                return value
-    return None
-
-
-def indexed_asset_workspace_video_name(indexed_asset, fallback=None):
-    metadata = indexed_asset_user_metadata(indexed_asset)
-    return (
-        clean_optional_string(metadata.get(PEGASUS_REELS_SOURCE_VIDEO_METADATA_FIELD))
-        or indexed_asset_filename(indexed_asset)
-        or indexed_asset_display_name(indexed_asset)
-        or clean_optional_string(fallback)
-        or response_id(indexed_asset)
-        or indexed_asset_asset_id(indexed_asset)
-        or "Indexed video"
-    )
-
-
-def indexed_asset_status(indexed_asset):
-    if not isinstance(indexed_asset, dict):
-        return None
-    for key in ("status", "asset_status", "assetStatus"):
-        value = clean_optional_string(indexed_asset.get(key))
-        if value:
-            return value
-    asset = indexed_asset.get("asset")
-    if isinstance(asset, dict):
-        return clean_optional_string(asset.get("status"))
-    return None
-
-
-def indexed_asset_thumbnail_url(indexed_asset):
-    if not isinstance(indexed_asset, dict):
-        return None
-    containers = [
-        indexed_asset,
-        indexed_asset.get("hls"),
-        indexed_asset.get("metadata"),
-        indexed_asset.get("system_metadata"),
-    ]
-    for container in containers:
-        if not isinstance(container, dict):
-            continue
-        for key in ("thumbnail_url", "thumbnailUrl", "thumbnail", "thumbnail_urls", "thumbnailUrls", "thumbnails"):
-            thumbnail_url = thumbnail_url_from_value(container.get(key))
-            if thumbnail_url:
-                return thumbnail_url
-    asset = indexed_asset.get("asset")
-    if isinstance(asset, dict):
-        return indexed_asset_thumbnail_url(asset)
-    return None
-
-
-def thumbnail_url_from_value(value):
-    if isinstance(value, str):
-        return clean_optional_string(value)
-    if isinstance(value, list):
-        for item in value:
-            thumbnail_url = thumbnail_url_from_value(item)
-            if thumbnail_url:
-                return thumbnail_url
-    if isinstance(value, dict):
-        for key in ("url", "src", "default", "thumbnail_url", "thumbnailUrl", "thumbnail_urls", "thumbnailUrls"):
-            thumbnail_url = thumbnail_url_from_value(value.get(key))
-            if thumbnail_url:
-                return thumbnail_url
-    return None
-
-
-def indexed_asset_duration_seconds(indexed_asset):
-    if not isinstance(indexed_asset, dict):
-        return None
-    for key in ("duration", "duration_seconds", "durationSeconds", "video_duration", "video_duration_seconds"):
-        duration = float_or_none(indexed_asset.get(key))
-        if duration and duration > 0:
-            return duration
-    system_metadata = indexed_asset.get("system_metadata")
-    if isinstance(system_metadata, dict):
-        for key in ("duration", "duration_seconds", "durationSeconds", "video_duration", "video_duration_seconds"):
-            duration = float_or_none(system_metadata.get(key))
-            if duration and duration > 0:
-                return duration
-    asset = indexed_asset.get("asset")
-    if isinstance(asset, dict):
-        return indexed_asset_duration_seconds(asset)
-    return None
-
-
 def indexed_asset_matches_video(game, indexed_asset, asset_id, video_name=None):
     if not isinstance(indexed_asset, dict):
         return False
@@ -1930,20 +1625,8 @@ def indexed_asset_matches_video(game, indexed_asset, asset_id, video_name=None):
     return False
 
 
-def indexed_asset_filename(indexed_asset):
-    if not isinstance(indexed_asset, dict):
-        return None
-    system_metadata = indexed_asset.get("system_metadata")
-    if isinstance(system_metadata, dict):
-        filename = clean_optional_string(system_metadata.get("filename"))
-        if filename:
-            return filename
-    return clean_optional_string(indexed_asset.get("filename")) or clean_optional_string(indexed_asset.get("name"))
-
-
 def indexed_asset_id_for_asset(game, index_id, asset_id, video_name=None):
-    indexed_assets = twelvelabs_request_json("get", f"/assets/{asset_id}/indexed-assets")
-    for indexed_asset in indexed_assets.get("data", []):
+    for indexed_asset in list_asset_indexed_assets(asset_id):
         if indexed_asset_index_id(indexed_asset) == index_id:
             indexed_asset_id = response_id(indexed_asset)
             if indexed_asset_id:
@@ -1964,15 +1647,6 @@ def indexed_asset_id_for_asset(game, index_id, asset_id, video_name=None):
         },
         404,
     )
-
-
-def indexed_asset_index_id(indexed_asset):
-    if not isinstance(indexed_asset, dict):
-        return None
-    index = indexed_asset.get("index")
-    if isinstance(index, dict):
-        return clean_optional_string(index.get("_id")) or clean_optional_string(index.get("id"))
-    return clean_optional_string(indexed_asset.get("index_id")) or clean_optional_string(indexed_asset.get("indexId"))
 
 
 def is_complete_highlight_reels(reels):
@@ -2026,7 +1700,7 @@ def search_game_videos_with_marengo(game, query, limit, filter_key, video_name, 
         else:
             fields.append(("filter", json.dumps({"filename": video_name})))
 
-    result = twelvelabs_request_form("post", "/search", fields)
+    result = twelvelabs_search_index(fields)
     return normalize_marengo_search(game, query, result, limit, search_options, group_by)
 
 
@@ -2098,9 +1772,7 @@ def create_selected_clip_analysis(tag, payload=None):
         marengo_description=clean_optional_string(payload.get("description")),
         marengo_relevance=clean_optional_string(payload.get("relevance")),
     )
-    result = twelvelabs_request_json(
-        "post",
-        "/analyze",
+    result = twelvelabs_analyze_video(
         {
             "model_name": TWELVELABS_PEGASUS_MODEL,
             "video": {
@@ -2379,9 +2051,7 @@ def create_entity_tracking_response(tag, payload=None):
                     source="indexed_asset_user_metadata",
                 )
 
-    result = twelvelabs_request_json(
-        "post",
-        "/responses",
+    result = twelvelabs_create_response(
         {
             "model": TWELVELABS_MODEL,
             "instructions": jockey_entity_tracking_instructions(),
@@ -2606,7 +2276,7 @@ def create_jockey_chat_response(tag, payload=None):
     if session_id:
         request_body["session_id"] = session_id
 
-    result = twelvelabs_request_json("post", "/responses", request_body)
+    result = twelvelabs_create_response(request_body)
     manifest = parse_jockey_response_json(result, "TwelveLabs Jockey chat response")
     return normalize_jockey_chat_manifest(game, message, result, manifest, limit)
 
@@ -3062,7 +2732,7 @@ def registered_indexed_thumbnail_url(tag, video_name):
     indexed_asset = None
     if indexed_asset_id:
         try:
-            indexed_asset = twelvelabs_request_json("get", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
+            indexed_asset = twelvelabs_get_indexed_asset(index_id, indexed_asset_id)
         except ApiError:
             indexed_asset = None
     if not indexed_asset:
@@ -3130,18 +2800,19 @@ def placeholder_thumbnail_svg(tag, video_name):
 </svg>"""
 
 
-def twelvelabs_stream_info(tag, video_name):
+def twelvelabs_stream_info(tag, video_name, reference=None):
     game = get_game(tag)
     requested_video = clean_optional_string(video_name)
     if not requested_video:
         raise ApiError("video_name is required", 404)
+    playback_reference = clean_optional_string(reference) or requested_video
     resolved_video_name = None
     try:
         resolved_video_name = validate_registered_video_name(game, requested_video, status_code=404)
     except ApiError:
         resolved_video_name = None
 
-    asset_id, asset = resolve_playback_asset(game, resolved_video_name or requested_video, requested_video)
+    asset_id, asset = resolve_playback_asset(game, resolved_video_name or requested_video, playback_reference)
     if not resolved_video_name:
         resolved_video_name = indexed_asset_workspace_video_name(
             {"asset": asset, "asset_id": asset_id},
@@ -3202,10 +2873,7 @@ def resolve_playback_asset(game, video_name, reference=None):
         marengo_id = marengo_video_id_for_video_name(game, video_name)
         if index_id and marengo_id:
             try:
-                indexed_asset = twelvelabs_request_json(
-                    "get",
-                    f"/indexes/{index_id}/indexed-assets/{marengo_id}",
-                )
+                indexed_asset = twelvelabs_get_indexed_asset(index_id, marengo_id)
                 add_candidate(indexed_asset_asset_id(indexed_asset))
             except ApiError:
                 pass
@@ -3219,7 +2887,7 @@ def resolve_playback_asset(game, video_name, reference=None):
     last_error = None
     for asset_id in candidates:
         try:
-            asset = twelvelabs_request_json("get", f"/assets/{asset_id}")
+            asset = twelvelabs_get_asset(asset_id)
         except ApiError as exc:
             last_error = exc
             continue
@@ -3768,7 +3436,7 @@ def video_name_for_reference(game, reference):
         if score > best_score:
             best_score = score
             best_match = video_name
-    return best_match
+    return best_match if best_score > 0 else None
 
 
 def asset_id_for_video_name(game, video_name):

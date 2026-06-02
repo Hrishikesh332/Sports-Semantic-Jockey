@@ -5,7 +5,8 @@ import time
 from hashlib import sha256
 
 from app.core.errors import ApiError
-from app.integrations.twelvelabs import request_json as twelvelabs_request_json
+from app.integrations.twelvelabs import get_indexed_asset as twelvelabs_get_indexed_asset
+from app.integrations.twelvelabs import update_indexed_asset_user_metadata
 
 JOCKEY_WORKSPACE_FIELD = "sports_jockey_workspace_v1"
 JOCKEY_WORKSPACE_SUMMARY_FIELD = "sports_jockey_workspace_summary_v1"
@@ -641,7 +642,7 @@ def _resolve_storage_target(tag, video_name):
 
 
 def _load_workspace(index_id, indexed_asset_id):
-    indexed_asset = twelvelabs_request_json("get", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
+    indexed_asset = twelvelabs_get_indexed_asset(index_id, indexed_asset_id)
     metadata = _indexed_asset_user_metadata(indexed_asset)
     workspace = _parse_json_object(metadata.get(JOCKEY_WORKSPACE_FIELD))
     if workspace:
@@ -659,11 +660,7 @@ def _persist_workspace(index_id, indexed_asset_id, workspace):
 
 
 def _patch_user_metadata(index_id, indexed_asset_id, patch):
-    twelvelabs_request_json(
-        "patch",
-        f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}",
-        {"user_metadata": patch},
-    )
+    update_indexed_asset_user_metadata(index_id, indexed_asset_id, patch)
     _verify_user_metadata_patch(index_id, indexed_asset_id, patch)
 
 
@@ -671,7 +668,7 @@ def _verify_user_metadata_patch(index_id, indexed_asset_id, expected_patch):
     expected_keys = set(expected_patch)
     last_metadata = {}
     for attempt in range(1, max(1, JOCKEY_WORKSPACE_VERIFY_ATTEMPTS) + 1):
-        indexed_asset = twelvelabs_request_json("get", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
+        indexed_asset = twelvelabs_get_indexed_asset(index_id, indexed_asset_id)
         last_metadata = _indexed_asset_user_metadata(indexed_asset)
         if all(last_metadata.get(key) == expected_patch.get(key) for key in expected_keys):
             return

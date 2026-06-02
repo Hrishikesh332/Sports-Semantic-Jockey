@@ -3,7 +3,8 @@ import json
 from app.core.config import TWELVELABS_MODEL, TWELVELABS_PEGASUS_MODEL
 from app.core.errors import ApiError
 from app.domain.highlights import HIGHLIGHT_REEL_SCHEMA, highlight_instructions, highlight_prompt, parse_jockey_json
-from app.integrations.twelvelabs import request_json
+from app.integrations.twelvelabs import analyze_video as twelvelabs_analyze_video
+from app.integrations.twelvelabs import create_response as twelvelabs_create_response
 
 
 HIGHLIGHT_CATEGORY_KEYS = [
@@ -23,9 +24,7 @@ PEGASUS_CATEGORY_LIMITS = {
 
 
 def generate_highlight_reels(knowledge_store_id, match_context=None, wsc_baseline=None):
-    result = request_json(
-        "post",
-        "/responses",
+    result = twelvelabs_create_response(
         {
             "model": TWELVELABS_MODEL,
             "instructions": highlight_instructions(),
@@ -55,9 +54,7 @@ def generate_pegasus_highlight_reels(asset_contexts, match_context=None, wsc_bas
 
     analyzed_reels = []
     for asset_context in asset_contexts:
-        result = request_json(
-            "post",
-            "/analyze",
+        result = twelvelabs_analyze_video(
             pegasus_analyze_payload(
                 asset_context=asset_context,
                 match_context=match_context,

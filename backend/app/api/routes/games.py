@@ -138,7 +138,8 @@ def show_game_media(tag, video_name):
 
 @games_bp.get("/games/<tag>/stream/<video_name>")
 def show_game_stream(tag, video_name):
-    return jsonify(twelvelabs_stream_info(tag, video_name))
+    reference = request.args.get("reference") or request.args.get("asset_id")
+    return jsonify(twelvelabs_stream_info(tag, video_name, reference=reference))
 
 
 @games_bp.get("/games/<tag>/reel/<video_name>")

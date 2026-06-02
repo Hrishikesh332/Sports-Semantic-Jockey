@@ -8,7 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.integrations.twelvelabs import request_json as twelvelabs_request_json
+from app.integrations.twelvelabs import get_indexed_asset as twelvelabs_get_indexed_asset
+from app.integrations.twelvelabs import update_indexed_asset_user_metadata
 from app.services.games import (
     INDEX_VIDEOS_CACHE,
     INDEX_VIDEOS_CACHE_LOCK,
@@ -59,10 +60,7 @@ def clear_pegasus_metadata(tag):
         if not indexed_asset_id:
             continue
 
-        hydrated = twelvelabs_request_json(
-            "get",
-            f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}",
-        )
+        hydrated = twelvelabs_get_indexed_asset(index_id, indexed_asset_id)
         metadata = indexed_asset_user_metadata(hydrated)
         keys = pegasus_metadata_keys(metadata)
         if not keys:
@@ -74,16 +72,9 @@ def clear_pegasus_metadata(tag):
             or indexed_asset_id
         )
         payload = pegasus_metadata_deletion_payload(metadata)
-        twelvelabs_request_json(
-            "patch",
-            f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}",
-            payload,
-        )
+        update_indexed_asset_user_metadata(index_id, indexed_asset_id, payload["user_metadata"])
         verify = indexed_asset_user_metadata(
-            twelvelabs_request_json(
-                "get",
-                f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}",
-            )
+            twelvelabs_get_indexed_asset(index_id, indexed_asset_id)
         )
         remaining = pegasus_metadata_keys(verify)
         if remaining:
