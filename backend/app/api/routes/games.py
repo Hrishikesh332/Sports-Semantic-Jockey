@@ -1,3 +1,5 @@
+from io import BytesIO
+
 from flask import Blueprint, Response, jsonify, redirect, request, send_file, send_from_directory
 
 from app.core.errors import ApiError
@@ -144,7 +146,7 @@ def show_game_stream(tag, video_name):
 
 @games_bp.get("/games/<tag>/reel/<video_name>")
 def download_game_reel(tag, video_name):
-    path, download_name = generated_reel_clip(
+    content, download_name = generated_reel_clip(
         tag=tag,
         video_name=video_name,
         start=request.args.get("start"),
@@ -153,7 +155,7 @@ def download_game_reel(tag, video_name):
         clip_name=request.args.get("name"),
     )
     return send_file(
-        path,
+        BytesIO(content),
         mimetype="video/mp4",
         as_attachment=request.args.get("download", "1") != "0",
         download_name=download_name,
@@ -162,7 +164,7 @@ def download_game_reel(tag, video_name):
 
 @games_bp.get("/games/<tag>/assembly-reel/<video_name>")
 def show_game_assembly_reel(tag, video_name):
-    path, download_name = generated_assembly_reel(
+    content, download_name = generated_assembly_reel(
         tag=tag,
         video_name=video_name,
         segments=request.args.get("segments"),
@@ -170,7 +172,7 @@ def show_game_assembly_reel(tag, video_name):
         assembly_name=request.args.get("name"),
     )
     return send_file(
-        path,
+        BytesIO(content),
         mimetype="video/mp4",
         as_attachment=request.args.get("download", "0") == "1",
         download_name=download_name,
@@ -180,13 +182,13 @@ def show_game_assembly_reel(tag, video_name):
 @games_bp.get("/games/<tag>/reel-thumbnail/<video_name>")
 def show_game_reel_thumbnail(tag, video_name):
     try:
-        path = generated_reel_thumbnail(
+        content = generated_reel_thumbnail(
             tag=tag,
             video_name=video_name,
             time=request.args.get("time"),
             format_name=request.args.get("format", "9x16"),
         )
-        return send_file(path, mimetype="image/jpeg")
+        return send_file(BytesIO(content), mimetype="image/jpeg")
     except ApiError as exc:
         if exc.status_code != 404:
             raise

@@ -1,5 +1,6 @@
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,14 +11,14 @@ from app.integrations.twelvelabs import add_knowledge_store_item as twelvelabs_a
 from app.integrations.twelvelabs import create_knowledge_store as twelvelabs_create_knowledge_store
 from app.integrations.twelvelabs import get_knowledge_store_item as twelvelabs_get_knowledge_store_item
 from app.integrations.twelvelabs import upload_asset_path
-from app.services.games import public_game, register_game
+from app.services.games import public_game, register_game, remove_local_video_files
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-VIDEOS_DIR = ROOT_DIR / "data" / "videos"
 DEFAULT_GAME_TAG = "sports"
 DEFAULT_POLL_INTERVAL_SECONDS = int(os.environ.get("SPORTS_INGEST_POLL_INTERVAL_SECONDS", "60"))
 DEFAULT_POLL_ATTEMPTS = int(os.environ.get("SPORTS_INGEST_POLL_ATTEMPTS", "720"))
+INGEST_UPLOAD_WORKERS = max(1, int(os.environ.get("SPORTS_INGEST_UPLOAD_WORKERS", "4")))
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,6 @@ class IndexVideo:
 def run_ingestion(payload, progress=None):
     spec = parse_ingestion_payload(payload)
     progress = progress or (lambda message: None)
-    ensure_video_links(spec["source_videos"], progress)
 
     state = {}
     state.setdefault("created_at", timestamp())
@@ -92,6 +92,16 @@ def run_ingestion(payload, progress=None):
     game = register_game(game_payload)
     state["registered_game"] = game
     progress(f"registered {spec['tag']} game")
+
+    cleanup_names = sorted(
+        {
+            video.name
+            for video in (*spec["source_videos"], *spec["index_videos"])
+        }
+    )
+    removed = remove_local_video_files(cleanup_names)
+    if removed:
+        progress(f"removed local media for {', '.join(removed)}")
 
     if not all(status == "ready" for status in state["item_statuses"].values()):
         return build_ingestion_response(spec, state, game, "indexing")
@@ -197,16 +207,6 @@ def resolve_video_path(value):
     return path
 
 
-def ensure_video_links(source_videos, progress):
-    VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
-    for video in source_videos:
-        link_path = VIDEOS_DIR / video.name
-        if link_path.exists() or link_path.is_symlink():
-            continue
-        link_path.symlink_to(os.path.relpath(video.path, link_path.parent))
-        progress(f"linked local media for {video.name}")
-
-
 def create_knowledge_store(spec):
     metadata = {"game_tag": spec["tag"], "source": "sports-jockey"}
     metadata.update({str(key): str(value) for key, value in spec["metadata"].items()})
@@ -223,6 +223,7 @@ def create_knowledge_store(spec):
 
 
 def upload_source_assets(source_videos, state, progress):
+    pending = []
     for video in source_videos:
         if state["source_asset_ids"].get(video.name):
             progress(f"source asset already uploaded for {video.name}: {state['source_asset_ids'][video.name]}")
@@ -231,14 +232,23 @@ def upload_source_assets(source_videos, state, progress):
             state["source_asset_ids"][video.name] = state["asset_ids"][video.name]
             progress(f"using existing asset for source {video.name}: {state['source_asset_ids'][video.name]}")
             continue
+        pending.append(video)
+
+    if not pending:
+        return
+
+    def upload_one(video):
         asset = upload_video_asset(video.name, video.path, state, progress)
         state["source_asset_ids"][video.name] = asset["_id"]
         state["asset_ids"][video.name] = asset["_id"]
         state.setdefault("assets", {})[video.name] = asset
         progress(f"uploaded source asset {asset['_id']} for {video.name}")
 
+    _upload_videos_parallel(pending, upload_one)
+
 
 def upload_index_assets(index_videos, state, progress):
+    pending = []
     for video in index_videos:
         if state["asset_ids"].get(video.name):
             progress(f"index asset already uploaded for {video.name}: {state['asset_ids'][video.name]}")
@@ -247,10 +257,30 @@ def upload_index_assets(index_videos, state, progress):
             state["asset_ids"][video.name] = state["source_asset_ids"][video.source_name]
             progress(f"using source asset for index video {video.name}: {state['asset_ids'][video.name]}")
             continue
+        pending.append(video)
+
+    if not pending:
+        return
+
+    def upload_one(video):
         asset = upload_video_asset(video.name, video.path, state, progress)
         state["asset_ids"][video.name] = asset["_id"]
         state.setdefault("assets", {})[video.name] = asset
         progress(f"uploaded index asset {asset['_id']} for {video.name}")
+
+    _upload_videos_parallel(pending, upload_one)
+
+
+def _upload_videos_parallel(videos, upload_one):
+    if len(videos) == 1 or INGEST_UPLOAD_WORKERS == 1:
+        for video in videos:
+            upload_one(video)
+        return
+
+    with ThreadPoolExecutor(max_workers=min(INGEST_UPLOAD_WORKERS, len(videos))) as executor:
+        futures = [executor.submit(upload_one, video) for video in videos]
+        for future in futures:
+            future.result()
 
 
 def upload_video_asset(video_name, path, state, progress):
