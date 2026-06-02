@@ -8,7 +8,7 @@ Uses existing backend endpoints only:
 Requires the Flask backend to be running (default http://127.0.0.1:5000).
 
 Example:
-  cd backend && python wsgi.py
+  cd backend && python app.py
 
   python3 scripts/warm_dashboard_metadata.py --tag sports
 
@@ -166,7 +166,7 @@ def main() -> int:
         status, index_body = request_json("GET", f"{base}/games/{quote(tag, safe='')}/index-videos", timeout=120)
     except (HTTPError, URLError, TimeoutError) as error:
         logger.write(f"FAILED to load index videos: {error}")
-        logger.write("Start the backend first: cd backend && python wsgi.py")
+        logger.write("Start the backend first: cd backend && python app.py")
         return 1
 
     if status != 200:

@@ -25,6 +25,63 @@ INDEXED_ASSET_LIST_MAX_PAGES = 10
 PEGASUS_SOURCE_VIDEO_METADATA_FIELD = "sports_jockey_pegasus_source_video_v2"
 
 
+# TwelveLabs API endpoints
+RESPONSES_ENDPOINT = "/responses"
+ANALYZE_ENDPOINT = "/analyze"
+SEARCH_ENDPOINT = "/search"
+ASSETS_ENDPOINT = "/assets"
+INDEXES_ENDPOINT = "/indexes"
+KNOWLEDGE_STORES_ENDPOINT = "/knowledge-stores"
+MULTIPART_UPLOADS_ENDPOINT = f"{ASSETS_ENDPOINT}/multipart-uploads"
+
+
+def api_url(endpoint):
+    return f"{TWELVELABS_BASE_URL}{endpoint}"
+
+
+def asset_endpoint(asset_id):
+    return f"{ASSETS_ENDPOINT}/{asset_id}"
+
+
+def asset_indexed_assets_endpoint(asset_id):
+    return f"{asset_endpoint(asset_id)}/indexed-assets"
+
+
+def index_indexed_assets_endpoint(index_id):
+    return f"{INDEXES_ENDPOINT}/{index_id}/indexed-assets"
+
+
+def indexed_asset_endpoint(index_id, indexed_asset_id):
+    return f"{index_indexed_assets_endpoint(index_id)}/{indexed_asset_id}"
+
+
+def knowledge_store_endpoint(knowledge_store_id):
+    return f"{KNOWLEDGE_STORES_ENDPOINT}/{knowledge_store_id}"
+
+
+def knowledge_store_items_endpoint(knowledge_store_id):
+    return f"{knowledge_store_endpoint(knowledge_store_id)}/items"
+
+
+def knowledge_store_item_endpoint(knowledge_store_id, item_id):
+    return f"{knowledge_store_items_endpoint(knowledge_store_id)}/{item_id}"
+
+
+def multipart_upload_endpoint(upload_id):
+    return f"{MULTIPART_UPLOADS_ENDPOINT}/{upload_id}"
+
+
+def multipart_upload_presigned_urls_endpoint(upload_id):
+    return f"{multipart_upload_endpoint(upload_id)}/presigned-urls"
+
+
+def paged_endpoint(endpoint, page):
+    if page <= 1:
+        return endpoint
+    return f"{endpoint}?page={page}"
+
+
+# Request transport
 def json_headers():
     api_key = twelvelabs_api_key()
     if not api_key:
@@ -39,13 +96,13 @@ def file_headers():
     return {"x-api-key": api_key}
 
 
-def request_json(method, path, payload=None):
-    attempts = ANALYZE_RETRY_ATTEMPTS if path == "/analyze" else 1
+def request_json(method, endpoint, payload=None):
+    attempts = ANALYZE_RETRY_ATTEMPTS if endpoint == ANALYZE_ENDPOINT else 1
     for attempt in range(1, attempts + 1):
         try:
             response = requests.request(
                 method,
-                f"{TWELVELABS_BASE_URL}{path}",
+                api_url(endpoint),
                 headers=json_headers(),
                 json=payload,
                 timeout=REQUEST_TIMEOUT_SECONDS,
@@ -60,7 +117,7 @@ def request_json(method, path, payload=None):
     raise ApiError("TwelveLabs request failed", 502)
 
 
-def request_form(method, path, fields):
+def request_form(method, endpoint, fields):
     form_fields = []
     for key, value in fields:
         if value is None:
@@ -74,7 +131,7 @@ def request_form(method, path, fields):
     try:
         response = requests.request(
             method,
-            f"{TWELVELABS_BASE_URL}{path}",
+            api_url(endpoint),
             headers=file_headers(),
             files=form_fields,
             timeout=REQUEST_TIMEOUT_SECONDS,
@@ -85,42 +142,44 @@ def request_form(method, path, fields):
     return parse_response(response)
 
 
+# Responses, analysis, and search
 def create_response(payload):
-    return request_json("post", "/responses", payload)
+    return request_json("post", RESPONSES_ENDPOINT, payload)
 
 
 def analyze_video(payload):
-    return request_json("post", "/analyze", payload)
+    return request_json("post", ANALYZE_ENDPOINT, payload)
 
 
 def search_index(fields):
-    return request_form("post", "/search", fields)
+    return request_form("post", SEARCH_ENDPOINT, fields)
 
 
+# Knowledge stores
 def create_knowledge_store(name, ingestion_config=None, metadata=None):
     payload = {"name": name}
     if ingestion_config is not None:
         payload["ingestion_config"] = ingestion_config
     if metadata is not None:
         payload["metadata"] = metadata
-    return request_json("post", "/knowledge-stores", payload)
+    return request_json("post", KNOWLEDGE_STORES_ENDPOINT, payload)
 
 
 def add_knowledge_store_item(knowledge_store_id, asset_id):
     return request_json(
         "post",
-        f"/knowledge-stores/{knowledge_store_id}/items",
+        knowledge_store_items_endpoint(knowledge_store_id),
         {"asset_id": asset_id},
     )
 
 
 def get_knowledge_store_item(knowledge_store_id, item_id):
-    return request_json("get", f"/knowledge-stores/{knowledge_store_id}/items/{item_id}")
+    return request_json("get", knowledge_store_item_endpoint(knowledge_store_id, item_id))
 
 
 def list_knowledge_store_items(knowledge_store_id):
     try:
-        payload = request_json("get", f"/knowledge-stores/{knowledge_store_id}/items")
+        payload = request_json("get", knowledge_store_items_endpoint(knowledge_store_id))
     except ApiError:
         return []
     items = payload.get("data") if isinstance(payload, dict) else payload
@@ -135,14 +194,15 @@ def delete_knowledge_store_item(knowledge_store_id, item_id):
     if not item_id.startswith("ksi_"):
         item_id = f"ksi_{item_id}"
     try:
-        request_json("delete", f"/knowledge-stores/{knowledge_store_id}/items/{item_id}")
+        request_json("delete", knowledge_store_item_endpoint(knowledge_store_id, item_id))
     except ApiError as exc:
         if exc.status_code != 404:
             print(f"[cleanup] failed to delete knowledge store item {item_id}: {exc}", flush=True)
 
 
+# Assets
 def get_asset(asset_id):
-    return request_json("get", f"/assets/{asset_id}")
+    return request_json("get", asset_endpoint(asset_id))
 
 
 def asset_exists(asset_id):
@@ -185,27 +245,28 @@ def asset_duration_seconds(asset):
 
 
 def list_asset_indexed_assets(asset_id):
-    payload = request_json("get", f"/assets/{asset_id}/indexed-assets")
+    payload = request_json("get", asset_indexed_assets_endpoint(asset_id))
     data = payload.get("data") if isinstance(payload, dict) else None
     return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
 
 
+# Indexes and indexed assets
 def add_indexed_asset(index_id, asset_id, enable_video_stream=True):
     return request_json(
         "post",
-        f"/indexes/{index_id}/indexed-assets",
+        index_indexed_assets_endpoint(index_id),
         {"asset_id": asset_id, "enable_video_stream": enable_video_stream},
     )
 
 
 def get_indexed_asset(index_id, indexed_asset_id):
-    return request_json("get", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
+    return request_json("get", indexed_asset_endpoint(index_id, indexed_asset_id))
 
 
 def update_indexed_asset_user_metadata(index_id, indexed_asset_id, user_metadata):
     return request_json(
         "patch",
-        f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}",
+        indexed_asset_endpoint(index_id, indexed_asset_id),
         {"user_metadata": user_metadata},
     )
 
@@ -216,7 +277,7 @@ def delete_indexed_asset(index_id, indexed_asset_id):
     if not index_id or not indexed_asset_id:
         return
     try:
-        request_json("delete", f"/indexes/{index_id}/indexed-assets/{indexed_asset_id}")
+        request_json("delete", indexed_asset_endpoint(index_id, indexed_asset_id))
     except ApiError as exc:
         if exc.status_code != 404:
             print(f"[cleanup] failed to delete indexed asset {indexed_asset_id}: {exc}", flush=True)
@@ -226,10 +287,7 @@ def list_indexed_assets(index_id):
     indexed_assets = []
     page = 1
     while page <= INDEXED_ASSET_LIST_MAX_PAGES:
-        path = f"/indexes/{index_id}/indexed-assets"
-        if page > 1:
-            path = f"{path}?page={page}"
-        body = request_json("get", path)
+        body = request_json("get", paged_endpoint(index_indexed_assets_endpoint(index_id), page))
         data = body.get("data")
         if isinstance(data, list):
             indexed_assets.extend(item for item in data if isinstance(item, dict))
@@ -241,6 +299,7 @@ def list_indexed_assets(index_id):
     return indexed_assets
 
 
+# Indexed asset response helpers
 def indexed_asset_with_user_metadata(index_id, indexed_asset):
     indexed_asset_id = response_id(indexed_asset)
     if not indexed_asset_id or indexed_asset_user_metadata(indexed_asset):
@@ -463,6 +522,7 @@ def indexed_asset_index_id(indexed_asset):
     return clean_optional_string(indexed_asset.get("index_id")) or clean_optional_string(indexed_asset.get("indexId"))
 
 
+# Generic response value helpers
 def response_id(value):
     if not isinstance(value, dict):
         return None
@@ -493,6 +553,7 @@ def float_or_none(value):
         return None
 
 
+# Asset uploads
 def upload_asset(file):
     size = stream_size(file.stream)
     if size <= 0:
@@ -547,6 +608,7 @@ def upload_asset_stream(
     return upload_asset_direct(stream, filename, content_type, size, progress=progress)
 
 
+# Upload request internals
 def upload_asset_direct(stream, filename, content_type, size, progress=None):
     boundary = f"sportsjockey-{uuid.uuid4().hex}"
     preamble = (
@@ -584,7 +646,7 @@ def upload_asset_direct(stream, filename, content_type, size, progress=None):
 
     try:
         response = requests.post(
-            f"{TWELVELABS_BASE_URL}/assets",
+            api_url(ASSETS_ENDPOINT),
             headers={
                 **file_headers(),
                 "Content-Type": f"multipart/form-data; boundary={boundary}",
@@ -599,6 +661,7 @@ def upload_asset_direct(stream, filename, content_type, size, progress=None):
     return parse_response(response)
 
 
+# Multipart upload internals
 def upload_asset_multipart(
     stream,
     filename,
@@ -613,7 +676,7 @@ def upload_asset_multipart(
     if not session:
         session = request_json(
             "post",
-            "/assets/multipart-uploads",
+            MULTIPART_UPLOADS_ENDPOINT,
             {
                 "filename": filename,
                 "type": "video" if content_type.startswith("video/") else "file",
@@ -685,7 +748,7 @@ def upload_asset_multipart(
 def request_presigned_urls(upload_id, start, count):
     response = request_json(
         "post",
-        f"/assets/multipart-uploads/{upload_id}/presigned-urls",
+        multipart_upload_presigned_urls_endpoint(upload_id),
         {"start": start, "count": count},
     )
     return {int(entry["chunk_index"]): entry["url"] for entry in response.get("upload_urls", [])}
@@ -724,13 +787,13 @@ def upload_chunk(stream, chunk_size, chunk_index, chunk_length, url, upload_head
 
 
 def report_uploaded_chunks(upload_id, chunks):
-    return request_json("post", f"/assets/multipart-uploads/{upload_id}", {"completed_chunks": chunks})
+    return request_json("post", multipart_upload_endpoint(upload_id), {"completed_chunks": chunks})
 
 
 def wait_for_multipart_completion(upload_id, progress=None):
     status = {}
     for attempt in range(1, MULTIPART_STATUS_ATTEMPTS + 1):
-        status = request_json("get", f"/assets/multipart-uploads/{upload_id}")
+        status = request_json("get", multipart_upload_endpoint(upload_id))
         if status.get("status") == "completed":
             return status
         if status.get("chunks_failed"):
@@ -770,6 +833,7 @@ def sanitize_multipart_session(session):
     return False
 
 
+# Response parsing
 def parse_response(response):
     if response.status_code == 204 or not response.content:
         if response.status_code >= 400:

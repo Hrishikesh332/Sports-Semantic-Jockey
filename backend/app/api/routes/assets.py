@@ -9,8 +9,7 @@ assets_bp = Blueprint("assets", __name__)
 
 @assets_bp.post("/assets")
 def create_asset():
-    asset = upload_twelvelabs_asset(uploaded_file())
-    return jsonify(asset), 201
+    return jsonify(upload_twelvelabs_asset(uploaded_file())), 201
 
 
 @assets_bp.post("/assets/<asset_id>/index")

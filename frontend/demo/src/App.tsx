@@ -5865,8 +5865,8 @@ function StatusStrip({
   }
   if (selectedSearchMoment) {
     return (
-      <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-        <div className="grid gap-4 bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+      <section className="overflow-hidden rounded-md border border-border bg-white shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+        <div className="grid gap-4 bg-white px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Selected video</p>
             <div className="mt-1 flex min-w-0 items-center gap-3">
@@ -5929,8 +5929,8 @@ function StatusStrip({
       reels.fan_experience.clips.length +
       reels.behind_the_scenes.clips.length
     return (
-      <section className="overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-        <div className="grid gap-4 bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+      <section className="overflow-hidden rounded-md border border-border bg-white shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+        <div className="grid gap-4 bg-white px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">Source video</p>
             <div className="mt-1 flex min-w-0 items-center gap-3">
@@ -5952,7 +5952,7 @@ function StatusStrip({
             Discover Videos
           </button>
         </div>
-        <div className="border-t border-border-light bg-card px-5 py-4">
+        <div className="border-t border-border-light bg-white px-5 py-4">
           <div className="flex min-w-0 items-center gap-2">
             <StrandIcon name="document-list" className="h-4 w-4 shrink-0 text-accent" />
             <h3 className="truncate text-base font-semibold text-text-primary">Analysis Summary</h3>

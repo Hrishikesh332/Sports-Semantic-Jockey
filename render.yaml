@@ -4,5 +4,5 @@ services:
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: "gunicorn wsgi:app --bind 0.0.0.0:${PORT:-5000} --timeout 800"
+    startCommand: "gunicorn app:app --bind 0.0.0.0:${PORT:-5000} --timeout 800"
     healthCheckPath: /health

@@ -1,5 +1,6 @@
 import atexit
 import logging
+from datetime import datetime, timezone
 
 import requests
 
@@ -64,6 +65,7 @@ def register_keep_alive(app):
         replace_existing=True,
         max_instances=1,
         coalesce=True,
+        next_run_time=datetime.now(timezone.utc),
         kwargs={"url": url, "timeout_seconds": timeout_seconds},
     )
     scheduler.start()

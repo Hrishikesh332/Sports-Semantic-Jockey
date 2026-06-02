@@ -11,13 +11,13 @@ with Jockey over the configured knowledge base.
 cd backend
 pip install -r requirements.txt
 cp .env.example .env
-flask --app app run --port 5000
+python app.py
 ```
 
 Production command:
 
 ```bash
-gunicorn wsgi:app --bind 0.0.0.0:${PORT:-5000} --timeout 800
+gunicorn app:app --bind 0.0.0.0:${PORT:-5000} --timeout 800
 ```
 
 Render's Python runtime injects a default `GUNICORN_CMD_ARGS` value that binds
@@ -44,7 +44,8 @@ DEFAULT_GAME_REGISTRATIONS_JSON=
 
 `APP_URL` should be the deployed backend URL, for example `https://your-app.example.com`.
 On Render, the backend falls back to `RENDER_EXTERNAL_URL` when `APP_URL` is not
-set. When an app URL is available and the backend is run through `wsgi.py`,
+set. When an app URL is available and the backend is run through `app.py` or
+`gunicorn app:app`,
 APScheduler starts a background keep-alive job and pings the health endpoint
 every 9 minutes. Set `KEEP_ALIVE_URL` only if you need to override the exact URL
 being called.
@@ -151,7 +152,8 @@ app/
 data/games/            local analyzed game registry ignored by git
 data/videos/           local videos ignored by git
 scripts/               smoke tests
-wsgi.py                local entrypoint
+app.py                 local entrypoint
+wsgi.py                backward-compatible entrypoint
 ```
 
 ## Workspace Metadata
@@ -604,7 +606,7 @@ Warm Dashboard highlight + entity metadata for every registered indexed video:
 
 ```bash
 cd backend
-python wsgi.py   # in another terminal
+python app.py   # in another terminal
 
 python3 scripts/warm_dashboard_metadata.py --tag sports
 python3 scripts/warm_dashboard_metadata.py --tag sports --force

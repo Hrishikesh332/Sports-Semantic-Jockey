@@ -1,5 +1,3 @@
-
-
 from app import create_app
 from app.core.config import port
 from app.core.keep_alive import register_keep_alive

@@ -10,5 +10,6 @@ ingestions_bp = Blueprint("ingestions", __name__)
 @ingestions_bp.post("/ingestions")
 def create_ingestion():
     result = run_ingestion(json_body())
-    status_code = 201 if result["status"] == "ready" else 202
-    return jsonify(result), status_code
+    if result["status"] == "ready":
+        return jsonify(result), 201
+    return jsonify(result), 202

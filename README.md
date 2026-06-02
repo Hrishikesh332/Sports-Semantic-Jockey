@@ -97,7 +97,7 @@ HIGHLIGHT_REEL_CACHE_ENABLED=true
 ```bash
 cd backend
 source .venv/bin/activate
-python wsgi.py
+python app.py
 ```
 
 The Flask API runs at `http://127.0.0.1:5000`.
@@ -208,7 +208,8 @@ backend/
     services/            Ingestion, games, highlights, and metadata use cases
   data/                 
   scripts/               Upload, warm metadata, smoke test, and maintenance scripts
-  wsgi.py                Backend entrypoint
+  app.py                 Backend entrypoint
+  wsgi.py                Backward-compatible entrypoint
 ```
 
 

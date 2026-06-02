@@ -17,4 +17,9 @@ def create_app():
     return flask_app
 
 
-app = create_app()
+def __getattr__(name):
+    if name == "app":
+        from wsgi import app as application
+
+        return application
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

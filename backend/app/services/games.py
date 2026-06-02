@@ -70,6 +70,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 GAMES_DIR = ROOT_DIR / "data" / "games"
 VIDEOS_DIR = ROOT_DIR / "data" / "videos"
 THUMBNAILS_DIR = ROOT_DIR / "data" / "thumbnails"
+REELS_DIR = ROOT_DIR / "data" / "reels"
 LOGGER = logging.getLogger(__name__)
 FFMPEG_PRESET = os.environ.get("SPORTS_FFMPEG_PRESET", "ultrafast")
 REEL_CRF = int(os.environ.get("SPORTS_REEL_CRF", "23"))
@@ -2997,9 +2998,18 @@ def generated_assembly_reel(tag, video_name, segments, format_name, assembly_nam
 
     source_slug = slugify_filename(Path(video_name).stem)
     safe_label = slugify_filename(assembly_name or "lane-assembly")
-    content = render_assembly_reel_bytes(source_input, segment_ranges, reel_format)
+    segment_signature = ";".join(
+        f"{start_seconds:.3f}-{end_seconds:.3f}" for start_seconds, end_seconds in segment_ranges
+    )
+    cache_hash = sha256(
+        f"{tag}|{video_name}|{stream_info.get('asset_id')}|hls|assembly-v4-local|{segment_signature}|{format_key}".encode()
+    ).hexdigest()[:16]
+    REELS_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = REELS_DIR / f"{source_slug}-{safe_label}-assembly-{format_key}-{cache_hash}.mp4"
+    if not output_path.exists():
+        render_assembly_reel_to_path(source_input, output_path, segment_ranges, reel_format)
     download_name = f"{source_slug}-{safe_label}-assembly-{reel_format['label'].replace(':', 'x')}.mp4"
-    return content, download_name
+    return output_path, download_name
 
 
 def generated_reel_thumbnail(tag, video_name, time, format_name):
@@ -3015,42 +3025,43 @@ def generated_reel_thumbnail(tag, video_name, time, format_name):
     return render_reel_thumbnail_bytes(source_input, time_seconds, reel_format)
 
 
-def render_assembly_reel_bytes(source_path, segments, reel_format):
+def render_assembly_reel_to_path(source_path, output_path, segments, reel_format):
     if len(segments) == 1:
         start_seconds, end_seconds = segments[0]
-        return render_reel_clip_bytes(
+        render_reel_clip_to_path(
             source_path,
+            output_path,
             start_seconds,
             end_seconds - start_seconds,
             reel_format,
             crf=ASSEMBLY_CRF,
         )
+        return
 
     if len(segments) >= ASSEMBLY_PARALLEL_MIN_SEGMENTS:
         try:
-            return render_assembly_reel_parallel_bytes(source_path, segments, reel_format)
+            render_assembly_reel_parallel_to_path(source_path, output_path, segments, reel_format)
+            return
         except ApiError as parallel_error:
             logging.warning("parallel assembly render failed; trying filter graph: %s", parallel_error)
 
     try:
-        return render_assembly_reel_fast_bytes(source_path, segments, reel_format, include_audio=True)
+        render_assembly_reel_fast_to_path(source_path, output_path, segments, reel_format, include_audio=True)
+        return
     except ApiError as audio_error:
         try:
-            return render_assembly_reel_fast_bytes(source_path, segments, reel_format, include_audio=False)
+            render_assembly_reel_fast_to_path(source_path, output_path, segments, reel_format, include_audio=False)
+            return
         except ApiError as video_error:
             logging.warning(
                 "fast assembly render failed; falling back to parallel export: audio=%s video=%s",
                 audio_error,
                 video_error,
             )
-    return render_assembly_reel_parallel_bytes(source_path, segments, reel_format)
+    render_assembly_reel_parallel_to_path(source_path, output_path, segments, reel_format)
 
 
-def render_assembly_reel(source_path, output_path, segments, reel_format):
-    output_path.write_bytes(render_assembly_reel_bytes(source_path, segments, reel_format))
-
-
-def render_assembly_reel_fast_bytes(source_path, segments, reel_format, include_audio=True):
+def render_assembly_reel_fast_to_path(source_path, output_path, segments, reel_format, include_audio=True):
     width = reel_format["width"]
     height = reel_format["height"]
     input_args = list(FFMPEG_HLS_INPUT_ARGS)
@@ -3100,17 +3111,18 @@ def render_assembly_reel_fast_bytes(source_path, segments, reel_format, include_
     command.extend(ffmpeg_video_encode_args(ASSEMBLY_CRF))
     if include_audio:
         command.extend(ffmpeg_audio_encode_args())
-    command.extend(["-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1"])
+    command.extend(["-movflags", "+faststart", str(output_path)])
 
     total_duration = sum(end - start for start, end in segments)
-    return run_ffmpeg_bytes(
+    run_ffmpeg_file(
         command,
+        output_path,
         timeout=max(180, int(total_duration * 3) + len(segments) * 8 + 45),
         error_prefix=f"assembly {'audio/video' if include_audio else 'video-only'} export failed",
     )
 
 
-def render_assembly_reel_parallel_bytes(source_path, segments, reel_format):
+def render_assembly_reel_parallel_to_path(source_path, output_path, segments, reel_format):
     workers = min(ASSEMBLY_SEGMENT_WORKERS, len(segments))
     with tempfile.TemporaryDirectory(prefix="sports-jockey-assembly-") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
@@ -3118,26 +3130,26 @@ def render_assembly_reel_parallel_bytes(source_path, segments, reel_format):
         def render_segment(index_segment):
             index, (start_seconds, end_seconds) = index_segment
             segment_path = temp_dir / f"segment-{index:03d}.mp4"
-            segment_path.write_bytes(
-                render_reel_clip_bytes(
-                    source_path,
-                    start_seconds,
-                    end_seconds - start_seconds,
-                    reel_format,
-                    crf=ASSEMBLY_CRF,
-                )
+            render_reel_clip_to_path(
+                source_path,
+                segment_path,
+                start_seconds,
+                end_seconds - start_seconds,
+                reel_format,
+                crf=ASSEMBLY_CRF,
             )
             return index, segment_path
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             rendered = list(executor.map(render_segment, enumerate(segments)))
         segment_paths = [path for _, path in sorted(rendered, key=lambda item: item[0])]
-        return concat_segment_files_bytes(segment_paths)
+        concat_segment_files_to_path(segment_paths, output_path)
 
 
-def concat_segment_files_bytes(segment_paths):
+def concat_segment_files_to_path(segment_paths, output_path):
     if len(segment_paths) == 1:
-        return segment_paths[0].read_bytes()
+        shutil.copyfile(segment_paths[0], output_path)
+        return
 
     with tempfile.TemporaryDirectory(prefix="sports-jockey-concat-") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
@@ -3161,17 +3173,17 @@ def concat_segment_files_bytes(segment_paths):
             "-c",
             "copy",
             "-movflags",
-            "frag_keyframe+empty_moov+default_base_moof",
-            "-f",
-            "mp4",
-            "pipe:1",
+            "+faststart",
+            str(output_path),
         ]
         try:
-            return run_ffmpeg_bytes(
+            run_ffmpeg_file(
                 copy_command,
+                output_path,
                 timeout=max(60, len(segment_paths) * 5),
                 error_prefix="assembly concat failed",
             )
+            return
         except ApiError:
             pass
 
@@ -3191,25 +3203,16 @@ def concat_segment_files_bytes(segment_paths):
             "+genpts",
             *ffmpeg_video_encode_args(ASSEMBLY_CRF),
             *ffmpeg_audio_encode_args(),
-            "-f",
-            "mp4",
             "-movflags",
-            "frag_keyframe+empty_moov+default_base_moof",
-            "pipe:1",
+            "+faststart",
+            str(output_path),
         ]
-        return run_ffmpeg_bytes(
+        run_ffmpeg_file(
             reencode_command,
+            output_path,
             timeout=max(120, len(segment_paths) * 20),
             error_prefix="assembly export failed",
         )
-
-
-def render_assembly_reel_segmented_bytes(source_path, segments, reel_format):
-    return render_assembly_reel_parallel_bytes(source_path, segments, reel_format)
-
-
-def render_assembly_reel_segmented(source_path, output_path, segments, reel_format):
-    output_path.write_bytes(render_assembly_reel_segmented_bytes(source_path, segments, reel_format))
 
 
 def render_reel_clip_bytes(source_path, start_seconds, duration, reel_format, crf=REEL_CRF):
@@ -3249,8 +3252,40 @@ def render_reel_clip_bytes(source_path, start_seconds, duration, reel_format, cr
     )
 
 
-def render_reel_clip(source_path, output_path, start_seconds, duration, reel_format):
-    output_path.write_bytes(render_reel_clip_bytes(source_path, start_seconds, duration, reel_format))
+def render_reel_clip_to_path(source_path, output_path, start_seconds, duration, reel_format, crf=REEL_CRF):
+    width = reel_format["width"]
+    height = reel_format["height"]
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        *FFMPEG_HLS_INPUT_ARGS,
+        "-ss",
+        f"{start_seconds:.3f}",
+        "-t",
+        f"{duration:.3f}",
+        "-i",
+        str(source_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-vf",
+        reel_scale_filter(width, height),
+        *ffmpeg_video_encode_args(crf),
+        *ffmpeg_audio_encode_args(),
+        "-movflags",
+        "+faststart",
+        str(output_path),
+    ]
+    run_ffmpeg_file(
+        command,
+        output_path,
+        timeout=max(90, int(duration * 2) + 25),
+        error_prefix="reel export failed",
+    )
 
 
 def render_reel_thumbnail_bytes(source_path, time_seconds, reel_format):
@@ -3308,10 +3343,6 @@ def ffmpeg_audio_encode_args():
     return ["-c:a", "aac", "-b:a", "128k"]
 
 
-def render_reel_thumbnail(source_path, output_path, time_seconds, reel_format):
-    output_path.write_bytes(render_reel_thumbnail_bytes(source_path, time_seconds, reel_format))
-
-
 def run_ffmpeg_bytes(command, timeout, error_prefix):
     result = subprocess.run(
         command,
@@ -3327,6 +3358,24 @@ def run_ffmpeg_bytes(command, timeout, error_prefix):
             detail = "ffmpeg failed"
         raise ApiError(f"{error_prefix}: {detail}", 500)
     return result.stdout
+
+
+def run_ffmpeg_file(command, output_path, timeout, error_prefix):
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0 or not output_path.exists() or output_path.stat().st_size <= 0:
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        detail = (result.stderr.decode("utf-8", errors="replace") if result.stderr else "").strip()
+        if not detail:
+            detail = "ffmpeg failed"
+        raise ApiError(f"{error_prefix}: {detail}", 500)
 
 
 def parse_reel_seconds(value, field_name):
