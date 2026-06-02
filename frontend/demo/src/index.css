@@ -68,3 +68,37 @@ body {
 .workspace-video-carousel-track {
   scroll-snap-type: x proximity;
 }
+
+.semantic-lane-shell {
+  isolation: isolate;
+}
+
+.semantic-lane-shell::before,
+.semantic-lane-shell::after {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 0;
+  height: 2px;
+  border-radius: 999px;
+  pointer-events: none;
+  content: '';
+  background:
+    linear-gradient(
+      90deg,
+      #43e63d 0%,
+      #dff43f 28%,
+      #ffb35c 58%,
+      #ff8bc7 100%
+    );
+  opacity: 0.95;
+  box-shadow: 0 1px 10px rgba(255, 139, 199, 0.16);
+}
+
+.semantic-lane-shell::before {
+  top: 0;
+}
+
+.semantic-lane-shell::after {
+  bottom: 0;
+}

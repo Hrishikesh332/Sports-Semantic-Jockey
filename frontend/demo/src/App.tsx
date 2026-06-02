@@ -64,7 +64,7 @@ type HighlightReels = {
 
 type CategoryKey = 'best_plays' | 'emotional_moments' | 'fan_experience' | 'behind_the_scenes'
 type MapCategoryKey = 'standard_stats' | CategoryKey
-type AssemblyModeKey = 'wsc_baseline' | 'twelvelabs_enhanced' | 'hyper_personalized'
+type AssemblyModeKey = 'wsc_baseline' | 'twelvelabs_enhanced'
 type ViewKey = 'discover' | 'workspace' | 'jockey' | 'overview'
 type ReelFormatKey = '9x16' | '16x9' | '1x1' | '4x5'
 type HighlightReelRequestOptions = { silent?: boolean }
@@ -512,7 +512,6 @@ const categories: Array<{ key: CategoryKey; label: string; icon: string }> = [
 const assemblyModes: Array<{ key: AssemblyModeKey; label: string; detail: string; icon: string }> = [
   { key: 'wsc_baseline', label: 'Stats Baseline', detail: 'Event-feed baseline', icon: 'usage' },
   { key: 'twelvelabs_enhanced', label: 'TwelveLabs Enhanced', detail: 'Stats plus Jockey semantic lift', icon: 'vision' },
-  { key: 'hyper_personalized', label: 'Hyper-Personalized', detail: 'One lane, social-first', icon: 'filter' },
 ]
 
 const jockeyProducerSkills: Array<{ key: string; label: string; icon: string; color: string; tint: string; prompt: string }> = [
@@ -580,8 +579,8 @@ const tutorialSteps: TutorialStep[] = [
     id: 'marengo-search',
     view: 'discover',
     targetId: 'marengo-search',
-    title: '1. Discover with Marengo',
-    body: 'Search the indexed video by visual and audio meaning. Marengo finds candidate moments before any full-video workflow is needed.',
+    title: '1. Search with Marengo',
+    body: 'Search across the indexed videos by text. Marengo finds candidate moments.',
     actionLabel: 'Run sample search',
   },
   {
@@ -597,7 +596,7 @@ const tutorialSteps: TutorialStep[] = [
     view: 'workspace',
     targetId: 'selected-clip-analysis',
     title: '3. Selected Clip Analysis',
-    body: 'This panel keeps the response grounded to the selected clip: video segment, tone tags, action, score context, participants, evidence, and save-to-metadata.',
+    body: 'This panel keeps the response grounded to the selected clip - video segment, tone tags, action, score context, participants, evidence, review notes and editorial use suggestions.',
   },
   {
     id: 'source-video',
@@ -1278,7 +1277,7 @@ function App() {
   }
   const selectWorkspaceLane = (categoryKey: CategoryKey) => {
     selectCategoryTab(categoryKey)
-    if (assemblyMode === 'wsc_baseline') setAssemblyMode('hyper_personalized')
+    if (assemblyMode === 'wsc_baseline') setAssemblyMode('twelvelabs_enhanced')
   }
   const navigate = (nextView: ViewKey) => {
     setView(nextView)
@@ -2144,6 +2143,11 @@ function ProducerCockpit({
   const showExplainabilityRail = Boolean(!isSelectedClipMode && reels && hasHighlightAnalysis)
   const showSplitComparison = Boolean(!isSelectedClipMode && reels && hasHighlightAnalysis)
   const [explainRailCollapsed, setExplainRailCollapsed] = useState(false)
+  const [assemblyPlayback, setAssemblyPlayback] = useState({ current: 0, duration: 0 })
+
+  useEffect(() => {
+    setAssemblyPlayback({ current: 0, duration: 0 })
+  }, [assemblyMode, selectedGame?.tag, activeVideoName, reels])
 
   const handleAssemblyModeChange = (mode: AssemblyModeKey) => {
     onAssemblyModeChange(mode)
@@ -2252,7 +2256,18 @@ function ProducerCockpit({
 
           {showProductionTools && selectedGame && reels && (
             <section id="assembly-highlights" className="flex min-w-0 scroll-mt-[calc(var(--sj-explainability-top)+24px)] flex-col gap-4">
-              <ProductionSection icon="play-next" title="Assembly Panel" detail="All semantic lanes clubbed into one playable video">
+              <ProductionSection
+                icon="play-boxed"
+                title="Assembly Highlight Panel"
+                detail="All semantic lanes clubbed into one playable video"
+                aside={
+                  assemblyPlayback.duration > 0 ? (
+                    <span className="inline-flex h-8 shrink-0 items-center rounded-sm border border-border-light bg-surface px-2.5 font-mono text-xs font-semibold text-text-secondary">
+                      {formatSeconds(Math.round(assemblyPlayback.current))} / {formatSeconds(Math.round(assemblyPlayback.duration))}
+                    </span>
+                  ) : null
+                }
+              >
                 <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-6">
                   <ReelSequencePlayer
                     variant="sidecar"
@@ -2263,6 +2278,7 @@ function ProducerCockpit({
                     selectedLaneKey={assemblyMode === 'wsc_baseline' ? 'standard_stats' : selectedCategory}
                     selectedClipIndex={assemblyMode === 'wsc_baseline' ? selectedStandardClipIndex : selectedEnhancedClipIndex}
                     onSelect={onSelectSignal}
+                    onPlaybackMeta={setAssemblyPlayback}
                   />
                 </div>
               </ProductionSection>
@@ -2417,10 +2433,9 @@ function WorkspaceLaneBar({
     <section
       ref={measureRef}
       data-tour-id="semantic-lane"
-      className="sticky top-[var(--sj-header-height)] z-40 w-full border-y border-x-0 bg-surface px-4 py-2 shadow-[0_8px_18px_rgba(29,28,27,0.08)] sm:px-6"
-      style={{ borderColor: activeColor.border }}
+      className="semantic-lane-shell sticky top-[var(--sj-header-height)] z-40 w-full border-y border-transparent bg-surface px-4 py-2 shadow-[0_8px_18px_rgba(29,28,27,0.08)] sm:px-6"
     >
-      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+      <div className="relative z-10 mx-auto flex w-full max-w-[1440px] flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-2">
           <span
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border"
@@ -2487,21 +2502,28 @@ function ProductionSection({
   icon,
   title,
   detail,
+  aside,
   children,
 }: {
   icon: string
   title: string
   detail: string
+  aside?: ReactNode
   children: ReactNode
 }) {
   return (
     <section className="min-w-0 border-t border-border-light pt-4">
-      <div className="flex min-w-0 items-center gap-2 px-1">
-        <StrandIcon name={icon} className="h-4 w-4 shrink-0 text-accent" />
-        <div className="min-w-0">
-          <h2 className="truncate text-base font-semibold text-text-primary">{title}</h2>
-          <p className="mt-0.5 truncate text-sm text-text-secondary">{detail}</p>
+      <div className="flex min-w-0 items-start justify-between gap-3 px-1">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent/70 bg-accent-light text-brand-charcoal shadow-[0_6px_16px_rgba(0,220,130,0.12)]">
+            <StrandIcon name={icon} className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="truncate text-base font-semibold text-text-primary">{title}</h2>
+            <p className="mt-0.5 truncate text-sm text-text-secondary">{detail}</p>
+          </div>
         </div>
+        {aside}
       </div>
       <div className="mt-4 min-w-0">
         {children}
@@ -2543,9 +2565,7 @@ function SplitComparisonStage({
   const rightTitle =
     assemblyMode === 'wsc_baseline'
       ? 'Event Feed Baseline'
-      : assemblyMode === 'hyper_personalized'
-        ? category?.title || 'Hyper-Personalized Lane'
-        : 'TwelveLabs Enhanced Cut'
+      : 'TwelveLabs Enhanced Cut'
   const rightEyebrow =
     assemblyMode === 'wsc_baseline'
       ? 'Stats Only'
@@ -2561,7 +2581,7 @@ function SplitComparisonStage({
       <div className="grid gap-3 px-5 pb-4 pt-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
         <div className="flex min-w-0 items-start gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-accent/70 bg-accent-light text-brand-charcoal shadow-[0_6px_16px_rgba(0,220,130,0.12)]">
-            <StrandIcon name="vision" className="h-5 w-5" />
+            <StrandIcon name="grid" className="h-4 w-4" />
           </span>
           <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">Split-view Player</p>
@@ -2662,7 +2682,7 @@ function ComparisonPlayer({
   const metaLabel = clip ? `${sourceLabel(clip.source_type)} · ${cleanClipTypeLabel(clip.clip_type)}` : 'Source video'
 
   return (
-    <article className="min-w-0 overflow-hidden rounded-md border border-border-light bg-surface shadow-[0_6px_18px_rgba(29,28,27,0.045)]">
+    <article className="min-w-0 overflow-hidden rounded-md border border-border-light bg-transparent">
       <div className="px-4 py-3.5">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0">
@@ -2711,13 +2731,11 @@ function ComparisonPlayer({
           variant="preview"
         />
       )}
-      <div className="px-3 pb-3">
-        <div className="min-w-0 rounded-md bg-card px-3 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{metaLabel}</p>
-          <p className="mt-2 line-clamp-3 text-sm font-semibold leading-5 text-text-primary">
-            {description || 'No grounded clip description returned yet.'}
-          </p>
-        </div>
+      <div className="border-t border-border-light px-4 py-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{metaLabel}</p>
+        <p className="mt-2 line-clamp-3 text-sm font-semibold leading-5 text-text-primary">
+          {description || 'No grounded clip description returned yet.'}
+        </p>
       </div>
     </article>
   )
@@ -2744,6 +2762,7 @@ function ReelSequencePlayer({
   selectedLaneKey,
   selectedClipIndex,
   onSelect,
+  onPlaybackMeta,
 }: {
   variant?: 'standard' | 'sidecar'
   game: Game
@@ -2753,6 +2772,7 @@ function ReelSequencePlayer({
   selectedLaneKey: MapCategoryKey
   selectedClipIndex: number
   onSelect?: (categoryKey: MapCategoryKey, index: number) => void
+  onPlaybackMeta?: (meta: { current: number; duration: number }) => void
 }) {
   const [activeIndex, setActiveIndex] = useState(0)
   const assemblyVideoRef = useRef<HTMLVideoElement | null>(null)
@@ -2994,20 +3014,33 @@ function ReelSequencePlayer({
       onSelect?.(segment.laneKey, segment.sourceIndex)
     }
   }
+  useEffect(() => {
+    onPlaybackMeta?.({
+      current: assemblyCurrentSeconds,
+      duration: assemblyDurationSeconds,
+    })
+  }, [assemblyCurrentSeconds, assemblyDurationSeconds, onPlaybackMeta])
+
+  const playbackClock = (
+    <span className="shrink-0 font-mono text-sm font-semibold text-text-tertiary">
+      {formatSeconds(Math.round(assemblyCurrentSeconds))} / {formatSeconds(Math.round(assemblyDurationSeconds))}
+    </span>
+  )
+
   return (
     <section className="w-full max-w-full min-w-0 overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="grid gap-4 bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <StrandIcon name="play-next" className="h-4 w-4 text-accent" />
-            <h2 className="text-base font-semibold text-text-primary">Assembly Lane Player</h2>
+      {!compact && (
+        <div className="grid gap-4 bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <StrandIcon name="play-boxed" className="h-4 w-4 text-accent" />
+              <h2 className="text-base font-semibold text-text-primary">Assembly Lane Player</h2>
+            </div>
+            <p className="mt-1 text-sm text-text-secondary">All semantic lane segments play together as one stitched preview.</p>
           </div>
-          {!compact && <p className="mt-1 text-sm text-text-secondary">All semantic lane segments play together as one stitched preview.</p>}
+          {playbackClock}
         </div>
-        <span className="text-sm font-semibold text-text-tertiary">
-          {formatSeconds(Math.round(assemblyCurrentSeconds))} / {formatSeconds(Math.round(assemblyDurationSeconds))}
-        </span>
-      </div>
+      )}
       <div className="h-1 bg-border-light">
         <span className="block h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
       </div>
@@ -3741,7 +3774,7 @@ function WorkspaceExplainabilityRail({
           title="Expand explainability"
         >
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border border-accent bg-accent-light text-brand-charcoal">
-            <StrandIcon name="explainability" className="h-4 w-4" />
+            <StrandIcon name="checkmark" className="h-4 w-4" />
           </span>
           <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] font-semibold uppercase tracking-[0.08em]">
             Explainability
@@ -3757,7 +3790,7 @@ function WorkspaceExplainabilityRail({
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent/70 bg-accent-light text-brand-charcoal shadow-[0_6px_16px_rgba(0,220,130,0.12)]">
-              <StrandIcon name="explainability" className="h-5 w-5" />
+              <StrandIcon name="checkmark" className="h-4 w-4" />
             </span>
             <div className="min-w-0">
               <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-text-tertiary">Evidence trace</p>
@@ -5864,39 +5897,42 @@ function SelectedClipAnalysisSection({
       id="selected-clip-analysis"
       data-tour-id="selected-clip-analysis"
       tabIndex={-1}
-      className="scroll-mt-40 overflow-hidden rounded-md border border-border bg-surface shadow-[0_8px_24px_rgba(29,28,27,0.045)] outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+      className="scroll-mt-40 overflow-hidden rounded-md border border-brand-charcoal/50 bg-white shadow-[0_12px_30px_rgba(29,28,27,0.055)] outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
     >
-      <div className="grid gap-3 border-b border-border-light bg-card px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <StrandIcon name="analyze" className="h-4 w-4 shrink-0 text-accent" />
-            <h3 className="truncate text-base font-semibold text-text-primary">Pegasus 1.5 Selected Clip Analysis</h3>
+      <div className="grid gap-3 bg-white px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-brand-charcoal/50 bg-white text-brand-charcoal">
+            <StrandIcon name="analyze" className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-text-tertiary">Pegasus 1.5</p>
+            <h3 className="truncate text-base font-semibold text-text-primary">Selected Clip Analysis</h3>
+            <p className="mt-1 truncate text-sm font-medium text-text-secondary">
+              {searchMoment.title}
+            </p>
           </div>
-          <p className="mt-1 truncate text-sm font-medium text-text-secondary">
-            {searchMoment.title}
-          </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <span className="rounded-sm border border-border-light bg-card px-2 py-1 font-mono text-[11px] font-semibold text-text-tertiary">
+          <span className="rounded-sm border border-brand-charcoal bg-white px-2 py-1 font-mono text-[11px] font-semibold text-text-tertiary">
             {searchMoment.startTime}{searchMoment.endTime ? ` - ${searchMoment.endTime}` : ''}
           </span>
           {analysis && (
-            <span className="rounded-sm border border-accent/30 bg-accent-light px-2 py-1 font-mono text-[11px] font-semibold text-brand-charcoal">
+            <span className="rounded-sm border border-brand-charcoal/50 bg-white px-2 py-1 font-mono text-[11px] font-semibold text-brand-charcoal">
               Conf. {confidenceLabel(analysis.confidence)}
             </span>
           )}
         </div>
       </div>
 
-      <div className="grid min-w-0 xl:grid-cols-[minmax(320px,0.72fr)_minmax(0,1.28fr)] xl:items-start">
-        <div className="min-w-0 bg-card xl:sticky xl:top-24 xl:border-r xl:border-border-light">
-          <div className="flex items-center justify-between gap-2 border-b border-border-light px-3 py-2">
+      <div className="grid min-w-0 xl:grid-cols-[minmax(330px,0.72fr)_minmax(0,1.28fr)] xl:items-start">
+        <div className="min-w-0 bg-white xl:sticky xl:top-[calc(var(--sj-explainability-top)+8px)]">
+          <div className="flex items-center justify-between gap-2 px-3 py-2">
             <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Selected Search Clip</p>
-            <span className="shrink-0 rounded-sm bg-surface px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
+            <span className="shrink-0 rounded-sm border border-brand-charcoal bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
               {searchMoment.startTime}{searchMoment.endTime ? ` - ${searchMoment.endTime}` : ''}
             </span>
           </div>
-          <div className="aspect-video bg-card">
+          <div className="aspect-video bg-white">
             {clipStreamInfoUrl ? (
               <TwelveLabsVideoPlayer
                 key={`${searchMoment.videoName}-${searchMoment.startTime || 'start'}-${searchMoment.endTime || 'end'}`}
@@ -5914,48 +5950,36 @@ function SelectedClipAnalysisSection({
               </div>
             )}
           </div>
-          <div className="border-t border-border-light px-3 py-3">
-            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-              <div className="min-w-0">
-                <p className="truncate text-xs font-semibold text-text-primary">{searchMoment.title}</p>
-                <p className="mt-0.5 truncate text-[11px] font-semibold text-text-tertiary">{searchMoment.videoName}</p>
-              </div>
-              {onBackToSearch ? (
-                <button
-                  type="button"
-                  onClick={onBackToSearch}
-                  className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-secondary transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
-                >
-                  <StrandIcon name="arrow-box-left" className="h-4 w-4" />
-                  Back to Search
-                </button>
-              ) : null}
-            </div>
+          <div className="bg-white px-3 py-3">
+            <SelectedClipContextPanel
+              searchMoment={searchMoment}
+              analysis={analysis}
+              loading={loading}
+              onBackToSearch={onBackToSearch}
+            />
             {showVideoMetadataPanel && (
-            <div className="mt-3">
-              <SelectedClipVideoMetadataPanel
-                metadata={workspaceMetadata}
-                loading={workspaceMetadataLoading}
-                error={workspaceMetadataError}
-                searchMoment={searchMoment}
-                analysis={analysis}
-              />
-            </div>
+              <div className="mt-3">
+                <SelectedClipVideoMetadataPanel
+                  metadata={workspaceMetadata}
+                  loading={workspaceMetadataLoading}
+                  error={workspaceMetadataError}
+                  searchMoment={searchMoment}
+                  analysis={analysis}
+                />
+              </div>
             )}
           </div>
         </div>
 
-        <div className="grid min-w-0 gap-3 p-3">
+        <div className="grid min-w-0 gap-3 bg-white p-3">
           <section className="min-w-0">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="flex min-w-0 items-center gap-2">
-                <StrandIcon name="vision" className="h-4 w-4 shrink-0 text-accent" />
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-brand-charcoal/50 bg-white text-brand-charcoal">
+                  <StrandIcon name="vision" className="h-3.5 w-3.5" />
+                </span>
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-text-primary">Pegasus 1.5 Response</p>
-                  <p className="inline-flex max-w-full items-center gap-1 truncate rounded-sm border border-border-light bg-surface px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
-                    <StrandIcon name="checkmark" className="h-3 w-3 text-accent" />
-                    Selected clip only — no whole-video Jockey analysis
-                  </p>
                 </div>
               </div>
               <SelectedClipAnalysisSaveButton game={game} searchMoment={searchMoment} analysis={analysis} />
@@ -5965,18 +5989,14 @@ function SelectedClipAnalysisSection({
             ) : analysis ? (
               <div className="grid gap-3">
                 <SelectedClipNarrative analysis={analysis} />
-                <div className="grid gap-2 2xl:grid-cols-[minmax(0,1fr)_minmax(260px,0.82fr)]">
-                  <div className="grid min-w-0 gap-2 sm:grid-cols-2">
-                    <SelectedClipToneTags value={analysis.emotional_tone} />
-                    <SelectedClipActionSignal value={analysis.key_action} />
-                    <SelectedClipScoreSignal value={analysis.score_context} />
-                  </div>
+                <SelectedClipSignalBoard analysis={analysis} />
+                <div className="grid gap-2 2xl:grid-cols-[minmax(0,0.92fr)_minmax(260px,0.72fr)]">
+                  <SelectedClipTagShelf
+                    momentTypes={analysis.moment_types}
+                    producerTags={analysis.tags}
+                    recommendedFormats={analysis.recommended_formats}
+                  />
                   <SelectedClipParticipants participants={analysis.participants} />
-                </div>
-                <div className="grid gap-2 lg:grid-cols-3">
-                  <SelectedClipTagGroup icon="flame" label="Moment types" values={analysis.moment_types} />
-                  <SelectedClipTagGroup icon="filter" label="Producer tags" values={analysis.tags} />
-                  <SelectedClipTagGroup icon="devices" label="Recommended formats" values={analysis.recommended_formats} />
                 </div>
                 <div className="grid gap-2 xl:grid-cols-[minmax(220px,0.72fr)_minmax(0,1.28fr)]">
                   <div className="grid min-w-0 gap-2">
@@ -5996,6 +6016,64 @@ function SelectedClipAnalysisSection({
           </section>
         </div>
       </div>
+    </section>
+  )
+}
+
+function SelectedClipContextPanel({
+  searchMoment,
+  analysis,
+  loading,
+  onBackToSearch,
+}: {
+  searchMoment: SearchMoment
+  analysis?: SelectedClipAnalysis
+  loading: boolean
+  onBackToSearch?: () => void
+}) {
+  const rangeLabel = `${searchMoment.startTime}${searchMoment.endTime ? ` - ${searchMoment.endTime}` : ''}`
+  const queryLabel = cleanString(searchMoment.query) || cleanString(searchMoment.title) || 'Search result'
+  const statusLabel = loading ? 'Pegasus reading' : analysis ? `Confidence ${confidenceLabel(analysis.confidence)}` : 'Ready'
+  const facts = [
+    { icon: 'search-v2', label: 'Search', value: queryLabel },
+    { icon: 'hourglass', label: 'Range', value: rangeLabel },
+    { icon: 'document', label: 'Source', value: cleanVideoCardTitle(searchMoment.videoName) },
+    { icon: analysis ? 'checkmark' : loading ? 'spinner' : 'info', label: 'Status', value: statusLabel, loading },
+  ]
+
+  return (
+    <section className="min-w-0">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Clip context</p>
+          <h4 className="mt-1 line-clamp-2 text-sm font-semibold leading-5 text-text-primary">{searchMoment.title}</h4>
+        </div>
+        {onBackToSearch ? (
+          <button
+            type="button"
+            onClick={onBackToSearch}
+            className="inline-flex h-8 shrink-0 items-center rounded-md border border-border-light bg-card px-2.5 text-xs font-semibold text-text-secondary transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+          >
+            Search
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+        {facts.map((fact) => (
+          <div key={fact.label} className="min-w-0 rounded-md border border-border-light bg-card px-2.5 py-2">
+            <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{fact.label}</p>
+            <p className="mt-0.5 truncate text-xs font-semibold text-text-primary">{fact.value}</p>
+          </div>
+        ))}
+      </div>
+      {analysis?.key_action ? (
+        <div className="mt-3 rounded-md border border-accent/35 bg-card px-3 py-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-brand-charcoal">Key action</p>
+          </div>
+          <p className="mt-1 line-clamp-3 text-sm font-semibold leading-5 text-text-primary">{analysis.key_action}</p>
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -6059,23 +6137,23 @@ function SelectedClipVideoMetadataPanel({
     <section className="rounded-md border border-border-light bg-card px-3 py-2.5">
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <StrandIcon name="document-list" className="h-4 w-4 shrink-0 text-accent" />
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-text-primary">Whole-video metadata</p>
             <p className="truncate text-[11px] font-semibold text-text-tertiary">{metadata?.video_name || searchMoment.videoName}</p>
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-          <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+          <span className="rounded-sm border border-border-light bg-card px-2 py-1 text-[11px] font-semibold text-text-tertiary">
             {loading ? 'Loading' : error ? 'Unavailable' : hasMetadata ? 'Loaded' : 'Pending'}
           </span>
-          <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+          <span className="rounded-sm border border-border-light bg-card px-2 py-1 text-[11px] font-semibold text-text-tertiary">
             {loading ? '...' : `${total} saved`}
           </span>
-          <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+          <span className="rounded-sm border border-border-light bg-card px-2 py-1 text-[11px] font-semibold text-text-tertiary">
             {loading ? '...' : `${counts.clip_analysis ?? clipItems.length} clips`}
           </span>
-          <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-[11px] font-semibold text-text-tertiary">
+          <span className="rounded-sm border border-border-light bg-card px-2 py-1 text-[11px] font-semibold text-text-tertiary">
             {loading ? '...' : `${counts.jockey_turn ?? turnItems.length} chats`}
           </span>
         </div>
@@ -6089,15 +6167,12 @@ function SelectedClipVideoMetadataPanel({
             className={[
               'mt-2 rounded-sm border px-2.5 py-2',
               clipStatus.tone === 'ready'
-                ? 'border-accent/35 bg-accent-light text-brand-charcoal'
-                : 'border-border-light bg-surface text-text-secondary',
+                ? 'border-accent/35 bg-card text-brand-charcoal'
+                : 'border-border-light bg-card text-text-secondary',
             ].join(' ')}
           >
             <div className="flex min-w-0 items-start gap-2">
-              <StrandIcon
-                name={clipStatus.icon}
-                className={['mt-0.5 h-3.5 w-3.5', clipStatus.tone === 'loading' ? 'animate-spin text-accent' : ''].join(' ')}
-              />
+              <span className={['mt-2 h-1.5 w-1.5 shrink-0 rounded-full', clipStatus.tone === 'ready' ? 'bg-accent' : 'bg-border'].join(' ')} />
               <div className="min-w-0">
                 <p className="text-xs font-semibold">{clipStatus.label}</p>
                 <p className="mt-0.5 text-xs leading-5 opacity-80">{clipStatus.detail}</p>
@@ -6107,7 +6182,6 @@ function SelectedClipVideoMetadataPanel({
 
           {!loading && latestItem && latestSummary && (
             <div className="mt-2 flex min-w-0 items-center gap-2 text-[11px] font-semibold text-text-tertiary">
-              <StrandIcon name={latestSummary.icon} className="h-3.5 w-3.5 shrink-0 text-accent" />
               <span className="shrink-0">Latest</span>
               <span className="min-w-0 truncate text-text-secondary">{latestSummary.title}</span>
               {savedWorkspaceRange(latestItem) ? <span className="shrink-0 font-mono">{savedWorkspaceRange(latestItem)}</span> : null}
@@ -6121,7 +6195,7 @@ function SelectedClipVideoMetadataPanel({
 
 function SelectedClipAnalysisLoader() {
   return (
-    <div className="rounded-md border border-border-light bg-surface px-3 py-3">
+    <div className="rounded-md border border-border-light bg-card px-3 py-3">
       <div className="flex items-start gap-3">
         <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent/30 bg-accent-light text-brand-charcoal">
           <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
@@ -6148,17 +6222,15 @@ function SelectedClipAnalysisLoader() {
 function SelectedClipNarrative({ analysis }: { analysis: SelectedClipAnalysis }) {
   const primary = analysis.description.trim()
   const rows = [
-    { label: 'Producer angle', icon: 'document-list', value: analysis.producer_summary },
+    { label: 'Producer angle', icon: 'idea', value: analysis.producer_summary },
     { label: 'Story arc', icon: 'play-next', value: analysis.story_arc },
     { label: 'Editorial use', icon: 'share', value: analysis.editorial_use },
   ].filter((row) => row.value.trim())
 
   return (
-    <section aria-label="Selected clip narrative" className="rounded-md border border-border-light bg-surface px-3 py-3">
+    <section aria-label="Selected clip narrative" className="rounded-md border border-border-light bg-card px-3 py-3 shadow-[0_1px_2px_rgba(29,28,27,0.035)]">
       <div className="flex min-w-0 items-center gap-2">
-        <span className="flex h-7 w-7 items-center justify-center rounded-sm border border-border-light bg-card text-accent">
-          <StrandIcon name="analyze" className="h-3.5 w-3.5" />
-        </span>
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Clip story</p>
           <h4 className="truncate text-sm font-semibold text-text-primary">Pegasus read of the selected timestamp</h4>
@@ -6169,8 +6241,7 @@ function SelectedClipNarrative({ analysis }: { analysis: SelectedClipAnalysis })
         <div className="mt-3 grid gap-2 lg:grid-cols-3">
           {rows.map((row) => (
             <article key={row.label} className="min-w-0 border-l border-border-light pl-3">
-              <div className="flex min-w-0 items-center gap-1.5">
-                <StrandIcon name={row.icon} className="h-3.5 w-3.5 text-accent" />
+              <div className="flex min-w-0 items-center">
                 <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{row.label}</p>
               </div>
               <p className="mt-1 text-xs leading-5 text-text-secondary">{row.value}</p>
@@ -6182,18 +6253,91 @@ function SelectedClipNarrative({ analysis }: { analysis: SelectedClipAnalysis })
   )
 }
 
+function SelectedClipSignalBoard({ analysis }: { analysis: SelectedClipAnalysis }) {
+  return (
+    <section className="min-w-0 rounded-md border border-border-light bg-card px-3 py-3 shadow-[0_1px_2px_rgba(29,28,27,0.035)]">
+      <div className="mb-2 flex min-w-0 items-center">
+        <div className="min-w-0">
+          <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Signal readout</p>
+        </div>
+      </div>
+      <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+        <SelectedClipToneTags value={analysis.emotional_tone} />
+        <SelectedClipActionSignal value={analysis.key_action} />
+        <SelectedClipScoreSignal value={analysis.score_context} />
+      </div>
+    </section>
+  )
+}
+
+function SelectedClipTagShelf({
+  momentTypes,
+  producerTags,
+  recommendedFormats,
+}: {
+  momentTypes: string[]
+  producerTags: string[]
+  recommendedFormats: string[]
+}) {
+  const groups = [
+    { icon: 'flame', label: 'Moment types', values: momentTypes, accent: true },
+    { icon: 'filter', label: 'Producer tags', values: producerTags },
+    { icon: 'devices', label: 'Recommended formats', values: recommendedFormats },
+  ].map((group) => ({
+    ...group,
+    values: group.values.filter((value) => value.trim()),
+  })).filter((group) => group.values.length)
+
+  if (!groups.length) return null
+
+  return (
+    <section className="min-w-0 rounded-md border border-border-light bg-card px-3 py-3 shadow-[0_1px_2px_rgba(29,28,27,0.035)]">
+      <div className="flex min-w-0 items-center">
+        <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Tags and formats</p>
+      </div>
+      <div className="mt-3 grid gap-3">
+        {groups.map((group) => (
+          <div key={group.label} className="min-w-0">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{group.label}</p>
+              <span className="rounded-sm border border-border-light bg-card px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
+                {group.values.length}
+              </span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {group.values.map((value, index) => (
+                <span
+                  key={`${group.label}-${value}-${index}`}
+                  className={[
+                    'inline-flex max-w-full items-center rounded-sm border px-2 py-1 text-xs font-semibold',
+                    group.accent
+                      ? 'border-accent/40 bg-card text-brand-charcoal'
+                      : 'border-border-light bg-card text-text-secondary',
+                  ].join(' ')}
+                  title={value}
+                >
+                  <span className="min-w-0 break-words">{value}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function SelectedClipToneTags({ value }: { value: string }) {
   const tags = selectedClipListTags(value)
   if (!tags.length) return null
   return (
-    <div className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <StrandIcon name="flame" className="h-3.5 w-3.5 text-accent" />
+    <div className="min-w-0 rounded-md border border-border-light bg-card px-2.5 py-2">
+      <div className="flex min-w-0 items-center">
         <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Tone</p>
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {tags.map((tag) => (
-          <span key={tag} className="rounded-sm border border-accent/30 bg-accent-light px-2 py-1 text-xs font-semibold text-brand-charcoal">
+          <span key={tag} className="rounded-sm border border-accent/35 bg-card px-2 py-1 text-xs font-semibold text-brand-charcoal">
             {tag}
           </span>
         ))}
@@ -6206,15 +6350,13 @@ function SelectedClipActionSignal({ value }: { value: string }) {
   const actions = selectedClipActionTags(value)
   if (!actions.length) return null
   return (
-    <div className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <StrandIcon name="play-boxed" className="h-3.5 w-3.5 text-accent" />
+    <div className="min-w-0 rounded-md border border-border-light bg-card px-2.5 py-2">
+      <div className="flex min-w-0 items-center">
         <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Key action</p>
       </div>
       <div className="mt-2 grid gap-1.5">
         {actions.map((action) => (
-          <span key={action} className="inline-flex min-w-0 items-start gap-1.5 rounded-sm border border-border-light bg-card px-2 py-1 text-xs font-semibold leading-5 text-text-primary">
-            <StrandIcon name="checkmark" className="mt-0.5 h-3 w-3 text-accent" />
+          <span key={action} className="inline-flex min-w-0 items-start rounded-sm border border-border-light bg-card px-2 py-1 text-xs font-semibold leading-5 text-text-primary">
             <span className="min-w-0 break-words">{action}</span>
           </span>
         ))}
@@ -6228,9 +6370,8 @@ function SelectedClipScoreSignal({ value }: { value: string }) {
   const score = selectedClipScoreParts(value)
   if (!score) return <SelectedClipSignal icon="trophy" label="Score" value={value} />
   return (
-    <div className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2 sm:col-span-2">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <StrandIcon name="trophy" className="h-3.5 w-3.5 text-accent" />
+    <div className="min-w-0 rounded-md border border-border-light bg-card px-2.5 py-2 sm:col-span-2">
+      <div className="flex min-w-0 items-center">
         <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Score</p>
       </div>
       <div className="mt-2 rounded-sm border border-border-light bg-card px-2 py-2">
@@ -6239,7 +6380,7 @@ function SelectedClipScoreSignal({ value }: { value: string }) {
             <p className="truncate text-xs font-semibold text-text-secondary">{score.homeTeam}</p>
             <p className="mt-0.5 font-mono text-xl font-bold leading-none text-text-primary">{score.homeScore}</p>
           </div>
-          <span className="rounded-sm border border-border-light bg-surface px-1.5 py-0.5 font-mono text-[10px] font-bold text-text-tertiary">
+          <span className="rounded-sm border border-border-light bg-card px-1.5 py-0.5 font-mono text-[10px] font-bold text-text-tertiary">
             VS
           </span>
           <div className="min-w-0 text-right">
@@ -6248,8 +6389,7 @@ function SelectedClipScoreSignal({ value }: { value: string }) {
           </div>
         </div>
         {score.matchTime && (
-          <div className="mt-2 inline-flex max-w-full items-center gap-1 rounded-sm border border-accent/30 bg-accent-light px-2 py-1 text-[11px] font-semibold text-brand-charcoal">
-            <StrandIcon name="hourglass" className="h-3 w-3" />
+          <div className="mt-2 inline-flex max-w-full items-center rounded-sm border border-accent/30 bg-card px-2 py-1 text-[11px] font-semibold text-brand-charcoal">
             <span className="min-w-0 truncate">{score.matchTime} match time</span>
           </div>
         )}
@@ -6258,12 +6398,11 @@ function SelectedClipScoreSignal({ value }: { value: string }) {
   )
 }
 
-function SelectedClipSignal({ icon, label, value }: { icon: string; label: string; value: string }) {
+function SelectedClipSignal({ label, value }: { icon: string; label: string; value: string }) {
   if (!value.trim()) return null
   return (
-    <div className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <StrandIcon name={icon} className="h-3.5 w-3.5 text-accent" />
+    <div className="min-w-0 rounded-md border border-border-light bg-card px-2.5 py-2">
+      <div className="flex min-w-0 items-center">
         <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
       </div>
       <p className="mt-1 break-words text-sm font-semibold leading-5 text-text-primary">{value}</p>
@@ -6321,7 +6460,7 @@ function selectedClipScoreParts(value: string) {
 function SelectedClipParticipants({ participants }: { participants: SelectedClipAnalysis['participants'] }) {
   if (!participants.length) return null
   return (
-    <section className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
+    <section className="min-w-0 rounded-md border border-border-light bg-card px-2.5 py-2">
       <SelectedClipGroupHeader icon="members" label="Participants" count={participants.length} />
       <div className="mt-2 grid gap-1.5 sm:grid-cols-2 2xl:grid-cols-1">
         {participants.map((participant, index) => (
@@ -6329,7 +6468,7 @@ function SelectedClipParticipants({ participants }: { participants: SelectedClip
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               <span className="min-w-0 truncate text-sm font-semibold text-text-primary">{participant.name}</span>
               {participant.role && (
-                <span className="rounded-sm border border-accent/30 bg-accent-light px-1.5 py-0.5 text-[11px] font-semibold text-brand-charcoal">
+                <span className="rounded-sm border border-accent/30 bg-card px-1.5 py-0.5 text-[11px] font-semibold text-brand-charcoal">
                   {participant.role}
                 </span>
               )}
@@ -6340,10 +6479,7 @@ function SelectedClipParticipants({ participants }: { participants: SelectedClip
               )}
             </div>
             {participant.evidence && (
-              <p className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-1.5 text-xs leading-5 text-text-secondary">
-                <StrandIcon name="checkmark" className="mt-0.5 h-3.5 w-3.5 text-accent" />
-                <span className="line-clamp-2">{participant.evidence}</span>
-              </p>
+              <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-text-secondary">{participant.evidence}</p>
             )}
           </article>
         ))}
@@ -6356,16 +6492,15 @@ function SelectedClipTagGroup({ icon, label, values }: { icon: string; label: st
   const tags = values.filter((value) => value.trim())
   if (!tags.length) return null
   return (
-    <section className="min-w-0 rounded-md border border-border-light bg-surface px-2.5 py-2">
+    <section className="min-w-0 rounded-md border border-border-light bg-card px-2.5 py-2">
       <SelectedClipGroupHeader icon={icon} label={label} count={tags.length} />
       <div className="mt-2 flex flex-wrap gap-1.5">
         {tags.map((value, index) => (
           <span
             key={`${label}-${value}-${index}`}
-            className="inline-flex max-w-full items-center gap-1 rounded-sm border border-border-light bg-card px-2 py-1 text-xs font-semibold text-text-secondary"
+            className="inline-flex max-w-full items-center rounded-sm border border-border-light bg-card px-2 py-1 text-xs font-semibold text-text-secondary"
             title={value}
           >
-            <StrandIcon name="checkmark" className="h-3 w-3 text-accent" />
             <span className="min-w-0 break-words">{value}</span>
           </span>
         ))}
@@ -6374,12 +6509,11 @@ function SelectedClipTagGroup({ icon, label, values }: { icon: string; label: st
   )
 }
 
-function SelectedClipNote({ icon, label, value }: { icon: string; label: string; value: string }) {
+function SelectedClipNote({ label, value }: { icon: string; label: string; value: string }) {
   if (!value.trim()) return null
   return (
-    <article className="min-w-0 rounded-md border border-border-light bg-surface px-3 py-2">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <StrandIcon name={icon} className="h-3.5 w-3.5 text-accent" />
+    <article className="min-w-0 rounded-md border border-border-light bg-card px-3 py-2">
+      <div className="flex min-w-0 items-center">
         <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
       </div>
       <p className="mt-1 text-sm leading-5 text-text-secondary">{value}</p>
@@ -6394,9 +6528,8 @@ function SelectedClipEvidenceGroup({ rows }: { rows: Array<{ label: string; icon
       <SelectedClipGroupHeader icon="vision" label="Grounded evidence" />
       <div className="mt-2 grid gap-2">
         {rows.map((row) => (
-          <article key={row.label} className="min-w-0 rounded-md border border-border-light bg-surface px-3 py-2">
+          <article key={row.label} className="min-w-0 rounded-md border border-border-light bg-card px-3 py-2">
             <div className="flex min-w-0 items-center gap-1.5">
-              <StrandIcon name={row.icon} className="h-3.5 w-3.5 text-accent" />
               <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{row.label}</p>
               <span className="ml-auto rounded-sm border border-border-light bg-card px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
                 {row.values.length}
@@ -6404,10 +6537,7 @@ function SelectedClipEvidenceGroup({ rows }: { rows: Array<{ label: string; icon
             </div>
             <ul className="mt-2 grid gap-1.5">
               {row.values.map((value, index) => (
-                <li key={`${row.label}-${value}-${index}`} className="grid grid-cols-[auto_minmax(0,1fr)] gap-1.5 text-sm leading-5 text-text-secondary">
-                  <StrandIcon name="checkmark" className="mt-0.5 h-3.5 w-3.5 text-accent" />
-                  <span>{value}</span>
-                </li>
+                <li key={`${row.label}-${value}-${index}`} className="text-sm leading-5 text-text-secondary">{value}</li>
               ))}
             </ul>
           </article>
@@ -6417,13 +6547,12 @@ function SelectedClipEvidenceGroup({ rows }: { rows: Array<{ label: string; icon
   )
 }
 
-function SelectedClipGroupHeader({ icon, label, count }: { icon: string; label: string; count?: number }) {
+function SelectedClipGroupHeader({ label, count }: { icon: string; label: string; count?: number }) {
   return (
     <div className="flex min-w-0 items-center gap-1.5">
-      <StrandIcon name={icon} className="h-3.5 w-3.5 text-accent" />
       <p className="truncate text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
       {typeof count === 'number' && (
-        <span className="rounded-sm border border-border-light bg-surface px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
+        <span className="rounded-sm border border-border-light bg-card px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
           {count}
         </span>
       )}
@@ -6986,12 +7115,13 @@ function EntityTrackingSection({
   }
 
   return (
-    <section id="entity-tracking" data-tour-id="entity-tracking" className="overflow-hidden rounded-md border border-border shadow-[0_6px_18px_rgba(29,28,27,0.03)]">
-      <div className={['grid gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start', collapsed ? '' : 'border-b border-border-light'].join(' ')}>
-        <div className="min-w-0">
+    <section id="entity-tracking" data-tour-id="entity-tracking" className="scroll-mt-[calc(var(--sj-explainability-top)+24px)] overflow-hidden rounded-md border border-border bg-surface shadow-[0_10px_28px_rgba(29,28,27,0.045)]">
+      <div className={['relative grid gap-4 overflow-hidden bg-card px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start', collapsed ? '' : 'border-b border-border-light'].join(' ')}>
+        <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-accent via-[#DFF43F] to-[#FF8BC7]" aria-hidden="true" />
+        <div className="min-w-0 pt-1">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border text-accent">
-              <StrandIcon name="entity-collection" className="h-4 w-4" />
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-accent/45 bg-accent-light text-brand-charcoal shadow-[0_6px_16px_rgba(0,220,130,0.12)]">
+              <StrandIcon name="entity-collection" className="h-5 w-5" />
             </span>
             <div className="min-w-0">
               <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-text-tertiary">Jockey entity map</p>
@@ -7002,15 +7132,15 @@ function EntityTrackingSection({
             {tracking?.summary || 'Jockey is extracting grounded players, teams, crowd groups, and interactions from this source.'}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+        <div className="flex flex-wrap items-center gap-2 pt-1 lg:justify-end">
           {tracking && (
-            <span className="inline-flex h-8 items-center rounded-sm border border-border px-2.5 font-mono text-xs font-semibold text-text-secondary">
+            <span className="inline-flex h-8 items-center rounded-sm border border-border-light bg-surface px-2.5 font-mono text-xs font-semibold text-text-secondary">
               {entities.length} entities
             </span>
           )}
           <button
             type="button"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border-light bg-surface px-2.5 text-xs font-semibold text-text-secondary transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
             aria-expanded={!collapsed}
             aria-controls="entity-tracking-body"
             onClick={toggleCollapsed}
@@ -7032,7 +7162,7 @@ function EntityTrackingSection({
         </div>
       ) : tracking ? (
         <div id="entity-tracking-body" className="grid gap-5 px-5 py-4">
-          <div className="grid divide-y divide-border-light rounded-sm border border-border md:grid-cols-3 md:divide-x md:divide-y-0">
+          <div className="grid gap-2 md:grid-cols-3">
             <EntityTrackingMetric icon="members" label="Grounded entities" value={String(entities.length)} detail="Teams, players, officials, fan groups" />
             <EntityTrackingMetric icon="hourglass" label="Tracked moments" value={String(appearanceCount)} detail="Timestamped appearances" />
             <EntityTrackingMetric icon="neural-network" label="Interactions" value={String(relationships.length)} detail="Entity-to-entity links" />
@@ -7049,7 +7179,7 @@ function EntityTrackingSection({
                   {entities.length} entities / {appearanceCount} moments
                 </span>
               </div>
-              <div className="divide-y divide-border-light rounded-sm border border-border">
+              <div className="grid gap-2">
                 {entities.map((entity) => (
                   <EntityTrackCard
                     key={`${videoName || 'source'}-${entity.name}-${entity.role}`}
@@ -7089,8 +7219,8 @@ function EntityTrackingSection({
 
 function EntityTrackingMetric({ icon, label, value, detail }: { icon: string; label: string; value: string; detail: string }) {
   return (
-    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 px-3 py-3">
-      <span className="row-span-2 flex h-9 w-9 items-center justify-center rounded-sm border border-border text-text-secondary">
+    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 rounded-md border border-border-light bg-card px-3 py-3 shadow-[0_1px_2px_rgba(29,28,27,0.035)]">
+      <span className="row-span-2 flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
         <StrandIcon name={icon} className="h-4 w-4" />
       </span>
       <p className="font-mono text-xl font-bold leading-none text-text-primary">{value}</p>
@@ -7146,18 +7276,25 @@ function EntityTrackCard({
   }, [entity.name, entity.role, videoName])
 
   return (
-    <article className="min-w-0 bg-transparent">
+    <article
+      className={[
+        'min-w-0 overflow-hidden rounded-md border bg-card transition-colors',
+        expanded ? 'border-accent/55 shadow-[0_8px_22px_rgba(0,220,130,0.08)]' : 'border-border-light hover:border-border',
+      ].join(' ')}
+    >
       <div className="px-3 py-3">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
-              <StrandIcon name={entityTypeIcon(entity.entity_type)} className="h-4 w-4 shrink-0 text-accent" />
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-surface text-accent">
+                <StrandIcon name={entityTypeIcon(entity.entity_type)} className="h-4 w-4" />
+              </span>
               <h4 className="truncate text-sm font-semibold text-text-primary">{entity.name}</h4>
             </div>
             {entityBadges.length ? (
-              <div className="mt-2 flex flex-wrap gap-1.5">
+              <div className="mt-2 flex flex-wrap gap-1.5 pl-10">
                 {entityBadges.map((value) => (
-                  <span key={`${entity.name}-${value}`} className="rounded-sm border border-border px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
+                  <span key={`${entity.name}-${value}`} className="rounded-sm border border-border-light bg-surface px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
                     {value}
                   </span>
                 ))}
@@ -7166,16 +7303,21 @@ function EntityTrackCard({
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1.5">
             <div className="flex flex-wrap justify-end gap-1.5">
-              <span className="rounded-sm border border-border px-2 py-1 font-mono text-[11px] font-semibold text-text-secondary">
+              <span className="rounded-sm border border-border-light bg-surface px-2 py-1 font-mono text-[11px] font-semibold text-text-secondary">
                 {entity.appearances.length} moments
               </span>
-              <span className="rounded-sm border border-border px-2 py-1 font-mono text-[11px] font-semibold text-text-secondary">
+              <span className="rounded-sm border border-border-light bg-surface px-2 py-1 font-mono text-[11px] font-semibold text-text-secondary">
                 {confidenceLabel(entity.confidence)}
               </span>
             </div>
             <button
               type="button"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+              className={[
+                'inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition',
+                expanded
+                  ? 'border-accent bg-accent text-brand-charcoal shadow-[0_0_0_3px_rgba(0,220,130,0.16),0_8px_18px_rgba(0,220,130,0.16)]'
+                  : 'border-border text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
+              ].join(' ')}
               aria-expanded={expanded}
               onClick={() => setExpanded((value) => !value)}
             >
@@ -7187,7 +7329,7 @@ function EntityTrackCard({
         <p className="mt-3 text-sm leading-5 text-text-secondary">{entity.description}</p>
       </div>
       {expanded && appearances.length ? (
-        <ol className="grid gap-0 border-t border-border-light">
+        <ol className="grid gap-0 border-t border-border-light bg-surface">
           {appearances.map((appearance) => {
             const emotion = entityTrackingDisplayLabel(appearance.emotion)
             const context = entityTrackingDisplayLabel(appearance.context)
@@ -7195,7 +7337,7 @@ function EntityTrackCard({
             return (
               <li
                 key={`${entity.name}-${appearance.start_time}-${appearance.end_time}-${appearance.action}`}
-                className="grid gap-3 border-b border-border-light px-3 py-2.5 last:border-b-0 sm:grid-cols-[132px_minmax(0,1fr)]"
+                className="grid gap-3 border-b border-border-light px-3 py-3 last:border-b-0 sm:grid-cols-[132px_minmax(0,1fr)]"
               >
                 <EntityMomentThumbnailButton
                   game={game}
@@ -7210,17 +7352,17 @@ function EntityTrackCard({
                     title: appearance.action,
                   })}
                 />
-                <div className="min-w-0">
+                <div className="min-w-0 self-center">
                   <p className="text-sm font-semibold leading-5 text-text-primary">{appearance.action}</p>
                   {emotion || context ? (
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       {emotion && (
-                        <span className="rounded-sm border border-border px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
+                        <span className="rounded-sm border border-border-light bg-card px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
                           {emotion}
                         </span>
                       )}
                       {context && (
-                        <span className="rounded-sm border border-border px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
+                        <span className="rounded-sm border border-border-light bg-card px-1.5 py-0.5 text-[11px] font-semibold text-text-secondary">
                           {context}
                         </span>
                       )}
@@ -7257,25 +7399,27 @@ function EntityInteractionMap({
     <section className="min-w-0">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <StrandIcon name="play-next" className="h-4 w-4 text-accent" />
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-card text-accent">
+            <StrandIcon name="play-next" className="h-4 w-4" />
+          </span>
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">Interaction evidence timeline</p>
         </div>
-        <span className="shrink-0 rounded-sm border border-border px-2 py-1 text-[11px] font-semibold text-text-secondary">
+        <span className="shrink-0 rounded-sm border border-border-light bg-card px-2 py-1 text-[11px] font-semibold text-text-secondary">
           {relationships.length} moments
         </span>
       </div>
-      <div className="relative mt-3 divide-y divide-border-light rounded-sm border border-border">
-        <span className="absolute bottom-3 left-[50px] top-3 hidden w-px bg-border-light sm:block" aria-hidden="true" />
+      <div className="relative mt-3 grid gap-2">
+        <span className="absolute bottom-4 left-[50px] top-4 hidden w-px bg-border-light sm:block" aria-hidden="true" />
         {relationships.map((relationship, index) => {
           const interactionType = entityTrackingDisplayLabel(relationship.interaction_type) || 'interaction'
           const range = entityMomentRangeFromTimestamp(relationship.timestamp)
           return (
             <article
               key={`${relationship.entity}-${relationship.related_entity}-${relationship.timestamp}-${relationship.description}`}
-              className="relative grid gap-3 px-3 py-2.5 sm:grid-cols-[132px_minmax(0,1fr)]"
+              className="relative grid gap-3 rounded-md border border-border-light bg-card px-3 py-3 shadow-[0_1px_2px_rgba(29,28,27,0.035)] sm:grid-cols-[132px_minmax(0,1fr)]"
             >
               <div className="flex min-w-0 items-start gap-2">
-                <span className="z-[1] mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border font-mono text-[10px] font-bold text-text-secondary">
+                <span className="z-[1] mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-accent/45 bg-accent-light font-mono text-[10px] font-bold text-brand-charcoal">
                   {index + 1}
                 </span>
                 <EntityMomentThumbnailButton
@@ -7295,14 +7439,14 @@ function EntityInteractionMap({
               </div>
               <div className="min-w-0">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                  <span className="rounded-sm border border-border px-2 py-1 text-xs font-semibold text-text-secondary">
+                  <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-xs font-semibold text-text-secondary">
                     {relationship.entity}
                   </span>
-                  <span className="inline-flex items-center gap-1 rounded-sm border border-border px-2 py-1 text-[11px] font-semibold text-text-secondary">
+                  <span className="inline-flex items-center gap-1 rounded-sm border border-accent/35 bg-accent-light px-2 py-1 text-[11px] font-semibold text-brand-charcoal">
                     <StrandIcon name="play-next" className="h-3 w-3 text-accent" />
                     {interactionType}
                   </span>
-                  <span className="rounded-sm border border-border px-2 py-1 text-xs font-semibold text-text-secondary">
+                  <span className="rounded-sm border border-border-light bg-surface px-2 py-1 text-xs font-semibold text-text-secondary">
                     {relationship.related_entity}
                   </span>
                 </div>
@@ -7345,7 +7489,7 @@ function EntityMomentThumbnailButton({
       aria-label={canPreview ? `Open ${title} at ${range.displayLabel}` : `${title} at ${range.displayLabel}`}
       title={canPreview ? `Open at ${range.displayLabel}` : range.displayLabel}
     >
-      <span className={['relative block overflow-hidden rounded-sm border border-border', compact ? 'aspect-[16/10]' : 'aspect-video'].join(' ')}>
+      <span className={['relative block overflow-hidden rounded-md border border-border-light bg-card shadow-[0_1px_2px_rgba(29,28,27,0.04)] transition group-hover:border-accent', compact ? 'aspect-[16/10]' : 'aspect-video'].join(' ')}>
         {posterUrl ? (
           <img src={posterUrl} alt="" className="h-full w-full object-cover transition-transform group-hover:scale-[1.03]" loading="lazy" />
         ) : (
@@ -7358,8 +7502,10 @@ function EntityMomentThumbnailButton({
             <StrandIcon name="play" className="h-3.5 w-3.5" />
           </span>
         </span>
+        <span className="absolute bottom-1.5 left-1.5 rounded-sm bg-brand-charcoal/82 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white shadow-[0_2px_6px_rgba(0,0,0,0.25)]">
+          {range.displayLabel}
+        </span>
       </span>
-      <span className="truncate font-mono text-[11px] font-semibold text-text-tertiary">{range.displayLabel}</span>
     </button>
   )
 }
@@ -7742,7 +7888,7 @@ function ClipMarkerLane({
   const safeDuration = Math.max(durationSeconds, maxClipEnd, 1)
   const preview = variant === 'preview'
   return (
-    <div className={preview ? 'mx-3 mt-3 rounded-md bg-card px-3 py-3 text-text-secondary' : 'border-b border-border bg-card px-4 py-3 text-text-secondary lg:border-b-0'}>
+    <div className={preview ? 'mx-3 mt-3 border-t border-border-light px-1 py-3 text-text-secondary' : 'border-b border-border bg-card px-4 py-3 text-text-secondary lg:border-b-0'}>
       <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">
         <span>{clips.length} {label} points</span>
         <span>
@@ -7805,7 +7951,7 @@ function ClipMarkerLane({
                 'absolute top-1/2 h-3 -translate-y-1/2 rounded-full border transition-transform hover:scale-y-150',
                 selected
                   ? 'border-accent bg-accent shadow-[0_0_14px_rgba(0,220,130,0.35)] ring-2 ring-accent/25'
-                  : 'border-border bg-surface hover:border-accent hover:bg-accent',
+                  : 'border-border bg-card hover:border-accent hover:bg-accent',
               ].join(' ')}
               style={{
                 left: `${left}%`,
