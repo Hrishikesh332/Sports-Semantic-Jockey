@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -137,6 +138,7 @@ STREAM_INFO_CACHE_LOCK = Lock()
 INDEX_VIDEOS_CACHE_TTL_SECONDS = int(os.environ.get("SPORTS_INDEX_VIDEOS_CACHE_TTL_SECONDS", "300"))
 INDEX_VIDEOS_CACHE = {}
 INDEX_VIDEOS_CACHE_LOCK = Lock()
+INDEX_VIDEOS_BUILD_LOCKS = defaultdict(Lock)
 PEGASUS_METADATA_CACHE_SCHEMA_VERSION = 4
 PEGASUS_METADATA_VERIFY_ATTEMPTS = int(os.environ.get("PEGASUS_METADATA_VERIFY_ATTEMPTS", "3"))
 PEGASUS_METADATA_VERIFY_INTERVAL_SECONDS = float(os.environ.get("PEGASUS_METADATA_VERIFY_INTERVAL_SECONDS", "1"))
@@ -330,30 +332,38 @@ def list_games():
 
 
 def list_game_index_videos(tag):
-    game = get_game(tag)
+    get_game(tag)
     now = time.time()
     with INDEX_VIDEOS_CACHE_LOCK:
         cached = INDEX_VIDEOS_CACHE.get(tag)
         if cached and cached.get("expires_at", 0) > now:
             return dict(cached["payload"])
 
-    index_id = configured_search_index_id(game)
-    videos = [
-        normalize_index_video(index_id, indexed_asset_with_user_metadata(index_id, indexed_asset))
-        for indexed_asset in list_indexed_assets(index_id)
-    ]
-    payload = {
-        "index_id": index_id,
-        "index_videos": [video for video in videos if video.get("id")],
-    }
-    if INDEX_VIDEOS_CACHE_TTL_SECONDS > 0:
+    with INDEX_VIDEOS_BUILD_LOCKS[tag]:
         with INDEX_VIDEOS_CACHE_LOCK:
-            INDEX_VIDEOS_CACHE[tag] = {
-                "expires_at": now + INDEX_VIDEOS_CACHE_TTL_SECONDS,
-                "payload": payload,
-            }
-    UPLOAD_BACKGROUND_EXECUTOR.submit(warm_missing_video_thumbnails, payload.get("index_videos", []))
-    return payload
+            cached = INDEX_VIDEOS_CACHE.get(tag)
+            if cached and cached.get("expires_at", 0) > now:
+                return dict(cached["payload"])
+
+        game = get_game(tag)
+        index_id = configured_search_index_id(game)
+        indexed_assets = list_indexed_assets(index_id)
+        videos = [
+            normalize_index_video(index_id, indexed_asset_with_user_metadata(index_id, indexed_asset))
+            for indexed_asset in indexed_assets
+        ]
+        payload = {
+            "index_id": index_id,
+            "index_videos": [video for video in videos if video.get("id")],
+        }
+        if INDEX_VIDEOS_CACHE_TTL_SECONDS > 0:
+            with INDEX_VIDEOS_CACHE_LOCK:
+                INDEX_VIDEOS_CACHE[tag] = {
+                    "expires_at": now + INDEX_VIDEOS_CACHE_TTL_SECONDS,
+                    "payload": payload,
+                }
+        UPLOAD_BACKGROUND_EXECUTOR.submit(warm_missing_video_thumbnails, payload.get("index_videos", []))
+        return payload
 
 
 def invalidate_index_videos_cache(tag):
@@ -3096,7 +3106,19 @@ def generated_reel_thumbnail(tag, video_name, time, format_name):
     reel_format = REEL_FORMATS.get(format_key)
     if not reel_format:
         raise ApiError(f"unsupported reel format: {format_name}", 400)
-    return render_reel_thumbnail_bytes(source_input, time_seconds, reel_format)
+
+    source_slug = slugify_filename(Path(video_name).stem)
+    cache_hash = sha256(
+        f"{tag}|{video_name}|{stream_info.get('asset_id')}|reel-thumb-v1|{time_seconds:.3f}|{format_key}".encode()
+    ).hexdigest()[:16]
+    THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = THUMBNAILS_DIR / f"{source_slug}-reel-{format_key}-{cache_hash}.jpg"
+    if cache_path.exists():
+        return cache_path.read_bytes()
+
+    content = render_reel_thumbnail_bytes(source_input, time_seconds, reel_format)
+    cache_path.write_bytes(content)
+    return content
 
 
 def render_assembly_reel_to_path(source_path, output_path, segments, reel_format):

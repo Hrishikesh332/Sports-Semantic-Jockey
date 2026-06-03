@@ -1,5 +1,6 @@
 import atexit
 import logging
+import os
 from datetime import datetime, timezone
 
 import requests
@@ -25,6 +26,11 @@ def _ping_app(url, timeout_seconds):
         LOGGER.warning("Keep-alive ping failed for %s: %s", url, exc)
 
 
+def _log_keep_alive_status(app, message):
+    app.logger.info(message)
+    LOGGER.info(message)
+
+
 def _shutdown_scheduler():
     global _scheduler
     if _scheduler and _scheduler.running:
@@ -32,17 +38,25 @@ def _shutdown_scheduler():
     _scheduler = None
 
 
+def shutdown_keep_alive():
+    """Stop the background scheduler (e.g. on gunicorn worker exit)."""
+    _shutdown_scheduler()
+
+
 def register_keep_alive(app):
     global _atexit_registered
     global _scheduler
 
     if not keep_alive_enabled():
-        app.logger.info("Keep-alive scheduler disabled by KEEP_ALIVE_ENABLED.")
+        _log_keep_alive_status(app, "Keep-alive scheduler disabled by KEEP_ALIVE_ENABLED.")
         return None
 
     url = keep_alive_url()
     if not url:
-        app.logger.info("Keep-alive scheduler disabled because APP_URL or KEEP_ALIVE_URL is not set.")
+        _log_keep_alive_status(
+            app,
+            "Keep-alive scheduler disabled: set APP_URL or KEEP_ALIVE_URL (Render sets RENDER_EXTERNAL_URL).",
+        )
         return None
 
     if _scheduler and _scheduler.running:
@@ -76,4 +90,5 @@ def register_keep_alive(app):
         _atexit_registered = True
 
     app.logger.info("Keep-alive scheduler started for %s every %s minutes.", url, interval_minutes)
+    LOGGER.info("Keep-alive scheduler started for %s every %s minutes (pid=%s).", url, interval_minutes, os.getpid())
     return scheduler

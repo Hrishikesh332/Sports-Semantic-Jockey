@@ -659,6 +659,10 @@ const uploadRequirementLabels = [
 const JOCKEY_CHAT_CACHE_PREFIX = 'sports-jockey:jockey-chat:'
 const DISCOVER_SESSION_PREFIX = 'sports-jockey:discover-session:'
 const WORKSPACE_UI_SESSION_KEY = 'sports-jockey:workspace-ui-session-v1'
+const GAMES_CACHE_KEY = 'sports-jockey:games-cache-v1'
+const SELECTED_TAG_CACHE_KEY = 'sports-jockey:selected-tag-v1'
+const INDEX_VIDEOS_CACHE_PREFIX = 'sports-jockey:index-videos-v1:'
+const DEFAULT_GAME_TAG = 'sports'
 const WORKSPACE_METADATA_SAVED_EVENT = 'sports-jockey:workspace-metadata-saved'
 const JOCKEY_TUTORIAL_PROMPT_EVENT = 'sports-jockey:tutorial-jockey-prompt'
 const TUTORIAL_ANALYZE_CLIP_EVENT = 'sports-jockey:tutorial-analyze-clip'
@@ -737,6 +741,54 @@ function persistWorkspaceUiSession(session: WorkspaceUiSession) {
   window.sessionStorage.setItem(WORKSPACE_UI_SESSION_KEY, JSON.stringify(session))
 }
 
+function loadCachedGames(): Game[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(GAMES_CACHE_KEY) || '[]') as Game[]
+    return Array.isArray(parsed) ? parsed.filter((game) => typeof game?.tag === 'string' && game.tag) : []
+  } catch {
+    return []
+  }
+}
+
+function persistGamesCache(games: Game[]) {
+  if (typeof window === 'undefined' || !games.length) return
+  window.localStorage.setItem(GAMES_CACHE_KEY, JSON.stringify(games))
+}
+
+function loadCachedSelectedTag(): string {
+  if (typeof window === 'undefined') return DEFAULT_GAME_TAG
+  return window.localStorage.getItem(SELECTED_TAG_CACHE_KEY)?.trim() || DEFAULT_GAME_TAG
+}
+
+function persistSelectedTagCache(tag: string) {
+  if (typeof window === 'undefined' || !tag) return
+  window.localStorage.setItem(SELECTED_TAG_CACHE_KEY, tag)
+}
+
+function loadCachedIndexVideosByTag(): Record<string, IndexVideo[]> {
+  if (typeof window === 'undefined') return {}
+  const cached: Record<string, IndexVideo[]> = {}
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index)
+    if (!key || !key.startsWith(INDEX_VIDEOS_CACHE_PREFIX)) continue
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(key) || '[]') as IndexVideo[]
+      if (Array.isArray(parsed) && parsed.length) {
+        cached[key.slice(INDEX_VIDEOS_CACHE_PREFIX.length)] = parsed
+      }
+    } catch {
+      // Ignore invalid cached index payloads.
+    }
+  }
+  return cached
+}
+
+function persistIndexVideosCache(tag: string, videos: IndexVideo[]) {
+  if (typeof window === 'undefined' || !tag || !videos.length) return
+  window.localStorage.setItem(`${INDEX_VIDEOS_CACHE_PREFIX}${tag}`, JSON.stringify(videos))
+}
+
 const signalColors: Record<MapCategoryKey, { bg: string; border: string; text: string; track: string }> = {
   standard_stats: { bg: '#E8E7E5', border: '#B8B6B3', text: '#4F4F4F', track: '#E8E7E5' },
   best_plays: { bg: '#00DC82', border: '#00B86E', text: '#1D1C1B', track: '#E8F5E9' },
@@ -778,8 +830,8 @@ function App() {
   const [laneBarNode, setLaneBarNode] = useState<HTMLElement | null>(null)
   const [headerHeight, setHeaderHeight] = useState(76)
   const [laneBarHeight, setLaneBarHeight] = useState(0)
-  const [games, setGames] = useState<Game[]>([])
-  const [selectedTag, setSelectedTag] = useState('')
+  const [games, setGames] = useState<Game[]>(() => loadCachedGames())
+  const [selectedTag, setSelectedTag] = useState(() => loadCachedSelectedTag())
   const [view, setView] = useState<ViewKey>(() => viewFromPath(window.location.pathname))
   const [selectedCategory, setSelectedCategory] = useState<CategoryKey>('best_plays')
   const [selectedEnhancedClipIndex, setSelectedEnhancedClipIndex] = useState(0)
@@ -787,11 +839,11 @@ function App() {
   const [featuredSignalCategory, setFeaturedSignalCategory] = useState<MapCategoryKey>('best_plays')
   const [assemblyMode, setAssemblyMode] = useState<AssemblyModeKey>('twelvelabs_enhanced')
   const [reelsByTag, setReelsByTag] = useState<Record<string, HighlightReels>>({})
-  const [indexVideosByTag, setIndexVideosByTag] = useState<Record<string, IndexVideo[]>>({})
+  const [indexVideosByTag, setIndexVideosByTag] = useState<Record<string, IndexVideo[]>>(() => loadCachedIndexVideosByTag())
   const [gamesError, setGamesError] = useState('')
   const [reelsError, setReelsError] = useState('')
   const [indexVideosError, setIndexVideosError] = useState('')
-  const [loadingGames, setLoadingGames] = useState(true)
+  const [loadingGames, setLoadingGames] = useState(() => loadCachedGames().length === 0)
   const [loadingTag, setLoadingTag] = useState('')
   const [loadingIndexVideosTag, setLoadingIndexVideosTag] = useState('')
   const [selectedSourceVideoName, setSelectedSourceVideoName] = useState<string | null>(null)
@@ -1098,7 +1150,12 @@ function App() {
       .then((body) => {
         if (!active) return
         setGames(body.games)
-        setSelectedTag((current) => current || body.games[0]?.tag || '')
+        persistGamesCache(body.games)
+        setSelectedTag((current) => {
+          const nextTag = current || body.games[0]?.tag || DEFAULT_GAME_TAG
+          persistSelectedTagCache(nextTag)
+          return nextTag
+        })
       })
       .catch((error: Error) => {
         if (active) setGamesError(error.message)
@@ -1113,20 +1170,24 @@ function App() {
 
   useEffect(() => {
     if (!selectedTag) return
-    if (indexVideosByTag[selectedTag]) return
     let active = true
-    setLoadingIndexVideosTag(selectedTag)
-    setIndexVideosError('')
+    const hasCachedVideos = Boolean(indexVideosByTag[selectedTag]?.length)
+    if (!hasCachedVideos) {
+      setLoadingIndexVideosTag(selectedTag)
+      setIndexVideosError('')
+    }
     fetchJson<IndexVideoResponse>(`/games/${encodeURIComponent(selectedTag)}/index-videos`)
       .then((body) => {
         if (!active) return
+        const videos = uniqueIndexVideos(body.index_videos || [])
         setIndexVideosByTag((current) => ({
           ...current,
-          [selectedTag]: uniqueIndexVideos(body.index_videos || []),
+          [selectedTag]: videos,
         }))
+        persistIndexVideosCache(selectedTag, videos)
       })
       .catch((error: Error) => {
-        if (active) setIndexVideosError(error.message)
+        if (active && !hasCachedVideos) setIndexVideosError(error.message)
       })
       .finally(() => {
         if (active) setLoadingIndexVideosTag((current) => (current === selectedTag ? '' : current))
@@ -1134,7 +1195,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [indexVideosByTag, selectedTag])
+  }, [selectedTag])
 
   useEffect(() => {
     if (view !== 'workspace' || !activeVideoName || activeSearchMoment) return
@@ -1704,7 +1765,8 @@ function App() {
         <DiscoverPage
           game={selectedGame}
           indexVideos={workspaceIndexVideos}
-          loading={loadingGames}
+          loading={loadingGames && games.length === 0}
+          indexLoading={isLoadingIndexVideos && workspaceIndexVideos.length === 0}
           error={gamesError}
           session={activeDiscoverSession}
           onSessionChange={handleDiscoverSessionChange}
@@ -2344,6 +2406,7 @@ function ProducerCockpit({
                   <ReelBuilder
                     game={selectedGame}
                     videoName={activeVideoName}
+                    indexVideos={workspaceIndexVideos}
                     categoryKey={selectedCategory}
                     category={enhancedCategory}
                     format={reelFormat}
@@ -2716,7 +2779,7 @@ function ComparisonPlayer({
       : null
   const posterSourceName = sourceVideoName || clipVideoName
   const posterUrl = game && posterSourceName && clip
-    ? reelThumbnailUrl(game, posterSourceName, clip, '16x9')
+    ? clipPosterUrl(game, posterSourceName, clip, '16x9', [], true)
     : game && posterSourceName
       ? thumbnailForVideoName(game, posterSourceName)
       : undefined
@@ -2895,9 +2958,7 @@ function ReelSequencePlayer({
     : 0
   const assemblySourceName = assemblyClips[0]?.sourceName
   const assemblyPosterUrl = assemblySourceName
-    ? activeClip
-      ? reelThumbnailUrl(game, assemblySourceName, { start_time: activeClip.startTime, end_time: activeClip.endTime }, '16x9')
-      : thumbnailForVideoName(game, assemblySourceName)
+    ? thumbnailForVideoName(game, assemblySourceName)
     : undefined
   const assemblyVideoReady = assemblyStatus === 'ready'
   const canUseAssemblyVideo = Boolean(
@@ -4855,6 +4916,7 @@ function DiscoverPage({
   game,
   indexVideos,
   loading,
+  indexLoading,
   error,
   session,
   onSessionChange,
@@ -4864,6 +4926,7 @@ function DiscoverPage({
   game: Game | null
   indexVideos: IndexVideo[]
   loading: boolean
+  indexLoading: boolean
   error: string
   session: DiscoverSearchSession
   onSessionChange: (patch: Partial<DiscoverSearchSession>) => void
@@ -4872,8 +4935,6 @@ function DiscoverPage({
 }) {
   const searchRequestRef = useRef(0)
   const [searchLoading, setSearchLoading] = useState(false)
-  const [discoverVideos, setDiscoverVideos] = useState<DiscoverVideo[]>([])
-  const [discoverVideosLoading, setDiscoverVideosLoading] = useState(false)
   const { searchQuery, submittedSearchQuery, searchResponse, activePreviewId, searchError } = session
   const normalizedQuery = normalizeSearchText(submittedSearchQuery)
   const trimmedSearchQuery = submittedSearchQuery.trim()
@@ -4882,8 +4943,8 @@ function DiscoverPage({
   const items = useMemo(() => {
     if (!game) return []
     if (normalizedQuery) return searchResponse ? searchResultItems(game, searchResponse) : []
-    return indexReadyDiscoverItems(game, indexVideos, discoverVideos)
-  }, [discoverVideos, game, indexVideos, normalizedQuery, searchResponse])
+    return indexReadyDiscoverItems(game, indexVideos, [])
+  }, [game, indexVideos, normalizedQuery, searchResponse])
   const resultLabel = normalizedQuery
     ? searchLoading
       ? 'Searching'
@@ -4946,29 +5007,6 @@ function DiscoverPage({
       activePreviewId: null,
     })
   }, [onSessionChange])
-
-  useEffect(() => {
-    if (!game) {
-      setDiscoverVideos([])
-      setDiscoverVideosLoading(false)
-      return
-    }
-    let active = true
-    setDiscoverVideosLoading(true)
-    fetchJson<DiscoverVideoResponse>(`/games/${encodeURIComponent(game.tag)}/discover-videos`)
-      .then((body) => {
-        if (active) setDiscoverVideos(body.videos || [])
-      })
-      .catch(() => {
-        if (active) setDiscoverVideos([])
-      })
-      .finally(() => {
-        if (active) setDiscoverVideosLoading(false)
-      })
-    return () => {
-      active = false
-    }
-  }, [game])
 
   useEffect(() => {
     if (!game || !trimmedSearchQuery) {
@@ -5085,7 +5123,7 @@ function DiscoverPage({
             </div>
           )}
 
-          {discoverVideosLoading && !normalizedQuery && items.length === 0 ? (
+          {indexLoading && !normalizedQuery && items.length === 0 ? (
             <div className="flex min-h-[320px] items-center justify-center rounded-md border border-border bg-card p-8 text-center">
               <div className="max-w-sm">
                 <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
@@ -8312,6 +8350,7 @@ function ClipMarkerLane({
 function ReelBuilder({
   game,
   videoName,
+  indexVideos,
   categoryKey,
   category,
   format,
@@ -8319,6 +8358,7 @@ function ReelBuilder({
 }: {
   game: Game
   videoName: string
+  indexVideos: IndexVideo[]
   categoryKey: CategoryKey
   category: HighlightCategory
   format: ReelFormatKey
@@ -8404,6 +8444,7 @@ function ReelBuilder({
                 key={`${categoryKey}-${clip.start_time}-${index}-reel`}
                 game={game}
                 videoName={videoName}
+                indexVideos={indexVideos}
                 categoryKey={categoryKey}
                 clip={clip}
                 index={index}
@@ -8423,6 +8464,7 @@ function ReelBuilder({
 function ReelCard({
   game,
   videoName,
+  indexVideos,
   categoryKey,
   clip,
   index,
@@ -8431,6 +8473,7 @@ function ReelCard({
 }: {
   game: Game
   videoName: string
+  indexVideos: IndexVideo[]
   categoryKey: CategoryKey
   clip: Clip
   index: number
@@ -8441,8 +8484,9 @@ function ReelCard({
   const [previewLocked, setPreviewLocked] = useState(false)
   const [playerStatus, setPlayerStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const paddedRange = paddedRangeForClip(clip)
-  const streamInfoUrl = streamInfoForVideoName(game, videoName)
-  const posterUrl = reelThumbnailUrl(game, videoName, clip, format)
+  const streamInfoUrl = streamInfoForWorkspacePlayback(game, videoName, { videoReference: clip.video_reference })
+  const cardPosterUrl = clipPosterUrl(game, videoName, clip, format, indexVideos)
+  const segmentPosterUrl = clipPosterUrl(game, videoName, clip, format, indexVideos, true)
   const downloadUrl = reelDownloadUrl(game, videoName, clip, categoryKey, index, format)
   const categoryLabel = categories.find((category) => category.key === categoryKey)?.label || 'Reel'
   const segmentRange = useMemo(() => ({
@@ -8479,25 +8523,27 @@ function ReelCard({
       }}
     >
       <div className="relative overflow-hidden bg-card" style={{ aspectRatio: formatSpec.aspect }}>
-        <img alt="" src={posterUrl} loading="lazy" className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
-        <div className="absolute inset-0">
-          <TwelveLabsVideoPlayer
-            key={`${streamInfoUrl}-${segmentRange.startSeconds}-${segmentRange.endSeconds}-${format}`}
-            streamInfoUrl={streamInfoUrl}
-            startSeconds={segmentRange.startSeconds}
-            endSeconds={segmentRange.endSeconds}
-            posterUrl={posterUrl}
-            segmentRange={segmentRange}
-            variant="minimal"
-            fit="cover"
-            autoPlay={previewing}
-            muted
-            showSegmentControls={false}
-            showStatusOverlay
-            statusOverlayStyle="loader"
-            onStatusChange={setPlayerStatus}
-          />
-        </div>
+        <img alt="" src={cardPosterUrl} loading="lazy" className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
+        {previewing ? (
+          <div className="absolute inset-0">
+            <TwelveLabsVideoPlayer
+              key={`${streamInfoUrl}-${segmentRange.startSeconds}-${segmentRange.endSeconds}-${format}`}
+              streamInfoUrl={streamInfoUrl}
+              startSeconds={segmentRange.startSeconds}
+              endSeconds={segmentRange.endSeconds}
+              posterUrl={segmentPosterUrl}
+              segmentRange={segmentRange}
+              variant="minimal"
+              fit="cover"
+              autoPlay={previewing}
+              muted
+              showSegmentControls={false}
+              showStatusOverlay
+              statusOverlayStyle="loader"
+              onStatusChange={setPlayerStatus}
+            />
+          </div>
+        ) : null}
         <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/62 to-transparent" />
         <div className="absolute left-3 right-3 top-3 flex min-w-0 items-start justify-between gap-2">
           <span
@@ -9113,6 +9159,22 @@ function reelThumbnailUrl(game: Game, videoName: string, clip: Pick<Clip, 'start
     format,
   })
   return apiUrl(`/games/${encodeURIComponent(game.tag)}/reel-thumbnail/${encodeURIComponent(videoName)}?${params.toString()}`)
+}
+
+function clipPosterUrl(
+  game: Game,
+  videoName: string,
+  clip: Pick<Clip, 'start_time' | 'end_time'>,
+  format: ReelFormatKey,
+  indexVideos: IndexVideo[] = [],
+  preferExactFrame = false,
+) {
+  if (preferExactFrame) {
+    return reelThumbnailUrl(game, videoName, clip, format)
+  }
+  const indexedPoster = cleanString(indexVideoForName(game, indexVideos, videoName)?.thumbnail_url)
+  if (indexedPoster) return indexedPoster
+  return thumbnailForVideoName(game, videoName)
 }
 
 function clamp(value: number, min: number, max: number) {
