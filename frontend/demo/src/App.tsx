@@ -1662,79 +1662,69 @@ function App() {
       <div className="flex min-h-screen flex-col">
         <header
           ref={headerRef}
-          className={[
-            'sticky top-0 z-50 border-b shadow-[0_1px_0_rgba(29,28,27,0.04)]',
-            'border-border bg-surface',
-          ].join(' ')}
+          className="app-header sticky top-0 z-50 border-b border-border bg-surface shadow-[0_1px_0_rgba(29,28,27,0.04)]"
         >
-          <div
-            className={[
-              'mx-auto flex w-full max-w-[1440px] flex-col gap-3 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between',
-            ].join(' ')}
-          >
-            <div className="flex items-center gap-4">
+          <div className="app-header-inner mx-auto w-full max-w-[1440px]">
+            <div className="app-header-brand">
               <button
                 type="button"
                 onClick={goToDiscoverHome}
-                className="logo-svg inline-flex h-9 w-[180px] shrink-0 items-center justify-center text-brand-charcoal transition-opacity hover:opacity-80"
+                className="app-header-logo logo-svg inline-flex shrink-0 items-center justify-center text-brand-charcoal transition-opacity hover:opacity-80"
                 aria-label="Back to Discover"
                 title="Back to Discover"
                 dangerouslySetInnerHTML={{ __html: logoFull }}
               />
-              <div className="h-7 w-px bg-border" />
-              <div>
-                <h1 className="text-lg font-semibold text-text-primary">Sports Jockey Intelligence</h1>
+              <div className="app-header-divider bg-border" aria-hidden="true" />
+              <h1 className="app-header-title text-text-primary">Sports Jockey Intelligence</h1>
+              <div className="app-header-status">
+                <LiveApiBadge loading={loadingGames} error={Boolean(gamesError)} />
               </div>
             </div>
-            <nav className="flex w-full items-center gap-2 lg:w-auto lg:flex-1">
-              <div className="flex min-w-0 flex-1 flex-wrap items-center justify-start gap-1.5">
+
+            <nav className="app-header-nav" aria-label="Main navigation">
+              <div className="app-header-nav-tabs">
                 {navItems.map((item) => (
                   <button
                     key={item.key}
                     type="button"
                     onClick={() => navigate(item.key)}
-                    className={[
-                      'inline-flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md border px-2 text-xs font-semibold transition-colors sm:px-2.5 sm:text-sm',
-                      navButtonClass(view, item.key),
-                    ].join(' ')}
+                    aria-current={view === item.key ? 'page' : undefined}
+                    className={['app-header-nav-tab', navButtonClass(view, item.key)].join(' ')}
                   >
-                    <StrandIcon name={item.icon} className="h-3.5 w-3.5 shrink-0" />
-                    <span>{item.label}</span>
+                    <StrandIcon name={item.icon} className="app-header-nav-icon shrink-0" />
+                    <span className="app-header-nav-label">{item.label}</span>
                   </button>
                 ))}
               </div>
-              <div className="hidden shrink-0 sm:block">
-                <LiveApiBadge loading={loadingGames} error={Boolean(gamesError)} />
+
+              <div className="app-header-actions">
+                <button
+                  type="button"
+                  onClick={startTutorial}
+                  className="app-header-action border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+                  title="Start guided tutorial"
+                >
+                  <StrandIcon name="help" className="h-4 w-4 shrink-0" />
+                  <span className="app-header-action-label">Tutorial</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUploadModalOpen(true)}
+                  disabled={!selectedGame || loadingGames}
+                  className={[
+                    'app-header-action',
+                    selectedGame && !loadingGames
+                      ? 'border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal'
+                      : 'cursor-not-allowed border-border bg-card text-text-tertiary',
+                  ].join(' ')}
+                  aria-haspopup="dialog"
+                  title="Add Video"
+                >
+                  <StrandIcon name="plus" className="h-4 w-4 shrink-0" />
+                  <span className="app-header-action-label">Add Video</span>
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={startTutorial}
-                className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-xs font-semibold text-text-secondary transition-colors hover:border-accent hover:bg-accent-light hover:text-brand-charcoal sm:px-3 sm:text-sm"
-                title="Start guided tutorial"
-              >
-                <StrandIcon name="help" className="h-4 w-4" />
-                <span>Tutorial</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setUploadModalOpen(true)}
-                disabled={!selectedGame || loadingGames}
-                className={[
-                  'ml-auto inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition-colors sm:px-3 sm:text-sm',
-                  selectedGame && !loadingGames
-                    ? 'border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal'
-                    : 'cursor-not-allowed border-border bg-card text-text-tertiary',
-                ].join(' ')}
-                aria-haspopup="dialog"
-                title="Add Video"
-              >
-                <StrandIcon name="plus" className="h-4 w-4" />
-                <span>Add Video</span>
-              </button>
             </nav>
-            <div className="sm:hidden">
-              <LiveApiBadge loading={loadingGames} error={Boolean(gamesError)} />
-            </div>
           </div>
         </header>
 
@@ -2128,28 +2118,28 @@ function JockeyPage({
 }) {
   if (loading) {
     return (
-      <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-6 px-6 py-6">
+      <div className="jockey-chat-page jockey-chat-page--status mx-auto flex w-full max-w-[1440px] flex-1 flex-col">
         <Notice tone="neutral" icon="spinner" text="Loading Jockey" />
       </div>
     )
   }
   if (error) {
     return (
-      <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-6 px-6 py-6">
+      <div className="jockey-chat-page jockey-chat-page--status mx-auto flex w-full max-w-[1440px] flex-1 flex-col">
         <Notice tone="error" icon="warning" text={error} />
       </div>
     )
   }
   if (!game) {
     return (
-      <div className="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-6 px-6 py-6">
+      <div className="jockey-chat-page jockey-chat-page--status mx-auto flex w-full max-w-[1440px] flex-1 flex-col">
         <Notice tone="neutral" icon="info" text="No analyzed game selected" />
       </div>
     )
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1440px] flex-1 px-6 py-6">
+    <div className="jockey-chat-page mx-auto flex w-full max-w-[1440px] flex-1">
       <ProducerChatPanel
         game={game}
         onOpenInWorkspace={onOpenInWorkspace}
@@ -3494,31 +3484,31 @@ function ProducerChatPanel({
   }
 
   return (
-    <section className="flex min-h-[calc(100vh-132px)] w-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-1 py-8">
+    <section className="jockey-chat flex min-h-0 w-full flex-1 flex-col">
+      <div className="jockey-chat-messages min-h-0 flex-1 overflow-y-auto">
         {showSuggestions ? (
-          <div className="mx-auto flex min-h-[440px] w-full max-w-3xl flex-col justify-center">
-            <div className="grid gap-2">
+          <div className="jockey-chat-suggestions">
+            <div className="jockey-chat-suggestion-list">
               {jockeyProducerSkills.map((skill) => (
                 <button
                   key={skill.key}
                   type="button"
                   onClick={() => loadSkillPrompt(skill)}
-                  className="group grid grid-cols-[32px_minmax(0,1fr)] items-center gap-3 rounded-md border border-border-light bg-surface px-4 py-3 text-left text-text-secondary shadow-[0_1px_2px_rgba(31,41,33,0.035)] transition-colors hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+                  className="jockey-chat-suggestion group text-left text-text-secondary"
                 >
-                  <span className="inline-flex h-8 w-8 items-center justify-center" style={{ color: skill.color }}>
+                  <span className="jockey-chat-suggestion-icon inline-flex items-center justify-center" style={{ color: skill.color }}>
                     <StrandIcon name={skill.icon} className="h-5 w-5" />
                   </span>
-                  <span className="min-w-0">
+                  <span className="jockey-chat-suggestion-copy min-w-0">
                     <span className="block text-sm font-semibold text-text-primary">{skill.label}</span>
-                    <span className="mt-1 line-clamp-2 block text-xs font-medium leading-5 text-text-secondary group-hover:text-brand-charcoal">{skill.prompt}</span>
+                    <span className="jockey-chat-suggestion-prompt mt-1 line-clamp-2 block text-xs font-medium leading-5 text-text-secondary group-hover:text-brand-charcoal">{skill.prompt}</span>
                   </span>
                 </button>
               ))}
             </div>
           </div>
         ) : (
-          <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 pb-4">
+          <div className="jockey-chat-thread">
             {exchanges.map((exchange) => (
               <JockeyExchangeView
                 key={exchange.id}
@@ -3528,7 +3518,7 @@ function ProducerChatPanel({
               />
             ))}
             {loading && (
-              <div className="inline-flex w-fit items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm font-semibold text-text-secondary">
+              <div className="jockey-chat-loading inline-flex w-fit items-center gap-2 rounded-md border border-border bg-surface text-sm font-semibold text-text-secondary">
                 <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
                 Jockey is answering
               </div>
@@ -3538,8 +3528,8 @@ function ProducerChatPanel({
         )}
       </div>
 
-      <div className="sticky bottom-0 border-t border-border-light bg-background/95 px-1 py-4 backdrop-blur-sm">
-        <div data-tour-id="jockey-composer" className="mx-auto flex max-w-5xl items-end gap-3 rounded-md border border-border bg-surface px-3 py-2 shadow-[0_10px_30px_rgba(29,28,27,0.08)]">
+      <div className="jockey-chat-composer-shell">
+        <div data-tour-id="jockey-composer" className="jockey-chat-composer">
           <textarea
             ref={composerRef}
             value={draft}
@@ -3551,7 +3541,7 @@ function ProducerChatPanel({
               }
             }}
             rows={1}
-            className="max-h-[132px] min-h-[48px] flex-1 resize-none bg-transparent px-2 py-3 text-sm font-medium leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
+            className="jockey-chat-input max-h-[132px] min-h-[48px] flex-1 resize-none bg-transparent text-sm font-medium leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
             placeholder={activeSkill ? activeSkill.label : 'Ask Jockey a question or ask for a clip.'}
           />
           <button
@@ -3559,14 +3549,14 @@ function ProducerChatPanel({
             onClick={() => submitPrompt(draft)}
             disabled={!canSubmit}
             className={[
-              'mb-1 inline-flex h-10 shrink-0 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
+              'jockey-chat-send inline-flex shrink-0 items-center gap-2 rounded-md border text-sm font-semibold',
               canSubmit
                 ? 'border-accent bg-accent-light text-brand-charcoal hover:bg-accent'
                 : 'cursor-not-allowed border-border bg-card text-text-tertiary',
             ].join(' ')}
           >
             <StrandIcon name={loading ? 'spinner' : 'generate'} className={['h-4 w-4', loading ? 'animate-spin' : ''].join(' ')} />
-            Send
+            <span className="jockey-chat-send-label">Send</span>
           </button>
         </div>
       </div>
@@ -3584,12 +3574,12 @@ function JockeyExchangeView({
   onOpenInWorkspace: (videoName: string, searchMoment: SearchMoment) => void
 }) {
   return (
-    <div className="min-w-0">
-      <div className="ml-auto max-w-3xl rounded-md border border-brand-charcoal bg-brand-charcoal px-4 py-3 text-sm font-semibold leading-6 text-white shadow-[0_8px_20px_rgba(29,28,27,0.14)]">
-        <p>{exchange.prompt}</p>
+    <div className="jockey-chat-exchange min-w-0">
+      <div className="jockey-chat-user-prompt rounded-md border border-brand-charcoal bg-brand-charcoal text-sm font-semibold leading-6 text-white shadow-[0_8px_20px_rgba(29,28,27,0.14)]">
+        <p className="jockey-chat-user-prompt-text">{exchange.prompt}</p>
       </div>
       {exchange.error ? (
-        <div className="mt-4 max-w-3xl rounded-md border border-error bg-error-light px-4 py-3 text-sm font-semibold leading-6 text-error-dark">
+        <div className="jockey-chat-error mt-4 rounded-md border border-error bg-error-light px-4 py-3 text-sm font-semibold leading-6 text-error-dark">
           {exchange.error}
         </div>
       ) : exchange.response ? (
@@ -3625,7 +3615,7 @@ function JockeyResponseShowcase({
 
   if (showReel) {
     return (
-      <div className="mt-4">
+      <div className="jockey-chat-response-block mt-4">
         <JockeyManifestSummary
           game={game}
           exchange={exchange}
@@ -3646,15 +3636,15 @@ function JockeyResponseShowcase({
   }
 
   return (
-    <div className="mt-4 max-w-4xl rounded-md border border-border-light bg-surface px-4 py-4 shadow-[0_1px_2px_rgba(31,41,33,0.035)]">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="jockey-chat-response jockey-chat-response-block mt-4 rounded-md border border-border-light bg-surface shadow-[0_1px_2px_rgba(31,41,33,0.035)]">
+      <div className="jockey-chat-response-header">
         <div className="flex min-w-0 items-center gap-2">
-          <StrandIcon name={skill?.icon || 'speech'} className="h-4 w-4 text-accent" />
+          <StrandIcon name={skill?.icon || 'speech'} className="h-4 w-4 shrink-0 text-accent" />
           <h3 className="text-sm font-semibold text-text-primary">Jockey</h3>
         </div>
         <JockeySaveTurnButton game={game} exchange={exchange} response={response} />
       </div>
-      <p className="mt-3 text-sm font-medium leading-6 text-text-secondary">{response.narrative_summary}</p>
+      <p className="jockey-chat-response-body mt-3 text-sm font-medium leading-6 text-text-secondary">{response.narrative_summary}</p>
     </div>
   )
 }
@@ -3671,15 +3661,15 @@ function JockeyManifestSummary({
   skill?: (typeof jockeyProducerSkills)[number]
 }) {
   return (
-    <div className="max-w-4xl rounded-md border border-border-light bg-surface px-4 py-4 shadow-[0_1px_2px_rgba(31,41,33,0.035)]">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="jockey-chat-response jockey-chat-response-block rounded-md border border-border-light bg-surface shadow-[0_1px_2px_rgba(31,41,33,0.035)]">
+      <div className="jockey-chat-response-header">
         <div className="flex min-w-0 items-center gap-2">
-          <StrandIcon name={skill?.icon || 'document-list'} className="h-4 w-4 text-accent" />
+          <StrandIcon name={skill?.icon || 'document-list'} className="h-4 w-4 shrink-0 text-accent" />
           <h3 className="text-sm font-semibold text-text-primary">Jockey Reasoning</h3>
         </div>
         <JockeySaveTurnButton game={game} exchange={exchange} response={response} />
       </div>
-      <p className="mt-3 text-sm font-medium leading-6 text-text-secondary">{response.narrative_summary}</p>
+      <p className="jockey-chat-response-body mt-3 text-sm font-medium leading-6 text-text-secondary">{response.narrative_summary}</p>
     </div>
   )
 }
@@ -3731,14 +3721,14 @@ function JockeySaveTurnButton({
   }
 
   return (
-    <div className="flex shrink-0 flex-col items-end gap-1">
+    <div className="jockey-chat-save flex shrink-0 flex-col items-stretch gap-1 sm:items-end">
       <button
         type="button"
         aria-label={`Save Jockey turn: ${promptPreview}`}
         title={saved ? 'Saved to video workspace metadata' : 'Save this turn to the source video workspace metadata'}
         disabled={!canSave || saving}
         className={[
-          'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold shadow-[0_1px_2px_rgba(31,41,33,0.035)]',
+          'jockey-chat-save-button inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold shadow-[0_1px_2px_rgba(31,41,33,0.035)]',
           saved
             ? 'border-accent/40 bg-accent-light text-brand-charcoal'
             : 'border-border-light bg-card text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
@@ -3749,7 +3739,7 @@ function JockeySaveTurnButton({
         <StrandIcon name={saving ? 'spinner' : saved ? 'checkmark' : 'document'} className={['h-3.5 w-3.5', saving ? 'animate-spin' : ''].join(' ')} />
         {saved ? 'Saved' : saving ? 'Saving' : 'Save'}
       </button>
-      {error ? <span className="max-w-[220px] truncate text-[10px] font-semibold text-error">{error}</span> : null}
+      {error ? <span className="jockey-chat-save-error truncate text-[10px] font-semibold text-error">{error}</span> : null}
     </div>
   )
 }
@@ -3766,8 +3756,8 @@ function JockeyClipShowcase({
   const showSliderRow = clips.length > 3
 
   return (
-    <div className={showSliderRow ? 'mt-4 max-w-4xl overflow-x-auto pb-3' : 'mt-4 max-w-[680px]'}>
-      <div className={showSliderRow ? 'flex w-max snap-x gap-3' : 'grid grid-cols-[repeat(auto-fit,minmax(164px,196px))] gap-3'}>
+    <div className={['jockey-chat-clips', showSliderRow ? 'jockey-chat-clips--slider' : ''].join(' ')}>
+      <div className={['jockey-chat-clips-track', showSliderRow ? 'jockey-chat-clips-track--slider' : ''].join(' ')}>
         {clips.map((clip, index) => {
           const sourceName = jockeyClipVideoName(game, clip)
           const streamInfoUrl = jockeyClipStreamInfoUrl(game, clip)
@@ -3780,11 +3770,11 @@ function JockeyClipShowcase({
             <article
               key={clip.id}
               className={[
-                'min-w-0 overflow-hidden rounded-md border border-border-light bg-surface shadow-[0_8px_18px_rgba(29,28,27,0.055)]',
-                showSliderRow ? 'w-[196px] shrink-0 snap-start' : '',
+                'jockey-chat-clip-card min-w-0 overflow-hidden rounded-md border border-border-light bg-surface shadow-[0_8px_18px_rgba(29,28,27,0.055)]',
+                showSliderRow ? 'jockey-chat-clip-card--slider shrink-0 snap-start' : '',
               ].join(' ')}
             >
-            <div className="relative m-1.5 aspect-[9/16] overflow-hidden rounded-md bg-brand-charcoal ring-1 ring-black/5">
+            <div className="jockey-chat-clip-media relative m-1.5 aspect-[9/16] overflow-hidden rounded-md bg-brand-charcoal ring-1 ring-black/5">
               {downloadUrl && (
                 <a
                   href={downloadUrl}
@@ -3819,19 +3809,19 @@ function JockeyClipShowcase({
               )}
             </div>
 
-            <div className="px-3 pb-3 pt-1">
-              <div className="flex min-w-0 items-center justify-between gap-2">
+            <div className="jockey-chat-clip-meta px-3 pb-3 pt-1">
+              <div className="jockey-chat-clip-meta-row flex min-w-0 flex-wrap items-center gap-2">
                 <p className="min-w-0 truncate font-mono text-xs font-semibold text-text-primary">
                   {formatSeconds(paddedRange.start)} - {formatSeconds(paddedRange.end)}
                 </p>
-                <span className="shrink-0 rounded-sm border border-border-light bg-card px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
+                <span className="jockey-chat-clip-confidence shrink-0 rounded-sm border border-border-light bg-card px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-tertiary">
                   Conf. {confidenceLabel(clip.confidence)}
                 </span>
                 {workspaceMoment && sourceName && (
                   <button
                     type="button"
                     onClick={() => onOpenInWorkspace(sourceName, workspaceMoment)}
-                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-tertiary hover:bg-accent-light hover:text-brand-charcoal"
+                    className="jockey-chat-clip-open ml-auto inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-tertiary hover:bg-accent-light hover:text-brand-charcoal"
                     aria-label={`Open ${clip.start_time} clip in Workspace`}
                     title="Open in Workspace"
                   >
@@ -4091,7 +4081,7 @@ function LiveApiBadge({ loading, error }: { loading: boolean; error: boolean }) 
   return (
     <div
       className={[
-        'inline-flex h-9 items-center gap-2 rounded-md border px-3 text-xs font-semibold',
+        'app-header-api-badge inline-flex items-center gap-2 rounded-md border font-semibold',
         error
           ? 'border-error bg-error-light text-error-dark'
           : loading
@@ -4100,7 +4090,7 @@ function LiveApiBadge({ loading, error }: { loading: boolean; error: boolean }) 
       ].join(' ')}
     >
       <span className={['h-2 w-2 rounded-full', error ? 'bg-error' : loading ? 'bg-text-tertiary' : 'bg-accent'].join(' ')} />
-      {label}
+      <span className="app-header-api-badge-label">{label}</span>
     </div>
   )
 }
@@ -4217,8 +4207,8 @@ function OverviewPage({
   loading: boolean
 }) {
   return (
-    <div className="flex flex-1 flex-col bg-background">
-      <div className="overview-shell mx-auto w-full max-w-[1440px] px-3 py-3 sm:px-4 lg:px-5">
+    <div className="overview-page flex flex-1 flex-col bg-background">
+      <div className="overview-shell mx-auto w-full max-w-[1440px]">
         <section className="overview-hero-card relative overflow-hidden rounded-2xl border border-border bg-surface shadow-[0_10px_28px_rgba(29,28,27,0.045)]">
           <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-mb-green via-mb-orange to-mb-pink" aria-hidden="true" />
           <div className="overview-hero">
@@ -4254,7 +4244,7 @@ function OverviewPage({
           </div>
         </section>
 
-        <div className="overview-sections mt-10 divide-y-2 divide-border border-t-2 border-border pb-10 lg:mt-12 lg:pb-12">
+        <div className="overview-sections divide-y-2 divide-border border-t-2 border-border">
           <div className="overview-section">
             <OverviewNarrativePanel problems={overviewProblemPoints} />
           </div>
@@ -4282,7 +4272,7 @@ function OverviewPage({
             <OverviewReservedSlot
               label="Architecture diagram"
               detail="A single view of ingest, indexing, models, and the three producer screens that sit on top."
-              minHeightClass="min-h-[280px]"
+              minHeightClass="min-h-[220px] sm:min-h-[280px]"
             />
           </section>
 
@@ -4296,7 +4286,7 @@ function OverviewPage({
             <OverviewReservedSlot
               label="Product demo"
               detail="Screen recording or interactive preview of the full producer path on live match footage."
-              minHeightClass="min-h-[300px]"
+              minHeightClass="min-h-[240px] sm:min-h-[300px]"
             />
           </section>
 
@@ -4355,13 +4345,13 @@ function OverviewNavButtons({
   onNavigate?: (view: ViewKey) => void
 }) {
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="overview-nav-buttons">
       {variant === 'hero' && onNavigate ? (
         <button
           type="button"
           onClick={() => onNavigate('discover')}
           className={[
-            'inline-flex h-10 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
+            'overview-nav-button inline-flex h-10 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
             overviewNavButtonClass('hero', 'primary'),
           ].join(' ')}
         >
@@ -4376,7 +4366,7 @@ function OverviewNavButtons({
           target="_blank"
           rel="noopener noreferrer"
           className={[
-            'overview-nav-external inline-flex h-10 items-center justify-center rounded-md border px-4 text-sm font-semibold',
+            'overview-nav-external overview-nav-button inline-flex h-10 items-center justify-center rounded-md border px-4 text-sm font-semibold',
             overviewNavButtonClass(variant, variant === 'closing' && index === 1 ? 'primary' : 'secondary'),
           ].join(' ')}
         >
@@ -4397,7 +4387,7 @@ function OverviewSectionHeader({
   lead: string
 }) {
   return (
-    <header className="mb-6 lg:mb-8">
+    <header className="overview-section-header">
       <p className="overview-kicker">{kicker}</p>
       <h3 className="overview-heading">{title}</h3>
       <p className="overview-lead">{lead}</p>
@@ -4423,11 +4413,11 @@ function OverviewCompareLiftVisual() {
 
 function OverviewCompareSection({ columns }: { columns: typeof overviewCompareColumns }) {
   return (
-    <div className="grid gap-4 lg:grid-cols-2 lg:gap-5">
+    <div className="overview-compare-grid">
       {columns.map((column) => (
         <article
           key={column.title}
-          className={column.kind === 'feed' ? 'overview-compare-feed px-5 py-6 sm:px-6 sm:py-7' : 'overview-compare-lift px-5 py-6 sm:px-6 sm:py-7'}
+          className={column.kind === 'feed' ? 'overview-compare-feed overview-compare-card' : 'overview-compare-lift overview-compare-card'}
         >
           {column.kind === 'lift' ? (
             <div className="overview-compare-lift-inner">
@@ -4470,8 +4460,8 @@ function OverviewCompareSection({ columns }: { columns: typeof overviewCompareCo
 function OverviewNarrativePanel({ problems }: { problems: typeof overviewProblemPoints }) {
   return (
     <section className="overview-block overview-panel overview-narrative">
-      <div className="grid lg:grid-cols-2 lg:items-stretch">
-        <div className="overview-narrative-problem border-b border-border px-5 py-7 sm:px-6 lg:border-b-0 lg:border-r lg:px-7 lg:py-8">
+      <div className="overview-narrative-grid">
+        <div className="overview-narrative-problem overview-narrative-pane">
           <span className="overview-narrative-badge overview-narrative-badge-problem">The problem</span>
           <h3 className="overview-heading mt-3 max-w-xl">Clip volume scaled. Editorial lift didn&apos;t.</h3>
           <ul className="overview-narrative-points mt-6">
@@ -4488,7 +4478,7 @@ function OverviewNarrativePanel({ problems }: { problems: typeof overviewProblem
             ))}
           </ul>
         </div>
-        <div className="overview-narrative-solution px-5 py-7 sm:px-6 lg:px-7 lg:py-8">
+        <div className="overview-narrative-solution overview-narrative-pane">
           <span className="overview-narrative-badge overview-narrative-badge-solution">The solution</span>
           <h3 className="overview-heading mt-3 max-w-xl">Semantic lift on the match you already indexed</h3>
           <p className="mt-4 max-w-lg text-sm leading-6 text-text-secondary">
@@ -4523,7 +4513,7 @@ function OverviewBadgeSectionHeader({
   lead: string
 }) {
   return (
-    <header className="mb-8 text-center lg:mb-10">
+    <header className="overview-badge-header">
       <span className={['overview-section-badge', `overview-section-badge-${badgeTone}`].join(' ')}>
         {badge}
       </span>
@@ -4542,9 +4532,9 @@ function OverviewFeaturesSection({ features }: { features: typeof overviewFeatur
         title="How the app fits together"
         lead="Pick a game, search in Discover, produce on the Dashboard, prompt reels in Jockey, and keep your work on the match asset across sessions."
       />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="overview-features-grid">
         {features.map((feature) => (
-          <article key={feature.title} className="overview-feature-card flex flex-col px-5 py-6 sm:px-6 sm:py-7">
+          <article key={feature.title} className="overview-feature-card">
             <span
               className={[
                 'inline-flex h-11 w-11 items-center justify-center rounded-xl',
@@ -4573,7 +4563,7 @@ function OverviewReservedSlot({
   minHeightClass?: string
 }) {
   return (
-    <div className={['overview-reserved flex flex-col justify-end px-5 py-6 sm:px-6 sm:py-7', minHeightClass].join(' ')}>
+    <div className={['overview-reserved', minHeightClass].join(' ')}>
       <StrandIcon name="canvas" className="h-7 w-7 text-text-tertiary" />
       <p className="mt-4 text-sm font-semibold text-text-primary">{label}</p>
       <p className="mt-1.5 max-w-md text-sm leading-6 text-text-secondary">{detail}</p>
@@ -4583,9 +4573,9 @@ function OverviewReservedSlot({
 
 function OverviewClosingPanel() {
   return (
-    <section className="overview-closing overview-block relative overflow-hidden px-5 py-10 sm:px-7 sm:py-12">
+    <section className="overview-closing overview-block relative overflow-hidden">
       <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-mb-green via-mb-orange to-mb-pink" aria-hidden="true" />
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-10">
+      <div className="overview-closing-grid">
         <div className="min-w-0">
           <p className="overview-kicker">Why it matters</p>
           <h3 className="overview-heading mt-3">Less hunting. More conviction on every cut.</h3>
@@ -5064,7 +5054,7 @@ function DiscoverPage({
 
   if (error) {
     return (
-      <section className="flex flex-1 items-center justify-center px-6 py-10">
+      <section className="discover-page discover-page--status flex flex-1 items-center justify-center">
         <Notice tone="error" icon="warning" text={error} />
       </section>
     )
@@ -5072,8 +5062,8 @@ function DiscoverPage({
 
   if (loading || !game) {
     return (
-      <section className="flex flex-1 items-center justify-center px-6 py-10">
-        <div className="flex items-center gap-3 rounded-md border border-border bg-surface px-4 py-3 text-sm font-semibold text-text-secondary shadow-[0_1px_2px_rgba(29,28,27,0.035)]">
+      <section className="discover-page discover-page--status flex flex-1 items-center justify-center">
+        <div className="discover-page-loading flex items-center gap-3 rounded-md border border-border bg-surface text-sm font-semibold text-text-secondary shadow-[0_1px_2px_rgba(29,28,27,0.035)]">
           <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
           Loading sports videos
         </div>
@@ -5082,19 +5072,19 @@ function DiscoverPage({
   }
 
   return (
-    <section className="flex flex-1 bg-background">
-      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6 px-6 py-8">
-        <div className="grid gap-5 border-b border-border pb-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-          <div className="min-w-0">
-            <div className="inline-flex h-8 items-center rounded-full bg-accent-light px-4 text-xs font-semibold uppercase tracking-[0.18em] text-brand-charcoal">
+    <section className="discover-page flex flex-1 bg-background">
+      <div className="discover-page-shell mx-auto flex w-full max-w-[1440px] flex-col">
+        <header className="discover-page-header">
+          <div className="discover-page-intro min-w-0">
+            <div className="discover-page-kicker inline-flex items-center rounded-full bg-accent-light font-semibold uppercase text-brand-charcoal">
               Marengo Search
             </div>
-            <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-tight text-text-primary lg:text-5xl">
+            <h2 className="discover-page-title mt-5 max-w-4xl font-semibold leading-tight text-text-primary">
               {normalizedQuery ? submittedSearchQuery : game.label}
             </h2>
-            <p className="mt-3 max-w-3xl text-base leading-7 text-text-secondary">{searchSummary}</p>
+            <p className="discover-page-lead mt-3 max-w-3xl text-text-secondary">{searchSummary}</p>
           </div>
-        </div>
+        </header>
 
         <DiscoverSearchPanel
           value={searchQuery}
@@ -5109,22 +5099,22 @@ function DiscoverPage({
           onPresetSelect={selectPreset}
         />
 
-        <section className="min-w-0">
-          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="inline-flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.18em] text-text-tertiary">
-              <StrandIcon name={searchLoading ? 'spinner' : 'search'} className={['h-4 w-4', searchLoading ? 'animate-spin' : ''].join(' ')} />
-              {resultLabel} · click to open
+        <section className="discover-page-results min-w-0">
+          <div className="discover-page-results-bar">
+            <div className="discover-page-results-label inline-flex items-center gap-3 font-semibold uppercase text-text-tertiary">
+              <StrandIcon name={searchLoading ? 'spinner' : 'search'} className={['h-4 w-4 shrink-0', searchLoading ? 'animate-spin' : ''].join(' ')} />
+              <span>{resultLabel} · click to open</span>
             </div>
           </div>
 
           {searchError && (
-            <div className="mb-4">
+            <div className="discover-page-error mb-4">
               <Notice tone="error" icon="warning" text={searchError} />
             </div>
           )}
 
           {indexLoading && !normalizedQuery && items.length === 0 ? (
-            <div className="flex min-h-[320px] items-center justify-center rounded-md border border-border bg-card p-8 text-center">
+            <div className="discover-page-state flex min-h-[320px] items-center justify-center rounded-md border border-border bg-card text-center">
               <div className="max-w-sm">
                 <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
                   <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
@@ -5134,7 +5124,7 @@ function DiscoverPage({
               </div>
             </div>
           ) : searchLoading && items.length === 0 ? (
-            <div className="flex min-h-[320px] items-center justify-center rounded-md border border-border bg-card p-8 text-center">
+            <div className="discover-page-state flex min-h-[320px] items-center justify-center rounded-md border border-border bg-card text-center">
               <div className="max-w-sm">
                 <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
                   <StrandIcon name="spinner" className="h-4 w-4 animate-spin" />
@@ -5144,7 +5134,7 @@ function DiscoverPage({
               </div>
             </div>
           ) : items.length > 0 ? (
-            <div className="grid auto-rows-fr gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="discover-page-grid">
               {items.map((item) => (
                 <DiscoverResultCard
                   key={item.id}
@@ -5192,76 +5182,80 @@ function DiscoverSearchPanel({
   onPresetSelect: (value: string) => void
 }) {
   return (
-    <div data-tour-id="marengo-search" className="grid gap-4 rounded-md border border-border bg-card p-4 shadow-[0_8px_24px_rgba(29,28,27,0.045)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+    <div data-tour-id="marengo-search" className="discover-search-panel">
       <label htmlFor="discover-search" className="sr-only">
         Search source videos
       </label>
-      <div className="grid gap-3">
-        <div className="flex min-h-12 min-w-0 items-center gap-3 rounded-md border border-border bg-surface pl-4 pr-2 focus-within:border-accent">
-          <StrandIcon name={searchLoading ? 'spinner' : 'search'} className={['h-4 w-4 text-text-tertiary', searchLoading ? 'animate-spin' : ''].join(' ')} />
-          <input
-            id="discover-search"
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') onSubmit()
-              if (event.key === 'Escape') onClear()
-            }}
-            className="min-w-0 flex-1 bg-transparent text-base font-medium text-text-primary outline-none placeholder:text-text-tertiary"
-            placeholder="Search visual/audio moments - player celebration, crowd roar, diving save..."
-          />
-          {value && (
+      <div className="discover-search-main">
+        <div className="discover-search-field">
+          <div className="discover-search-input-wrap rounded-md border border-border bg-surface focus-within:border-accent">
+            <StrandIcon name={searchLoading ? 'spinner' : 'search'} className={['discover-search-input-icon shrink-0 text-text-tertiary', searchLoading ? 'animate-spin' : ''].join(' ')} />
+            <input
+              id="discover-search"
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') onSubmit()
+                if (event.key === 'Escape') onClear()
+              }}
+              className="discover-search-input min-w-0 flex-1 bg-transparent font-medium text-text-primary outline-none placeholder:text-text-tertiary"
+              placeholder="Search visual/audio moments - player celebration, crowd roar, diving save..."
+            />
+            {value && (
+              <button
+                type="button"
+                onClick={onClear}
+                className="discover-search-clear flex shrink-0 items-center justify-center rounded-md border border-border bg-card text-text-secondary hover:border-accent hover:text-brand-charcoal"
+                aria-label="Clear search"
+                title="Clear search"
+              >
+                <StrandIcon name="close" className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <div className="discover-search-actions">
             <button
               type="button"
-              onClick={onClear}
-              className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-card text-text-secondary hover:border-accent hover:text-brand-charcoal"
-              aria-label="Clear search"
-              title="Clear search"
+              onClick={onSubmit}
+              disabled={!canSearch}
+              className={[
+                'discover-search-submit inline-flex items-center justify-center gap-2 rounded-md border font-semibold',
+                canSearch
+                  ? 'border-accent bg-accent-light text-brand-charcoal hover:bg-accent'
+                  : 'cursor-not-allowed border-border bg-card text-text-tertiary',
+              ].join(' ')}
             >
-              <StrandIcon name="close" className="h-3.5 w-3.5" />
+              <StrandIcon name="search" className="h-4 w-4 shrink-0" />
+              <span>Search</span>
             </button>
-          )}
-          <button
-            type="button"
-            onClick={onSubmit}
-            disabled={!canSearch}
-            className={[
-              'inline-flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold',
-              canSearch
-                ? 'border-accent bg-accent-light text-brand-charcoal hover:bg-accent'
-                : 'cursor-not-allowed border-border bg-card text-text-tertiary',
-            ].join(' ')}
-          >
-            <StrandIcon name="search" className="h-4 w-4" />
-            Search
-          </button>
-          {canClear && (
-            <button
-              type="button"
-              onClick={onClear}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
-            >
-              <StrandIcon name="close" className="h-4 w-4" />
-              Clear
-            </button>
-          )}
+            {canClear && (
+              <button
+                type="button"
+                onClick={onClear}
+                className="discover-search-reset inline-flex items-center justify-center gap-2 rounded-md border border-border bg-card font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+              >
+                <StrandIcon name="close" className="h-4 w-4 shrink-0" />
+                <span>Clear</span>
+              </button>
+            )}
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="discover-search-presets">
           {presets.map((preset) => (
             <button
               key={preset}
               type="button"
               onClick={() => onPresetSelect(preset)}
-              className="inline-flex h-8 max-w-full items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+              className="discover-search-preset inline-flex max-w-full items-center gap-2 rounded-md border border-border bg-surface font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
             >
-              <StrandIcon name="search-v2" className="h-4 w-4 text-accent" />
+              <StrandIcon name="search-v2" className="h-4 w-4 shrink-0 text-accent" />
               <span className="truncate">{preset}</span>
             </button>
           ))}
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border-light pt-3 text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary lg:col-span-2">
+      <div className="discover-search-meta font-semibold uppercase text-text-tertiary">
         <span>{resultLabel}</span>
       </div>
     </div>
@@ -5313,8 +5307,8 @@ function DiscoverResultCard({
   const showSubtitle = Boolean(item.subtitle && item.subtitle.toLowerCase() !== 'ready')
 
   return (
-    <article className="group flex min-w-0 flex-col overflow-hidden rounded-md border border-border bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
-      <div className="relative m-2.5 overflow-hidden rounded-md border border-border-light bg-card">
+    <article className="discover-result-card group flex min-w-0 flex-col overflow-hidden rounded-md border border-border bg-card shadow-[0_8px_24px_rgba(29,28,27,0.045)]">
+      <div className="discover-result-media relative m-2.5 overflow-hidden rounded-md border border-border-light bg-card">
         {canPreviewSegment && isPreviewActive ? (
           <div className="aspect-video">
             <TwelveLabsVideoPlayer
@@ -5359,11 +5353,11 @@ function DiscoverResultCard({
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col px-4 pb-4 pt-1">
-        <div className="flex min-w-0 items-start justify-between gap-2">
+      <div className="discover-result-body flex flex-1 flex-col px-4 pb-4 pt-1">
+        <div className="discover-result-copy flex min-w-0 items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
             {showLabel && <p className="text-xs font-semibold uppercase tracking-[0.16em] text-text-tertiary">{item.label}</p>}
-            <h4 className={[showLabel ? 'mt-1.5' : '', 'line-clamp-2 text-lg font-semibold leading-6 text-text-primary'].join(' ')}>{item.title}</h4>
+            <h4 className={['discover-result-title', showLabel ? 'mt-1.5' : '', 'line-clamp-2 font-semibold leading-6 text-text-primary'].join(' ')}>{item.title}</h4>
             {showSubtitle && <p className="mt-1.5 line-clamp-2 text-sm leading-5 text-text-secondary">{item.subtitle}</p>}
           </div>
         </div>
@@ -5393,7 +5387,7 @@ function DiscoverResultCard({
         )}
 
         {item.resultType === 'search' && (
-          <div className="mt-auto flex flex-wrap gap-2 pt-3">
+          <div className="discover-result-actions mt-auto flex flex-wrap gap-2 pt-3">
             <button
               type="button"
               data-tour-id="analyze-clip"
@@ -5402,7 +5396,7 @@ function DiscoverResultCard({
                 window.dispatchEvent(new CustomEvent(TUTORIAL_ANALYZE_CLIP_EVENT))
               }}
               disabled={!canOpen}
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-sm font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal disabled:cursor-not-allowed disabled:opacity-60"
+              className="discover-result-action inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface font-semibold text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal disabled:cursor-not-allowed disabled:opacity-60"
             >
               <StrandIcon name="analyze" className="h-4 w-4" />
               Analyze Clip
@@ -5482,7 +5476,7 @@ function DiscoverBadge({ icon, children }: { icon: string; children: string }) {
 
 function DiscoverEmptyState({ searchQuery }: { searchQuery: string }) {
   return (
-    <div className="flex min-h-[320px] items-center justify-center rounded-md border border-dashed border-border bg-card p-8 text-center">
+    <div className="discover-page-state discover-page-empty flex min-h-[320px] items-center justify-center rounded-md border border-dashed border-border bg-card text-center">
       <div className="max-w-sm">
         <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-md border border-border bg-surface text-text-secondary">
           <StrandIcon name="search" className="h-4 w-4" />
