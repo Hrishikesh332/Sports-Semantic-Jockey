@@ -8820,9 +8820,49 @@ function scopeCategoryToVideo(game: Game, category: HighlightCategory, videoName
   const normalizedVideoName = videoName.toLowerCase()
   return {
     ...category,
-    clips: category.clips.filter((clip) => videoNameForClip(game, clip) === videoName),
+    clips: category.clips.filter((clip) => clipBelongsToVideo(game, clip, videoName)),
     assembly_notes: category.assembly_notes.filter((note) => note.toLowerCase().includes(normalizedVideoName)),
   }
+}
+
+function isOpaqueVideoReference(reference?: string | null) {
+  const clean = cleanString(reference)
+  if (!clean) return false
+  if (clean.includes('.mp4') || clean.includes('/')) return false
+  return (
+    /^[0-9a-f]{24}$/i.test(clean)
+    || /^6a[0-9a-f]{22}$/i.test(clean)
+    || /^ksi_[0-9a-f-]+$/i.test(clean)
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean)
+  )
+}
+
+function referencesSameVideo(_game: Game, left?: string | null, right?: string | null) {
+  const a = cleanString(left)
+  const b = cleanString(right)
+  if (!a || !b) return false
+  if (a === b) return true
+  const normalizedLeft = normalizeSearchText(a)
+  const normalizedRight = normalizeSearchText(b)
+  if (normalizedLeft === normalizedRight) return true
+  return normalizeSearchText(videoNameStem(a)) === normalizeSearchText(videoNameStem(b))
+}
+
+function mapsToDifferentSourceVideo(game: Game, reference: string, videoName: string) {
+  const mapped = videoNameForReference(game, reference)
+  if (!mapped || mapped === reference) return false
+  if (referencesSameVideo(game, mapped, videoName)) return false
+  if ((game.source_videos || []).includes(mapped)) return true
+  return normalizeSearchText(mapped) !== normalizeSearchText(videoName)
+}
+
+function clipBelongsToVideo(game: Game, clip: Clip, videoName: string) {
+  const resolved = videoNameForClip(game, clip)
+  if (referencesSameVideo(game, resolved, videoName)) return true
+  if (isOpaqueVideoReference(clip.video_reference) && !mapsToDifferentSourceVideo(game, clip.video_reference, videoName)) {
+    return true
+  }
+  return false
 }
 
 function hasUsableConfidence(confidence: number) {
@@ -9329,7 +9369,7 @@ function clipSelectionForVideo(game: Game, reels: HighlightReels, videoName: str
     'standard_stats' as const,
   ]
   for (const category of lanes) {
-    const index = reels[category].clips.findIndex((clip) => videoNameForClip(game, clip) === videoName)
+    const index = reels[category].clips.findIndex((clip) => clipBelongsToVideo(game, clip, videoName))
     if (index !== -1) return { category, index }
   }
   return null
