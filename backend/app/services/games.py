@@ -16,7 +16,14 @@ from urllib.parse import quote
 
 import requests
 
-from app.core.config import TWELVELABS_MODEL, TWELVELABS_PEGASUS_MODEL, default_game_registrations, twelvelabs_index_id
+from app.core.config import (
+    TWELVELABS_MODEL,
+    TWELVELABS_PEGASUS_MODEL,
+    default_game_registrations,
+    env_default_game,
+    knowledge_store_id as env_knowledge_store_id,
+    twelvelabs_index_id,
+)
 from app.core.errors import ApiError
 from app.integrations.twelvelabs import (
     add_indexed_asset as twelvelabs_add_indexed_asset,
@@ -293,15 +300,30 @@ GAME_DEBUG_FIELDS = {
 }
 
 
+def hydrate_game_config(game):
+    if not isinstance(game, dict):
+        return game
+    hydrated = deepcopy(game)
+    if not clean_optional_string(hydrated.get("knowledge_store_id")):
+        store_id = env_knowledge_store_id()
+        if store_id:
+            hydrated["knowledge_store_id"] = store_id
+    if not clean_optional_string(hydrated.get("marengo_index_id")):
+        index_id = twelvelabs_index_id()
+        if index_id:
+            hydrated["marengo_index_id"] = index_id
+    return hydrated
+
+
 def list_games():
     GAMES_DIR.mkdir(parents=True, exist_ok=True)
     games_by_tag = {
-        game["tag"]: deepcopy(game)
+        game["tag"]: hydrate_game_config(deepcopy(game))
         for game in default_game_registrations()
         if isinstance(game.get("tag"), str) and game["tag"]
     }
     for path in sorted(GAMES_DIR.glob("*.json")):
-        game = read_json(path)
+        game = hydrate_game_config(read_json(path))
         games_by_tag[game["tag"]] = game
     games = [public_game(game) for game in games_by_tag.values()]
     return {"games": games}
@@ -543,7 +565,7 @@ def clear_stale_video_bindings(tag, video_name):
                 "tag": game["tag"],
                 "label": game["label"],
                 "sport": game["sport"],
-                "knowledge_store_id": game["knowledge_store_id"],
+                "knowledge_store_id": configured_knowledge_store_id(game),
                 "source_videos": game.get("source_videos", []),
                 "video_reference_map": pruned_reference_map,
                 "video_asset_ids": video_asset_ids,
@@ -626,11 +648,25 @@ def warm_missing_video_thumbnails(index_videos):
 def get_game(tag):
     path = game_path(tag)
     if path.exists():
-        return read_json(path)
+        return hydrate_game_config(read_json(path))
     for game in default_game_registrations():
         if game.get("tag") == tag:
-            return deepcopy(game)
+            return hydrate_game_config(deepcopy(game))
+    env_game = env_default_game()
+    if env_game and env_game.get("tag") == tag:
+        return hydrate_game_config(env_game)
     raise ApiError("game not found", 404)
+
+
+def configured_knowledge_store_id(game=None):
+    if isinstance(game, dict):
+        store_id = clean_optional_string(game.get("knowledge_store_id"))
+        if store_id:
+            return store_id
+    store_id = env_knowledge_store_id()
+    if store_id:
+        return store_id
+    raise ApiError("KNOWLEDGE_STORE_ID or game knowledge_store_id is required for Jockey", 500)
 
 
 def public_game(game):
@@ -717,7 +753,7 @@ def upload_game_video(tag, uploaded_file):
         "video_name": video_name,
         "asset_id": asset_id,
         "asset": uploaded_asset,
-        "knowledge_store_id": game["knowledge_store_id"],
+        "knowledge_store_id": configured_knowledge_store_id(game),
         "index_configured": True,
         "created_search_index": bool(created_index),
         "message": "Upload accepted. The index and knowledge-base item will be ready in a few minutes.",
@@ -933,7 +969,7 @@ def uploaded_game_payload(
         "tag": game["tag"],
         "label": game["label"],
         "sport": game["sport"],
-        "knowledge_store_id": game["knowledge_store_id"],
+        "knowledge_store_id": configured_knowledge_store_id(game),
         "source_videos": source_videos,
         "video_reference_map": video_reference_map,
         "video_asset_ids": video_asset_ids,
@@ -1087,22 +1123,24 @@ def generate_game_highlight_reels(tag, payload=None):
     include_entity_tracking = bool(payload.get("include_entity_tracking"))
     requested_video = payload.get("indexed_asset_id") or payload.get("asset_id") or payload.get("video_name") or payload.get("source_video")
     requested_source_video = payload.get("video_name") or payload.get("source_video")
-    video_name = None
+    video_target = None
     index_id = configured_search_index_id(game)
     if requested_video:
-        try:
-            video_name = validate_registered_video_name(game, requested_source_video or requested_video)
-        except ApiError:
-            indexed_asset = indexed_asset_for_reference(index_id, requested_video)
-            if not indexed_asset:
-                raise ApiError("video is not available in the configured TwelveLabs index", 404)
-            video_name = indexed_asset_workspace_video_name(indexed_asset, requested_source_video or requested_video)
+        video_target = resolve_workspace_video_target(
+            game,
+            video_name=requested_source_video,
+            indexed_asset_id=payload.get("indexed_asset_id"),
+            asset_id=payload.get("asset_id"),
+            reference=requested_video,
+            lookup=payload,
+        )
+    video_name = video_target["video_name"] if video_target else None
 
     match_context = payload.get("match_context") or scoped_match_context(game, video_name)
     wsc_baseline = payload.get("wsc_baseline", game.get("wsc_baseline"))
 
     if video_name and not force_generate:
-        bundle = load_cached_video_dashboard(game, video_name)
+        bundle = load_cached_video_dashboard(game, video_name, lookup=payload)
         if bundle and bundle.get("highlight_reels"):
             cached = bundle["highlight_reels"]
             highlight_reels = jockey_highlight_reels_with_provenance(
@@ -1145,7 +1183,7 @@ def generate_game_highlight_reels(tag, payload=None):
                 "entity_tracking": entity_tracking,
             }
 
-        asset_id = asset_id_for_video_name(game, video_name)
+        asset_id = video_target["asset_id"] if video_target else asset_id_for_video_name(game, video_name)
         if asset_id:
             indexed_assets = indexed_assets_for_video_metadata(game, index_id, asset_id, video_name)
             for indexed_asset in indexed_assets:
@@ -1179,14 +1217,14 @@ def generate_game_highlight_reels(tag, payload=None):
                 }
 
     reels = generate_highlight_reels(
-        game["knowledge_store_id"],
+        configured_knowledge_store_id(game),
         match_context=match_context,
         wsc_baseline=wsc_baseline,
     )
 
     highlight_reels = None
     if video_name:
-        asset_id = asset_id_for_video_name(game, video_name)
+        asset_id = video_target["asset_id"] if video_target else asset_id_for_video_name(game, video_name)
         if asset_id:
             indexed_assets = indexed_assets_for_video_metadata(game, index_id, asset_id, video_name)
             indexed_asset = indexed_asset_for_generated_metadata(game, index_id, asset_id, video_name, indexed_assets)
@@ -1713,7 +1751,15 @@ def search_game_videos(tag, payload=None):
     query = required_payload_string(payload, "query")
     limit = optional_payload_int(payload.get("limit"), "limit", default=12, minimum=1, maximum=24)
     requested_video = payload.get("video_name") or payload.get("source_video")
-    video_name = validate_registered_video_name(game, requested_video) if requested_video else None
+    video_name = None
+    if requested_video or payload.get("indexed_asset_id") or payload.get("asset_id"):
+        video_name = resolve_workspace_video_target(
+            game,
+            video_name=requested_video,
+            indexed_asset_id=payload.get("indexed_asset_id"),
+            asset_id=payload.get("asset_id"),
+            lookup=payload,
+        )["video_name"]
     filter_key = optional_payload_string(payload.get("filter"), "filter") if payload.get("filter") else None
     if filter_key == "all":
         filter_key = None
@@ -1757,6 +1803,17 @@ def create_selected_clip_analysis(tag, payload=None):
         or video_name_for_reference(game, video_reference)
         or requested_video_name
     )
+    try:
+        video_name = resolve_workspace_video_target(
+            game,
+            video_name=video_name,
+            indexed_asset_id=payload.get("indexed_asset_id"),
+            asset_id=payload.get("asset_id") or payload.get("source_asset_id"),
+            reference=video_reference,
+            lookup=payload,
+        )["video_name"]
+    except ApiError:
+        pass
     start_time = required_payload_string(payload, "start_time")
     start_seconds = seconds_from_timecode(start_time)
     if start_seconds is None:
@@ -1777,6 +1834,7 @@ def create_selected_clip_analysis(tag, payload=None):
             start_time,
             end_time,
             query=query or title,
+            lookup=payload,
         )
         if cached and isinstance(cached.get("analysis"), dict):
             cached_item = cached.get("item") if isinstance(cached.get("item"), dict) else {}
@@ -2071,11 +2129,21 @@ def create_entity_tracking_response(tag, payload=None):
     payload = payload or {}
     force_generate = bool(payload.get("force_generate") or payload.get("regenerate"))
     requested_video = payload.get("video_name") or payload.get("source_video")
-    video_name = validate_registered_video_name(game, requested_video, status_code=404) if requested_video else None
+    video_target = None
+    if requested_video or payload.get("indexed_asset_id") or payload.get("asset_id"):
+        video_target = resolve_workspace_video_target(
+            game,
+            video_name=requested_video,
+            indexed_asset_id=payload.get("indexed_asset_id"),
+            asset_id=payload.get("asset_id"),
+            lookup=payload,
+            status_code=404,
+        )
+    video_name = video_target["video_name"] if video_target else None
     index_id = configured_search_index_id(game)
 
     if video_name and not force_generate:
-        asset_id = asset_id_for_video_name(game, video_name)
+        asset_id = video_target["asset_id"] if video_target else asset_id_for_video_name(game, video_name)
         if asset_id:
             indexed_assets = indexed_assets_for_video_metadata(game, index_id, asset_id, video_name)
             for indexed_asset in indexed_assets:
@@ -2104,7 +2172,7 @@ def create_entity_tracking_response(tag, payload=None):
                     "content": entity_tracking_prompt(game, video_name),
                 }
             ],
-            "knowledge_store_id": game["knowledge_store_id"],
+            "knowledge_store_id": configured_knowledge_store_id(game),
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -2118,7 +2186,7 @@ def create_entity_tracking_response(tag, payload=None):
     tracking = normalize_entity_tracking(game, video_name, result, manifest)
 
     if video_name:
-        asset_id = asset_id_for_video_name(game, video_name)
+        asset_id = video_target["asset_id"] if video_target else asset_id_for_video_name(game, video_name)
         if asset_id:
             indexed_assets = indexed_assets_for_video_metadata(game, index_id, asset_id, video_name)
             indexed_asset = indexed_asset_for_generated_metadata(game, index_id, asset_id, video_name, indexed_assets)
@@ -2294,7 +2362,15 @@ def create_jockey_chat_response(tag, payload=None):
     session_id = clean_optional_string(payload.get("session_id"))
     conversation_history = normalize_jockey_conversation_history(payload.get("conversation_history"))
     requested_video = payload.get("video_name") or payload.get("source_video")
-    video_name = validate_registered_video_name(game, requested_video) if requested_video else None
+    video_name = None
+    if requested_video or payload.get("indexed_asset_id") or payload.get("asset_id"):
+        video_name = resolve_workspace_video_target(
+            game,
+            video_name=requested_video,
+            indexed_asset_id=payload.get("indexed_asset_id"),
+            asset_id=payload.get("asset_id"),
+            lookup=payload,
+        )["video_name"]
 
     request_body = {
         "model": TWELVELABS_MODEL,
@@ -2306,7 +2382,7 @@ def create_jockey_chat_response(tag, payload=None):
                 "content": jockey_chat_prompt(game, message, limit, video_name, include_reel, conversation_history),
             }
         ],
-        "knowledge_store_id": game["knowledge_store_id"],
+        "knowledge_store_id": configured_knowledge_store_id(game),
         "text": {
             "format": {
                 "type": "json_schema",
@@ -2757,34 +2833,31 @@ def registered_thumbnail_path(tag, video_name):
 
 
 def registered_thumbnail_path_or_none(tag, video_name):
-    game = get_game(tag)
-    video_name = validate_registered_video_name(game, video_name, status_code=404)
-    for path in sorted(THUMBNAILS_DIR.glob(f"{video_name}.*")):
+    get_game(tag)
+    clean_name = clean_optional_string(video_name)
+    if not clean_name:
+        return None
+    for path in sorted(THUMBNAILS_DIR.glob(f"{clean_name}.*")):
         if path.is_file() and path.stat().st_size > 0:
             return path
-    path = thumbnail_path(video_name)
+    path = thumbnail_path(clean_name)
     return path if path.exists() and path.stat().st_size > 0 else None
 
 
 def registered_indexed_thumbnail_url(tag, video_name):
     game = get_game(tag)
-    video_name = validate_registered_video_name(game, video_name, status_code=404)
-    index_id = configured_search_index_id(game)
-    indexed_asset_id = marengo_video_id_for_video_name(game, video_name)
-    indexed_asset = None
-    if indexed_asset_id:
+    try:
+        target = resolve_workspace_video_target(game, video_name=video_name, status_code=404)
+    except ApiError:
+        return None
+    index_id = target["index_id"]
+    indexed_asset_id = target["indexed_asset_id"]
+    indexed_asset = target["indexed_asset"]
+    if indexed_asset_id and not indexed_asset_user_metadata(indexed_asset):
         try:
             indexed_asset = twelvelabs_get_indexed_asset(index_id, indexed_asset_id)
         except ApiError:
             indexed_asset = None
-    if not indexed_asset:
-        asset_id = asset_id_for_video_name(game, video_name)
-        if not asset_id:
-            return None
-        for candidate in list_indexed_assets(index_id):
-            if indexed_asset_asset_id(candidate) == asset_id:
-                indexed_asset = candidate
-                break
     if not indexed_asset:
         return None
     return indexed_asset_thumbnail_url(indexed_asset_with_user_metadata(index_id, indexed_asset))
@@ -2827,8 +2900,7 @@ def cache_indexed_video_thumbnail(video_name, indexed_asset=None, index_id=None)
 
 def placeholder_thumbnail_svg(tag, video_name):
     game = get_game(tag)
-    video_name = validate_registered_video_name(game, video_name, status_code=404)
-    title = escape_svg_text(Path(video_name).stem)
+    title = escape_svg_text(Path(clean_optional_string(video_name) or "Indexed video").stem)
     label = escape_svg_text(game.get("label", tag))
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-label="{title}">
   <rect width="1280" height="720" fill="#1D1C1B"/>
@@ -2848,20 +2920,25 @@ def twelvelabs_stream_info(tag, video_name, reference=None):
     if not requested_video:
         raise ApiError("video_name is required", 404)
     playback_reference = clean_optional_string(reference) or requested_video
-    resolved_video_name = None
     try:
-        resolved_video_name = validate_registered_video_name(game, requested_video, status_code=404)
+        target = resolve_workspace_video_target(
+            game,
+            video_name=requested_video,
+            reference=playback_reference,
+            status_code=404,
+        )
+        resolved_video_name = target["video_name"]
     except ApiError:
-        resolved_video_name = None
+        resolved_video_name = requested_video
 
-    asset_id, asset = resolve_playback_asset(game, resolved_video_name or requested_video, playback_reference)
-    if not resolved_video_name:
-        resolved_video_name = indexed_asset_workspace_video_name(
+    asset_id, asset = resolve_playback_asset(game, resolved_video_name, playback_reference)
+    if resolved_video_name == requested_video:
+        indexed_name = indexed_asset_workspace_video_name(
             {"asset": asset, "asset_id": asset_id},
             requested_video,
         )
-        if resolved_video_name not in game.get("source_videos", []):
-            resolved_video_name = requested_video
+        if indexed_name:
+            resolved_video_name = indexed_name
 
     cache_key = (tag, resolved_video_name, asset_id)
     now = time.time()
@@ -2957,8 +3034,7 @@ def twelvelabs_asset_id_for_video(game, video_name):
 
 
 def generated_reel_clip(tag, video_name, start, end, format_name, clip_name=None):
-    game = get_game(tag)
-    video_name = validate_registered_video_name(game, video_name, status_code=404)
+    get_game(tag)
     stream_info = twelvelabs_stream_info(tag, video_name)
     source_input = stream_info["manifest_url"]
     start_seconds = parse_reel_seconds(start, "start")
@@ -2982,8 +3058,7 @@ def generated_reel_clip(tag, video_name, start, end, format_name, clip_name=None
 
 
 def generated_assembly_reel(tag, video_name, segments, format_name, assembly_name=None):
-    game = get_game(tag)
-    video_name = validate_registered_video_name(game, video_name, status_code=404)
+    get_game(tag)
     stream_info = twelvelabs_stream_info(tag, video_name)
     source_input = stream_info["manifest_url"]
     segment_ranges = parse_assembly_segments(segments)
@@ -3013,8 +3088,7 @@ def generated_assembly_reel(tag, video_name, segments, format_name, assembly_nam
 
 
 def generated_reel_thumbnail(tag, video_name, time, format_name):
-    game = get_game(tag)
-    video_name = validate_registered_video_name(game, video_name, status_code=404)
+    get_game(tag)
     stream_info = twelvelabs_stream_info(tag, video_name)
     source_input = stream_info["manifest_url"]
     time_seconds = parse_reel_seconds(time, "time")
@@ -3531,12 +3605,14 @@ def video_name_for_reference(game, reference):
                     if mapped_asset_id == asset_id:
                         return video_name
             workspace_name = indexed_asset_workspace_video_name(indexed_asset, reference)
-            if workspace_name in source_videos:
+            if workspace_name:
+                if workspace_name in source_videos:
+                    return workspace_name
+                normalized_workspace = workspace_name.lower()
+                for video_name in source_videos:
+                    if video_name.lower() == normalized_workspace:
+                        return video_name
                 return workspace_name
-            normalized_workspace = workspace_name.lower()
-            for video_name in source_videos:
-                if video_name.lower() == normalized_workspace:
-                    return video_name
 
     basename = Path(reference).name
     if basename in source_videos:
@@ -3579,6 +3655,75 @@ def marengo_video_id_for_video_name(game, video_name):
         return None
     marengo_video_id = marengo_video_ids.get(video_name)
     return marengo_video_id if isinstance(marengo_video_id, str) and marengo_video_id.strip() else None
+
+
+def workspace_lookup_kwargs(lookup=None):
+    if not isinstance(lookup, dict):
+        return {}
+    resolved = {}
+    for key in ("indexed_asset_id", "asset_id", "reference", "video_name", "source_video"):
+        value = clean_optional_string(lookup.get(key))
+        if value:
+            resolved[key] = value
+    return resolved
+
+
+def resolve_workspace_video_target(
+    game,
+    *,
+    video_name=None,
+    indexed_asset_id=None,
+    asset_id=None,
+    reference=None,
+    lookup=None,
+    status_code=404,
+):
+    """Resolve a Dashboard video from the TwelveLabs index without requiring source_videos registration."""
+    lookup = workspace_lookup_kwargs(lookup)
+    video_name = clean_optional_string(video_name) or lookup.get("video_name") or lookup.get("source_video")
+    indexed_asset_id = clean_optional_string(indexed_asset_id) or lookup.get("indexed_asset_id")
+    asset_id = clean_optional_string(asset_id) or lookup.get("asset_id")
+    reference = clean_optional_string(reference) or lookup.get("reference")
+
+    index_id = configured_search_index_id(game)
+    if not index_id:
+        raise ApiError("TwelveLabs search index is not configured for this game", status_code)
+
+    references = []
+    for value in (indexed_asset_id, asset_id, reference, video_name):
+        if value and value not in references:
+            references.append(value)
+    if video_name:
+        mapped_name = video_name_for_reference(game, video_name)
+        if mapped_name and mapped_name not in references:
+            references.append(mapped_name)
+
+    indexed_asset = None
+    for candidate in references:
+        indexed_asset = indexed_asset_for_reference(index_id, candidate)
+        if indexed_asset:
+            break
+
+    if not indexed_asset:
+        raise ApiError("video is not available in the configured TwelveLabs index", status_code)
+
+    resolved_indexed_asset_id = response_id(indexed_asset)
+    resolved_asset_id = indexed_asset_asset_id(indexed_asset)
+    if not resolved_asset_id:
+        raise ApiError("TwelveLabs indexed asset does not include an asset id", status_code)
+
+    resolved_video_name = indexed_asset_workspace_video_name(indexed_asset, video_name or reference)
+    mapped_video_name = video_name_for_reference(game, video_name or reference or resolved_video_name)
+    if mapped_video_name:
+        resolved_video_name = mapped_video_name
+
+    return {
+        "video_name": resolved_video_name,
+        "index_id": index_id,
+        "indexed_asset_id": resolved_indexed_asset_id,
+        "asset_id": resolved_asset_id,
+        "indexed_asset": indexed_asset,
+    }
 
 
 def validate_registered_video_name(game, video_name, status_code=400):

@@ -14,7 +14,39 @@ def twelvelabs_api_key():
 
 
 def twelvelabs_index_id():
-    return os.environ.get("INDEX_ID")
+    return os.environ.get("INDEX_ID", "").strip()
+
+
+def knowledge_store_id():
+    return os.environ.get("KNOWLEDGE_STORE_ID", "").strip()
+
+
+def default_game_tag():
+    return os.environ.get("DEFAULT_GAME_TAG", "sports").strip() or "sports"
+
+
+def default_game_label():
+    return os.environ.get("DEFAULT_GAME_LABEL", "Sports").strip() or "Sports"
+
+
+def default_game_sport():
+    return os.environ.get("DEFAULT_GAME_SPORT", "Sports").strip() or "Sports"
+
+
+def env_default_game():
+    store_id = knowledge_store_id()
+    if not store_id:
+        return None
+    game = {
+        "tag": default_game_tag(),
+        "label": default_game_label(),
+        "sport": default_game_sport(),
+        "knowledge_store_id": store_id,
+    }
+    index_id = twelvelabs_index_id()
+    if index_id:
+        game["marengo_index_id"] = index_id
+    return game
 
 
 def port():
@@ -51,17 +83,21 @@ def keep_alive_timeout_seconds():
 
 def default_game_registrations():
     raw_value = os.environ.get("DEFAULT_GAME_REGISTRATIONS_JSON", "").strip()
-    if not raw_value:
-        return []
-    try:
-        registrations = json.loads(raw_value)
-    except json.JSONDecodeError:
-        return []
-    if isinstance(registrations, dict):
-        return [registrations]
-    if isinstance(registrations, list):
-        return [game for game in registrations if isinstance(game, dict)]
-    return []
+    registrations = []
+    if raw_value:
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            registrations = [parsed]
+        elif isinstance(parsed, list):
+            registrations = [game for game in parsed if isinstance(game, dict)]
+    if not registrations:
+        env_game = env_default_game()
+        if env_game:
+            registrations = [env_game]
+    return registrations
 
 
 def keep_alive_url():

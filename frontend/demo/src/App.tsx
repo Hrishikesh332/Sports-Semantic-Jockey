@@ -932,8 +932,13 @@ function App() {
 
     setWorkspaceMetadataLoadingKey(metadataKey)
     setWorkspaceMetadataError('')
+    const indexPayload = indexVideoRequestPayload(selectedGame, workspaceIndexVideos, videoName)
+    const params = new URLSearchParams()
+    if (indexPayload.indexed_asset_id) params.set('indexed_asset_id', indexPayload.indexed_asset_id)
+    if (indexPayload.asset_id) params.set('asset_id', indexPayload.asset_id)
+    const query = params.toString()
     const request = fetchJson<JockeyWorkspaceMetadataResponse>(
-      `/games/${encodeURIComponent(tag)}/videos/${encodeURIComponent(videoName)}/jockey-workspace`,
+      `/games/${encodeURIComponent(tag)}/videos/${encodeURIComponent(videoName)}/jockey-workspace${query ? `?${query}` : ''}`,
     )
       .then((body) => {
         setWorkspaceMetadataByKey((current) => ({ ...current, [metadataKey]: body }))
@@ -950,7 +955,7 @@ function App() {
 
     workspaceMetadataRequestRef.current[metadataKey] = request
     return request
-  }, [])
+  }, [selectedGame, workspaceIndexVideos])
 
   const requestHighlightReels = useCallback((videoName?: string, options: HighlightReelRequestOptions = {}) => {
     if (!selectedTag) return Promise.resolve()
@@ -9403,11 +9408,14 @@ function videoNameForReference(game: Game, reference: string) {
   const basename = reference.split('/').pop() || reference
   if (sourceVideos.includes(basename)) return basename
   const normalizedReference = normalizeSearchText(reference)
-  return sourceVideos.find((videoName) => {
+  const registryMatch = sourceVideos.find((videoName) => {
     const normalizedVideo = normalizeSearchText(videoName)
     const stem = normalizeSearchText(videoName.replace(/\.[^.]+$/, ''))
     return normalizedReference === normalizedVideo || normalizedReference.includes(normalizedVideo) || normalizedReference.includes(stem) || normalizedVideo.includes(normalizedReference)
   })
+  if (registryMatch) return registryMatch
+
+  return reference
 }
 
 function gameOptionLabel(game: Game) {

@@ -22,8 +22,8 @@ JOCKEY_WORKSPACE_VERIFY_ATTEMPTS = 3
 JOCKEY_WORKSPACE_VERIFY_INTERVAL_SECONDS = 1.0
 
 
-def get_jockey_workspace_metadata(tag, video_name):
-    game, index_id, indexed_asset_id, asset_id, video_name = _resolve_storage_target(tag, video_name)
+def get_jockey_workspace_metadata(tag, video_name, lookup=None):
+    game, index_id, indexed_asset_id, asset_id, video_name = _resolve_storage_target(tag, video_name, lookup=lookup)
     workspace = _load_workspace(index_id, indexed_asset_id)
     return {
         "game_tag": game["tag"],
@@ -39,7 +39,7 @@ def get_jockey_workspace_metadata(tag, video_name):
     }
 
 
-def find_saved_clip_analysis(tag, video_name, start_time, end_time=None, query=None):
+def find_saved_clip_analysis(tag, video_name, start_time, end_time=None, query=None, lookup=None):
     from app.services.games import seconds_from_timecode
 
     start_seconds = seconds_from_timecode(start_time)
@@ -49,7 +49,7 @@ def find_saved_clip_analysis(tag, video_name, start_time, end_time=None, query=N
     if end_seconds is None or end_seconds <= start_seconds:
         end_seconds = start_seconds + 12
 
-    _game, index_id, indexed_asset_id, _asset_id, video_name = _resolve_storage_target(tag, video_name)
+    _game, index_id, indexed_asset_id, _asset_id, video_name = _resolve_storage_target(tag, video_name, lookup=lookup)
     workspace = _load_workspace(index_id, indexed_asset_id)
     saved_items = workspace.get("saved_items") if isinstance(workspace.get("saved_items"), list) else []
 
@@ -96,7 +96,7 @@ def find_saved_clip_analysis(tag, video_name, start_time, end_time=None, query=N
     }
 
 
-def append_saved_clip_analysis(tag, video_name, payload):
+def append_saved_clip_analysis(tag, video_name, payload, lookup=None):
     payload = payload if isinstance(payload, dict) else {}
     analysis = payload.get("analysis")
     if not isinstance(analysis, dict):
@@ -119,10 +119,10 @@ def append_saved_clip_analysis(tag, video_name, payload):
         },
         title=search_context.get("title") or search_context.get("query") or analysis.get("description"),
     )
-    return _append_item_for_video(tag, video_name, item)
+    return _append_item_for_video(tag, video_name, item, lookup=lookup or payload)
 
 
-def append_saved_jockey_turn(tag, video_name, payload):
+def append_saved_jockey_turn(tag, video_name, payload, lookup=None):
     payload = payload if isinstance(payload, dict) else {}
     response = payload.get("response")
     if not isinstance(response, dict):
@@ -155,7 +155,7 @@ def append_saved_jockey_turn(tag, video_name, payload):
         clip_bounds=_clip_bounds_from_clips(scoped_clips),
         title=prompt,
     )
-    return _append_item_for_video(tag, video_name, item)
+    return _append_item_for_video(tag, video_name, item, lookup=lookup or payload)
 
 
 def append_saved_jockey_turns_for_exchange(tag, payload):
@@ -434,20 +434,20 @@ def store_jockey_entity_tracking(index_id, indexed_asset_id, asset_id, video_nam
     return patch
 
 
-def load_cached_video_dashboard(game, video_name):
+def load_cached_video_dashboard(game, video_name, lookup=None):
     from app.services.games import (
-        asset_id_for_video_name,
-        configured_search_index_id,
         indexed_assets_for_video_metadata,
+        resolve_workspace_video_target,
         response_id,
-        validate_registered_video_name,
     )
 
-    video_name = validate_registered_video_name(game, video_name, status_code=404)
-    asset_id = asset_id_for_video_name(game, video_name)
-    if not asset_id:
+    try:
+        target = resolve_workspace_video_target(game, video_name=video_name, lookup=lookup, status_code=404)
+    except ApiError:
         return None
-    index_id = configured_search_index_id(game)
+    video_name = target["video_name"]
+    asset_id = target["asset_id"]
+    index_id = target["index_id"]
     indexed_assets = indexed_assets_for_video_metadata(game, index_id, asset_id, video_name)
     for indexed_asset in indexed_assets:
         highlight = jockey_highlight_reels_from_indexed_asset(indexed_asset, video_name, asset_id)
@@ -571,8 +571,8 @@ def empty_workspace(source_video_name=None, index_id=None, indexed_asset_id=None
     }
 
 
-def _append_item_for_video(tag, video_name, item):
-    game, index_id, indexed_asset_id, asset_id, video_name = _resolve_storage_target(tag, video_name)
+def _append_item_for_video(tag, video_name, item, lookup=None):
+    game, index_id, indexed_asset_id, asset_id, video_name = _resolve_storage_target(tag, video_name, lookup=lookup)
     workspace = _load_workspace(index_id, indexed_asset_id)
     if not workspace.get("source_video_name"):
         workspace["source_video_name"] = video_name
@@ -615,30 +615,23 @@ def _append_item_for_video(tag, video_name, item):
     }
 
 
-def _resolve_storage_target(tag, video_name):
+def _resolve_storage_target(tag, video_name, lookup=None):
     from app.services.games import (
-        asset_id_for_video_name,
-        configured_search_index_id,
-        indexed_asset_for_generated_metadata,
-        indexed_assets_for_video_metadata,
-        response_id,
-        validate_registered_video_name,
         get_game,
+        resolve_workspace_video_target,
     )
 
     game = get_game(tag)
-    video_name = validate_registered_video_name(game, video_name, status_code=404)
-    asset_id = asset_id_for_video_name(game, video_name)
-    if not asset_id:
-        raise ApiError(f"No TwelveLabs asset is registered for source video: {video_name}", 404)
-
-    index_id = configured_search_index_id(game)
-    indexed_assets = indexed_assets_for_video_metadata(game, index_id, asset_id, video_name)
-    indexed_asset = indexed_asset_for_generated_metadata(game, index_id, asset_id, video_name, indexed_assets)
-    indexed_asset_id = response_id(indexed_asset)
+    target = resolve_workspace_video_target(
+        game,
+        video_name=video_name,
+        lookup=lookup,
+        status_code=404,
+    )
+    indexed_asset_id = target["indexed_asset_id"]
     if not indexed_asset_id:
         raise ApiError("TwelveLabs indexed asset id was not found for this source video", 404)
-    return game, index_id, indexed_asset_id, asset_id, video_name
+    return game, target["index_id"], indexed_asset_id, target["asset_id"], target["video_name"]
 
 
 def _load_workspace(index_id, indexed_asset_id):
