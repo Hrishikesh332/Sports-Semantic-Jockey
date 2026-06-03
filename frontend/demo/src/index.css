@@ -243,10 +243,102 @@ body {
   background: linear-gradient(165deg, rgba(191, 243, 164, 0.22) 0%, var(--strand-surface) 48%);
 }
 
-.overview-features-badge {
+.overview-narrative-problem {
+  background: var(--strand-card);
+}
+
+.overview-narrative-solution {
+  background: linear-gradient(180deg, rgba(191, 243, 164, 0.14) 0%, var(--strand-surface) 100%);
+}
+
+.overview-narrative-badge {
+  display: inline-flex;
+  height: 1.75rem;
+  align-items: center;
+  border-radius: 9999px;
+  padding-inline: 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.overview-narrative-badge-problem {
+  color: var(--strand-text-tertiary);
+  background: var(--strand-surface);
+  border: 1px solid var(--strand-border-light);
+}
+
+.overview-narrative-badge-solution {
+  color: #30710e;
+  background: rgba(191, 243, 164, 0.5);
+  border: 1px solid rgba(96, 226, 27, 0.2);
+}
+
+.overview-narrative-points {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.overview-narrative-point {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+  padding-left: 0.125rem;
+  border-left: 2px solid var(--strand-border-light);
+  padding-inline-start: 1rem;
+}
+
+.overview-narrative-point-index {
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.5rem;
+  color: var(--strand-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.overview-narrative-benefits {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.overview-narrative-benefit {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+}
+
+.overview-section-badge {
+  display: inline-flex;
+  height: 2rem;
+  align-items: center;
+  border-radius: 9999px;
+  padding-inline: 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.overview-section-badge-features {
   color: #30710e;
   background: rgba(191, 243, 164, 0.65);
   border: 1px solid rgba(96, 226, 27, 0.25);
+}
+
+.overview-section-badge-architecture {
+  color: #366b7f;
+  background: rgba(196, 238, 254, 0.72);
+  border: 1px solid rgba(108, 213, 253, 0.38);
+}
+
+.overview-section-badge-demo {
+  color: #805867;
+  background: rgba(255, 223, 235, 0.88);
+  border: 1px solid rgba(255, 176, 205, 0.55);
 }
 
 .overview-features-title {

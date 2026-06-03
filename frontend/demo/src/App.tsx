@@ -4085,17 +4085,23 @@ function LiveApiBadge({ loading, error }: { loading: boolean; error: boolean }) 
 const overviewProblemPoints: Array<{ title: string; body: string }> = [
   {
     title: 'The feed gives you the play, not the story',
-    body: 'Event automation is fast — but it stops at scoreboard facts. Crowd surges, player emotion, and narrative context rarely make the cut list.',
+    body: 'Event automation is fast but it stops at scoreboard facts. Crowd surges, player emotion, and narrative context rarely make the cut list.',
   },
   {
     title: 'A timestamp is not proof',
-    body: 'Producers still have to open the clip, verify what happened, and justify the edit. Without grounded analysis, highlights ship on faith.',
+    body: 'Producers still open the clip, verify what happened, and justify the edit. Without grounded analysis, highlights ship on faith.',
   },
   {
     title: 'Context walks away between sessions',
     body: 'Search notes, lane decisions, and clip rationale rarely stay on the asset. The next producer rebuilds the same judgment from scratch.',
   },
 ]
+
+const overviewSolutionBenefits = [
+  'Find what the stat sheet missed',
+  'Explain with proof on screen',
+  'Ship lanes and remember the call',
+] as const
 
 const overviewCompareColumns: Array<{
   kind: 'feed' | 'lift'
@@ -4116,7 +4122,7 @@ const overviewCompareColumns: Array<{
   },
   {
     kind: 'lift',
-    title: 'With Sports Jockey',
+    title: 'With Jockey',
     subtitle: 'What semantic lift adds on the same index',
     items: [
       'Search by intent — crowd energy, reactions, story beats',
@@ -4135,44 +4141,44 @@ const overviewFeatures: Array<{
   iconColor: string
 }> = [
   {
-    title: 'Marengo 3.0 — Semantic moment search',
-    body: 'Multimodal embeddings over indexed match footage. Surface celebrations, pressure, crowd energy, and narrative beats the event feed never logged.',
+    title: 'Marengo 3.0 Semantic search',
+    body: 'Sports Jockey indexes each game in TwelveLabs. Marengo embeddings power meaning based search across every source video in that match library.',
     icon: 'search-v2',
     iconBg: 'bg-product-search-light',
     iconColor: 'text-product-search-dark',
   },
   {
-    title: 'Marengo 3.0 — Natural-language Discover',
-    body: 'Search by intent in plain language and open timestamped hits on the source — reactions, fan eruptions, and story moments without manual tagging.',
+    title: 'Discover video library',
+    body: 'The Discover view lists playable sources for the selected game. Query Marengo in plain language, preview hits, and open a timestamp on the Dashboard.',
     icon: 'generate',
     iconBg: 'bg-product-embed-light',
     iconColor: 'text-product-embed-dark',
   },
   {
-    title: 'Pegasus 1.5 — Grounded clip analysis',
-    body: 'Reason over the segment you select — tone, action, score context, participants, and boundaries backed by what is visible in that clip, not a transcript guess.',
+    title: 'Pegasus 1.5 Clip analysis',
+    body: 'On the Dashboard, select any moment from search or a highlight lane. Pegasus returns grounded metadata on tone, action, score context, and cut boundaries from on screen evidence.',
     icon: 'analyze',
     iconBg: 'bg-product-generate-light',
     iconColor: 'text-product-generate-dark',
   },
   {
-    title: 'Dashboard — Feed vs semantic lanes',
-    body: 'Review sparse event-feed clips beside semantic lift on the same source video — one index, two editorial baselines producers can compare side by side.',
+    title: 'Dashboard highlight workspace',
+    body: 'Producer cockpit for one source video. Jockey curated lanes and stats, Assembly Highlight preview, and Entity Tracking for players and key moments on screen.',
     icon: 'dashboard',
     iconBg: 'bg-accent-light',
     iconColor: 'text-brand-charcoal',
   },
   {
-    title: 'Jockey — Semantic highlight reels',
-    body: 'Preset prompts return timestamped clips for Best Plays, Emotion, Fans, and BTS — lanes the stat sheet will not rank on stats alone.',
+    title: 'Jockey Assistant',
+    body: 'Jockey Assistant is the prompt driven reel studio on the same video. Run preset or custom instructions to generate Best Plays, Emotion, Fans, and BTS packages you can edit in the Dashboard.',
     icon: 'speech',
     iconBg: 'bg-mb-orange-light',
     iconColor: 'text-mb-orange-dark',
   },
   {
-    title: 'Jockey — Producer memory on the asset',
-    body: 'Persist clip analysis and chat turns on the indexed match so the next session reloads saved context instead of rebuilding the same judgment.',
-    icon: 'dashboard',
+    title: 'Saved workspace context',
+    body: 'Clip analysis and Jockey chat save per video on the game asset. Return to the match later and reload searches, lane picks, and producer notes without starting over.',
+    icon: 'document-list',
     iconBg: 'bg-mb-pink-light',
     iconColor: 'text-mb-pink-dark',
   },
@@ -4195,15 +4201,14 @@ function OverviewPage({
           <div className="grid gap-6 px-4 py-6 sm:px-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:px-6 lg:py-7">
             <div className="min-w-0 pt-1">
               <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex h-8 items-center gap-2 rounded-full border border-border-light bg-card px-3 text-xs font-semibold uppercase tracking-[0.16em] text-text-secondary">
+                <span className="inline-flex h-8 items-center gap-2 rounded-full border border-border-light bg-card px-3 text-xs font-semibold text-text-secondary">
                   <ModeGlyph mode="twelvelabs_enhanced" icon="vision" className="h-4 w-5 text-brand-charcoal" />
-                  TwelveLabs Jockey
-                </div>
-                {game ? (
-                  <span className="inline-flex h-8 items-center rounded-full border border-border-light bg-surface px-3 text-xs font-semibold text-text-secondary">
-                    {game.label}
-                  </span>
-                ) : null}
+                  TwelveLabs
+                </span>
+                <span className="inline-flex h-8 items-center gap-2 rounded-full border border-border-light bg-accent-light px-3 text-xs font-semibold text-brand-charcoal">
+                  <StrandIcon name="speech" className="h-3.5 w-3.5" />
+                  Jockey
+                </span>
                 {loading ? (
                   <span className="inline-flex h-8 items-center gap-2 rounded-full border border-border-light bg-surface px-3 text-xs font-semibold text-text-secondary">
                     <StrandIcon name="spinner" className="h-3.5 w-3.5 animate-spin" />
@@ -4212,10 +4217,13 @@ function OverviewPage({
                 ) : null}
               </div>
               <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-[1.08] text-text-primary lg:text-5xl">
-                Explainable sports discovery on top of fast highlight automation.
+                Feeds find the play. Jockey turns it into a highlight you can prove and ship.
               </h2>
               <p className="mt-4 max-w-3xl text-base leading-7 text-text-secondary">
-                Marengo finds moments the event feed misses. Pegasus explains the selected clip. Jockey turns grounded evidence into reels, lanes, and reusable workspace memory.
+                Automation wins on speed, but producers still need story, proof, and memory on the asset. Sports
+                Jockey adds TwelveLabs semantic lift on the same match footage: find what the stat sheet skipped,
+                explain the clip with on screen evidence, ship publishable lanes, and save the call for the next
+                session.
               </p>
             </div>
             <OverviewNavButtons onNavigate={onNavigate} variant="hero" />
@@ -4241,15 +4249,31 @@ function OverviewPage({
           </div>
 
           <section className="overview-section overview-block">
-            <OverviewSectionHeader
-              kicker="Coming soon"
-              title="Architecture & walkthrough"
-              lead="Pipeline diagram and product demo — placeholders for now."
+            <OverviewBadgeSectionHeader
+              badge="Architecture"
+              badgeTone="architecture"
+              title="System architecture"
+              lead="End-to-end flow from ingest through TwelveLabs to producer-facing lanes — reserved for your pipeline diagram."
             />
-            <div className="grid gap-3 lg:grid-cols-2">
-              <OverviewReservedSlot label="Architecture diagram" detail="Drop your pipeline diagram here." />
-              <OverviewReservedSlot label="Product demo" detail="Embed a walkthrough video here." />
-            </div>
+            <OverviewReservedSlot
+              label="Architecture diagram"
+              detail="Drop a pipeline or system diagram here when ready."
+              minHeightClass="min-h-[280px]"
+            />
+          </section>
+
+          <section className="overview-section overview-block">
+            <OverviewBadgeSectionHeader
+              badge="Demo"
+              badgeTone="demo"
+              title="See it in action"
+              lead="Walkthrough across Discover, Dashboard, and Jockey on live match footage — reserved for demo media."
+            />
+            <OverviewReservedSlot
+              label="Product demo"
+              detail="Embed a video, carousel, or interactive preview here when ready."
+              minHeightClass="min-h-[300px]"
+            />
           </section>
 
           <div className="overview-section">
@@ -4340,7 +4364,7 @@ function OverviewCompareSection({ columns }: { columns: typeof overviewCompareCo
           key={column.title}
           className={column.kind === 'feed' ? 'overview-compare-feed px-5 py-6 sm:px-6 sm:py-7' : 'overview-compare-lift px-5 py-6 sm:px-6 sm:py-7'}
         >
-          <p className="overview-kicker">{column.kind === 'feed' ? 'Baseline' : 'Sports Jockey'}</p>
+          <p className="overview-kicker">{column.kind === 'feed' ? 'Baseline' : 'Jockey'}</p>
           <h4 className="mt-2 text-xl font-semibold text-text-primary">{column.title}</h4>
           <p className="mt-1 text-sm text-text-secondary">{column.subtitle}</p>
           <ul className="mt-5 space-y-3">
@@ -4365,39 +4389,37 @@ function OverviewCompareSection({ columns }: { columns: typeof overviewCompareCo
 
 function OverviewNarrativePanel({ problems }: { problems: typeof overviewProblemPoints }) {
   return (
-    <section className="overview-block overview-panel">
-      <div className="grid lg:grid-cols-2">
-        <div className="border-b border-border px-5 py-7 sm:px-6 lg:border-b-0 lg:border-r lg:px-7 lg:py-8">
-          <p className="overview-kicker">The problem</p>
-          <h3 className="overview-heading mt-2">Clip volume scaled. Editorial lift didn&apos;t.</h3>
-          <ul className="mt-6 space-y-5">
-            {problems.map((point) => (
-              <li key={point.title} className="flex gap-3">
-                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-text-tertiary" aria-hidden="true" />
-                <div>
-                  <p className="text-sm font-semibold text-text-primary">{point.title}</p>
-                  <p className="mt-1 text-sm leading-6 text-text-secondary">{point.body}</p>
+    <section className="overview-block overview-panel overview-narrative">
+      <div className="grid lg:grid-cols-2 lg:items-stretch">
+        <div className="overview-narrative-problem border-b border-border px-5 py-7 sm:px-6 lg:border-b-0 lg:border-r lg:px-7 lg:py-8">
+          <span className="overview-narrative-badge overview-narrative-badge-problem">The problem</span>
+          <h3 className="overview-heading mt-3 max-w-xl">Clip volume scaled. Editorial lift didn&apos;t.</h3>
+          <ul className="overview-narrative-points mt-6">
+            {problems.map((point, index) => (
+              <li key={point.title} className="overview-narrative-point">
+                <span className="overview-narrative-point-index" aria-hidden="true">
+                  {index + 1}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold leading-snug text-text-primary">{point.title}</p>
+                  <p className="mt-1.5 text-sm leading-6 text-text-secondary">{point.body}</p>
                 </div>
               </li>
             ))}
           </ul>
         </div>
-        <div className="overview-panel-accent px-5 py-7 sm:px-6 lg:px-7 lg:py-8">
-          <p className="overview-kicker">The solution</p>
-          <h3 className="overview-heading mt-2">Semantic lift on the match you already indexed</h3>
-          <p className="mt-4 text-sm leading-6 text-text-secondary">
-            Keep the event feed as your fast baseline. Layer searchable moments, grounded clip analysis, and semantic
-            highlight lanes — then save producer decisions back to the asset.
+        <div className="overview-narrative-solution px-5 py-7 sm:px-6 lg:px-7 lg:py-8">
+          <span className="overview-narrative-badge overview-narrative-badge-solution">The solution</span>
+          <h3 className="overview-heading mt-3 max-w-xl">Semantic lift on the match you already indexed</h3>
+          <p className="mt-4 max-w-lg text-sm leading-6 text-text-secondary">
+            Index the match once in TwelveLabs. Jockey adds searchable moments, grounded clip analysis, semantic
+            highlight lanes, and producer memory on the asset.
           </p>
-          <ul className="mt-6 space-y-3">
-            {[
-              'Find what the stat sheet missed',
-              'Explain with proof on screen',
-              'Ship lanes and remember the call',
-            ].map((item) => (
-              <li key={item} className="flex items-center gap-2.5 text-sm font-medium text-text-primary">
+          <ul className="overview-narrative-benefits mt-6">
+            {overviewSolutionBenefits.map((item) => (
+              <li key={item} className="overview-narrative-benefit">
                 <StrandIcon name="checkmark" className="h-4 w-4 shrink-0 text-mb-green-dark" />
-                {item}
+                <span className="text-sm font-medium text-text-primary">{item}</span>
               </li>
             ))}
           </ul>
@@ -4407,20 +4429,39 @@ function OverviewNarrativePanel({ problems }: { problems: typeof overviewProblem
   )
 }
 
+type OverviewBadgeTone = 'features' | 'architecture' | 'demo'
+
+function OverviewBadgeSectionHeader({
+  badge,
+  badgeTone,
+  title,
+  lead,
+}: {
+  badge: string
+  badgeTone: OverviewBadgeTone
+  title: string
+  lead: string
+}) {
+  return (
+    <header className="mb-8 text-center lg:mb-10">
+      <span className={['overview-section-badge', `overview-section-badge-${badgeTone}`].join(' ')}>
+        {badge}
+      </span>
+      <h3 className="overview-features-title mt-4 text-text-primary">{title}</h3>
+      <p className="overview-features-lead mx-auto mt-3 max-w-2xl text-text-secondary">{lead}</p>
+    </header>
+  )
+}
+
 function OverviewFeaturesSection({ features }: { features: typeof overviewFeatures }) {
   return (
     <section>
-      <header className="mb-8 text-center lg:mb-10">
-        <span className="overview-features-badge inline-flex h-8 items-center rounded-full px-4 text-xs font-semibold uppercase tracking-[0.14em]">
-          Features
-        </span>
-        <h3 className="overview-features-title mt-4 text-text-primary">
-          Marengo, Pegasus, and Jockey on one indexed match
-        </h3>
-        <p className="overview-features-lead mx-auto mt-3 max-w-2xl text-text-secondary">
-          Search by meaning, explain the clip you open, and ship semantic lanes — layered on your event feed, not in place of it.
-        </p>
-      </header>
+      <OverviewBadgeSectionHeader
+        badge="Features"
+        badgeTone="features"
+        title="How the app fits together"
+        lead="Pick a game, search in Discover, produce on the Dashboard, prompt reels in Jockey, and keep your work on the match asset across sessions."
+      />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {features.map((feature) => (
           <article key={feature.title} className="overview-feature-card flex flex-col px-5 py-6 sm:px-6 sm:py-7">
@@ -4442,9 +4483,17 @@ function OverviewFeaturesSection({ features }: { features: typeof overviewFeatur
   )
 }
 
-function OverviewReservedSlot({ label, detail }: { label: string; detail: string }) {
+function OverviewReservedSlot({
+  label,
+  detail,
+  minHeightClass = 'min-h-[200px] sm:min-h-[220px]',
+}: {
+  label: string
+  detail: string
+  minHeightClass?: string
+}) {
   return (
-    <div className="overview-reserved flex min-h-[180px] flex-col justify-end px-5 py-6 sm:min-h-[200px] sm:px-6 sm:py-7">
+    <div className={['overview-reserved flex flex-col justify-end px-5 py-6 sm:px-6 sm:py-7', minHeightClass].join(' ')}>
       <StrandIcon name="canvas" className="h-7 w-7 text-text-tertiary" />
       <p className="mt-4 text-sm font-semibold text-text-primary">{label}</p>
       <p className="mt-1.5 max-w-md text-sm leading-6 text-text-secondary">{detail}</p>
