@@ -5,6 +5,8 @@ import type { CSSProperties, DragEvent, MouseEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import logoFull from '../../assets/logo-full.svg?raw'
 import logoMark from '../../assets/logo-mark.svg?raw'
+import overviewCompareLift from '../../assets/overview-compare-lift.png'
+import overviewHeroJockey from '../../assets/overview-hero-jockey.png'
 
 const iconModules = import.meta.glob('../../icons/*.svg', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
 const icons = Object.fromEntries(
@@ -4195,42 +4197,43 @@ function OverviewPage({
 }) {
   return (
     <div className="flex flex-1 flex-col bg-background">
-      <div className="overview-shell mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-5 lg:px-6">
-        <section className="relative overflow-hidden rounded-2xl border border-border bg-surface shadow-[0_10px_28px_rgba(29,28,27,0.045)]">
+      <div className="overview-shell mx-auto w-full max-w-[1440px] px-3 py-3 sm:px-4 lg:px-5">
+        <section className="overview-hero-card relative overflow-hidden rounded-2xl border border-border bg-surface shadow-[0_10px_28px_rgba(29,28,27,0.045)]">
           <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-mb-green via-mb-orange to-mb-pink" aria-hidden="true" />
-          <div className="grid gap-6 px-4 py-6 sm:px-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:px-6 lg:py-7">
-            <div className="min-w-0 pt-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex h-8 items-center gap-2 rounded-full border border-border-light bg-card px-3 text-xs font-semibold text-text-secondary">
-                  <ModeGlyph mode="twelvelabs_enhanced" icon="vision" className="h-4 w-5 text-brand-charcoal" />
+          <div className="overview-hero">
+            <div className="overview-hero-copy min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border-light bg-card px-2.5 text-[0.6875rem] font-semibold text-text-secondary">
+                  <ModeGlyph mode="twelvelabs_enhanced" icon="vision" className="h-3.5 w-4 text-brand-charcoal" />
                   TwelveLabs
                 </span>
-                <span className="inline-flex h-8 items-center gap-2 rounded-full border border-border-light bg-accent-light px-3 text-xs font-semibold text-brand-charcoal">
-                  <StrandIcon name="speech" className="h-3.5 w-3.5" />
+                <span className="inline-flex h-7 items-center rounded-full border border-border-light bg-accent-light px-2.5 text-[0.6875rem] font-semibold text-brand-charcoal">
                   Jockey
                 </span>
                 {loading ? (
-                  <span className="inline-flex h-8 items-center gap-2 rounded-full border border-border-light bg-surface px-3 text-xs font-semibold text-text-secondary">
-                    <StrandIcon name="spinner" className="h-3.5 w-3.5 animate-spin" />
+                  <span className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border-light bg-surface px-2.5 text-[0.6875rem] font-semibold text-text-secondary">
+                    <StrandIcon name="spinner" className="h-3 w-3 animate-spin" />
                     Syncing workspace
                   </span>
                 ) : null}
               </div>
-              <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-[1.08] text-text-primary lg:text-5xl">
+              <h2 className="overview-hero-title mt-2.5 font-semibold text-text-primary">
                 Feeds find the play. Jockey turns it into a highlight you can prove and ship.
               </h2>
-              <p className="mt-4 max-w-3xl text-base leading-7 text-text-secondary">
-                Automation wins on speed, but producers still need story, proof, and memory on the asset. Sports
-                Jockey adds TwelveLabs semantic lift on the same match footage: find what the stat sheet skipped,
-                explain the clip with on screen evidence, ship publishable lanes, and save the call for the next
-                session.
+              <p className="overview-hero-lead mt-2 text-sm leading-6 text-text-secondary">
+                Producers need story, proof, and memory on the asset. Sports Jockey adds TwelveLabs semantic lift on
+                the same match footage so you find untagged moments, explain clips on screen, and save the call for
+                next time.
               </p>
+              <div className="overview-hero-actions mt-3">
+                <OverviewNavButtons variant="hero" onNavigate={onNavigate} />
+              </div>
             </div>
-            <OverviewNavButtons onNavigate={onNavigate} variant="hero" />
+            <OverviewHeroVisual />
           </div>
         </section>
 
-        <div className="overview-sections mt-14 divide-y-2 divide-border border-t-2 border-border pb-12 lg:mt-16 lg:pb-14">
+        <div className="overview-sections mt-10 divide-y-2 divide-border border-t-2 border-border pb-10 lg:mt-12 lg:pb-12">
           <div className="overview-section">
             <OverviewNarrativePanel problems={overviewProblemPoints} />
           </div>
@@ -4252,12 +4255,12 @@ function OverviewPage({
             <OverviewBadgeSectionHeader
               badge="Architecture"
               badgeTone="architecture"
-              title="System architecture"
-              lead="End-to-end flow from ingest through TwelveLabs to producer-facing lanes — reserved for your pipeline diagram."
+              title="How the stack connects"
+              lead="Match footage is indexed once in TwelveLabs. Marengo powers search, Pegasus grounds the clip you open, and Jockey Assistant delivers semantic lanes through Discover and Dashboard."
             />
             <OverviewReservedSlot
               label="Architecture diagram"
-              detail="Drop a pipeline or system diagram here when ready."
+              detail="A single view of ingest, indexing, models, and the three producer screens that sit on top."
               minHeightClass="min-h-[280px]"
             />
           </section>
@@ -4267,17 +4270,17 @@ function OverviewPage({
               badge="Demo"
               badgeTone="demo"
               title="See it in action"
-              lead="Walkthrough across Discover, Dashboard, and Jockey on live match footage — reserved for demo media."
+              lead="One match, one workflow. Search in Discover, review and explain on the Dashboard, then build reels with Jockey Assistant."
             />
             <OverviewReservedSlot
               label="Product demo"
-              detail="Embed a video, carousel, or interactive preview here when ready."
+              detail="Screen recording or interactive preview of the full producer path on live match footage."
               minHeightClass="min-h-[300px]"
             />
           </section>
 
           <div className="overview-section">
-            <OverviewClosingPanel onNavigate={onNavigate} />
+            <OverviewClosingPanel />
           </div>
         </div>
       </div>
@@ -4285,55 +4288,80 @@ function OverviewPage({
   )
 }
 
-function OverviewNavButtons({
-  onNavigate,
-  variant,
-}: {
-  onNavigate: (view: ViewKey) => void
-  variant: 'hero' | 'closing'
-}) {
-  const layoutClass = variant === 'hero' ? 'flex flex-wrap gap-2 lg:justify-end' : 'flex flex-wrap gap-2'
+function OverviewHeroVisual() {
   return (
-    <div className={layoutClass}>
-      <button
-        type="button"
-        onClick={() => onNavigate('discover')}
-        className={[
-          'inline-flex h-10 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
-          variant === 'closing'
-            ? 'border-brand-white/20 bg-brand-white text-brand-charcoal hover:bg-brand-grey'
-            : 'border-brand-charcoal bg-brand-charcoal text-brand-white hover:bg-brand-grey hover:text-brand-charcoal',
-        ].join(' ')}
-      >
-        <StrandIcon name="search-v2" className="h-4 w-4" />
-        Discover
-      </button>
-      <button
-        type="button"
-        onClick={() => onNavigate('workspace')}
-        className={[
-          'inline-flex h-10 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
-          variant === 'closing'
-            ? 'border-brand-white/25 bg-transparent text-brand-white hover:border-brand-white hover:bg-brand-white/10'
-            : 'border-border bg-surface text-text-primary hover:border-accent hover:bg-accent-light',
-        ].join(' ')}
-      >
-        <StrandIcon name="dashboard" className="h-4 w-4" />
-        Dashboard
-      </button>
-      <button
-        type="button"
-        onClick={() => onNavigate('jockey')}
-        className={[
-          'inline-flex h-10 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
-          variant === 'closing'
-            ? 'border-brand-white/25 bg-transparent text-brand-white hover:border-brand-white hover:bg-brand-white/10'
-            : 'border-border bg-surface text-text-primary hover:border-accent hover:bg-accent-light',
-        ].join(' ')}
-      >
-        <StrandIcon name="speech" className="h-4 w-4" />
-        Jockey
-      </button>
+    <div className="overview-hero-visual">
+      <img
+        src={overviewHeroJockey}
+        alt="Jockey mobile app showing soccer highlights, celebrations, and fan reactions"
+        className="overview-hero-visual-img"
+        width={800}
+        height={800}
+        loading="eager"
+        decoding="async"
+      />
+    </div>
+  )
+}
+
+const overviewExternalLinks = [
+  {
+    label: 'Code Repo',
+    href: 'https://github.com/Hrishikesh332/Sports-Semantic-Jockey',
+  },
+  {
+    label: 'Talk to Sales',
+    href: 'https://www.twelvelabs.io/contact',
+  },
+] as const
+
+function overviewNavButtonClass(variant: 'hero' | 'closing', tone: 'primary' | 'secondary') {
+  if (tone === 'primary') {
+    return variant === 'closing'
+      ? 'border-brand-white/20 bg-brand-white text-brand-charcoal hover:bg-brand-grey'
+      : 'border-brand-charcoal bg-brand-charcoal text-brand-white hover:bg-brand-grey hover:text-brand-charcoal'
+  }
+  return variant === 'closing'
+    ? 'border-brand-white/25 bg-transparent text-brand-white hover:border-brand-white hover:bg-brand-white/10'
+    : 'border-border bg-surface text-text-primary hover:border-accent hover:bg-accent-light'
+}
+
+function OverviewNavButtons({
+  variant,
+  onNavigate,
+}: {
+  variant: 'hero' | 'closing'
+  onNavigate?: (view: ViewKey) => void
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {variant === 'hero' && onNavigate ? (
+        <button
+          type="button"
+          onClick={() => onNavigate('discover')}
+          className={[
+            'inline-flex h-10 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
+            overviewNavButtonClass('hero', 'primary'),
+          ].join(' ')}
+        >
+          <StrandIcon name="search-v2" className="h-4 w-4" />
+          Discover
+        </button>
+      ) : null}
+      {overviewExternalLinks.map((link, index) => (
+        <a
+          key={link.label}
+          href={link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={[
+            'overview-nav-external inline-flex h-10 items-center justify-center rounded-md border px-4 text-sm font-semibold',
+            overviewNavButtonClass(variant, variant === 'closing' && index === 1 ? 'primary' : 'secondary'),
+          ].join(' ')}
+        >
+          <span>{link.label}</span>
+        </a>
+      ))}
     </div>
   )
 }
@@ -4356,6 +4384,22 @@ function OverviewSectionHeader({
   )
 }
 
+function OverviewCompareLiftVisual() {
+  return (
+    <div className="overview-compare-lift-visual">
+      <img
+        src={overviewCompareLift}
+        alt="Semantic highlight lanes across racing, football, and tennis match footage"
+        className="overview-compare-lift-visual-img"
+        width={640}
+        height={400}
+        loading="lazy"
+        decoding="async"
+      />
+    </div>
+  )
+}
+
 function OverviewCompareSection({ columns }: { columns: typeof overviewCompareColumns }) {
   return (
     <div className="grid gap-4 lg:grid-cols-2 lg:gap-5">
@@ -4364,23 +4408,38 @@ function OverviewCompareSection({ columns }: { columns: typeof overviewCompareCo
           key={column.title}
           className={column.kind === 'feed' ? 'overview-compare-feed px-5 py-6 sm:px-6 sm:py-7' : 'overview-compare-lift px-5 py-6 sm:px-6 sm:py-7'}
         >
-          <p className="overview-kicker">{column.kind === 'feed' ? 'Baseline' : 'Jockey'}</p>
-          <h4 className="mt-2 text-xl font-semibold text-text-primary">{column.title}</h4>
-          <p className="mt-1 text-sm text-text-secondary">{column.subtitle}</p>
-          <ul className="mt-5 space-y-3">
-            {column.items.map((item) => (
-              <li key={item} className="flex gap-3 text-sm leading-6 text-text-secondary">
-                <span
-                  className={[
-                    'mt-2 h-1.5 w-1.5 shrink-0 rounded-full',
-                    column.kind === 'lift' ? 'bg-mb-green' : 'bg-text-tertiary',
-                  ].join(' ')}
-                  aria-hidden="true"
-                />
-                {item}
-              </li>
-            ))}
-          </ul>
+          {column.kind === 'lift' ? (
+            <div className="overview-compare-lift-inner">
+              <OverviewCompareLiftVisual />
+              <div className="overview-compare-lift-copy min-w-0">
+                <p className="overview-kicker">Jockey</p>
+                <h4 className="mt-2 text-xl font-semibold text-text-primary">{column.title}</h4>
+                <p className="mt-1 text-sm text-text-secondary">{column.subtitle}</p>
+                <ul className="mt-5 space-y-3">
+                  {column.items.map((item) => (
+                    <li key={item} className="flex gap-3 text-sm leading-6 text-text-secondary">
+                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-mb-green" aria-hidden="true" />
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : (
+            <>
+              <p className="overview-kicker">Baseline</p>
+              <h4 className="mt-2 text-xl font-semibold text-text-primary">{column.title}</h4>
+              <p className="mt-1 text-sm text-text-secondary">{column.subtitle}</p>
+              <ul className="mt-5 space-y-3">
+                {column.items.map((item) => (
+                  <li key={item} className="flex gap-3 text-sm leading-6 text-text-secondary">
+                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-text-tertiary" aria-hidden="true" />
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </article>
       ))}
     </div>
@@ -4501,19 +4560,20 @@ function OverviewReservedSlot({
   )
 }
 
-function OverviewClosingPanel({ onNavigate }: { onNavigate: (view: ViewKey) => void }) {
+function OverviewClosingPanel() {
   return (
     <section className="overview-closing overview-block relative overflow-hidden px-5 py-10 sm:px-7 sm:py-12">
       <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-mb-green via-mb-orange to-mb-pink" aria-hidden="true" />
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-10">
         <div className="min-w-0">
-          <p className="overview-kicker">Start in the product</p>
-          <h3 className="overview-heading mt-3">Turn the same match footage into highlights you can defend.</h3>
+          <p className="overview-kicker">Why it matters</p>
+          <h3 className="overview-heading mt-3">Less hunting. More conviction on every cut.</h3>
           <p className="overview-lead mt-3">
-            Search with Marengo in Discover, compare event-feed and semantic lanes on the Dashboard, or run a reel prompt in Jockey — one game, one source, proof on screen.
+            Story the feed never tagged becomes searchable. Each edit can be explained from the footage itself. Producer
+            context stays on the match so the next session does not start from zero.
           </p>
         </div>
-        <OverviewNavButtons onNavigate={onNavigate} variant="closing" />
+        <OverviewNavButtons variant="closing" />
       </div>
     </section>
   )
