@@ -543,6 +543,14 @@ const jockeyProducerSkills: Array<{ key: string; label: string; icon: string; co
     tint: 'rgba(108,213,253,0.16)',
     prompt: 'Find all moments of peak crowd energy - sustained roaring, standing ovations, visible fan reactions in the stands. Rank by duration and intensity.',
   },
+  {
+    key: 'behind_the_scenes',
+    label: 'Behind the Scenes reel',
+    icon: 'indexes',
+    color: '#FFB0CD',
+    tint: 'rgba(255,176,205,0.16)',
+    prompt: 'Find warmup moments, coach reactions, bench camaraderie, tunnel walks, huddles, and sideline context. Return timestamped clips with story context.',
+  },
 ]
 
 const reelFormats: Array<{ key: ReelFormatKey; label: string; detail: string; aspect: string }> = [
@@ -1707,7 +1715,6 @@ function App() {
           <OverviewPage
             onNavigate={navigate}
             game={selectedGame}
-            reels={scopedReels}
             loading={loadingGames || isLoadingReels}
           />
         ) : (
@@ -4075,279 +4082,391 @@ function LiveApiBadge({ loading, error }: { loading: boolean; error: boolean }) 
   )
 }
 
+const overviewProblemPoints: Array<{ title: string; body: string }> = [
+  {
+    title: 'The feed gives you the play, not the story',
+    body: 'Event automation is fast — but it stops at scoreboard facts. Crowd surges, player emotion, and narrative context rarely make the cut list.',
+  },
+  {
+    title: 'A timestamp is not proof',
+    body: 'Producers still have to open the clip, verify what happened, and justify the edit. Without grounded analysis, highlights ship on faith.',
+  },
+  {
+    title: 'Context walks away between sessions',
+    body: 'Search notes, lane decisions, and clip rationale rarely stay on the asset. The next producer rebuilds the same judgment from scratch.',
+  },
+]
+
+const overviewCompareColumns: Array<{
+  kind: 'feed' | 'lift'
+  title: string
+  subtitle: string
+  items: string[]
+}> = [
+  {
+    kind: 'feed',
+    title: 'Event feed alone',
+    subtitle: 'What automation gives you today',
+    items: [
+      'Sparse clips tied to scoreboard and official stats',
+      'Chronological list — little narrative or emotional ranking',
+      'No proof bundle when someone questions the cut',
+      'Context lives in Slack threads, not on the asset',
+    ],
+  },
+  {
+    kind: 'lift',
+    title: 'With Sports Jockey',
+    subtitle: 'What semantic lift adds on the same index',
+    items: [
+      'Search by intent — crowd energy, reactions, story beats',
+      'Pegasus metadata grounded to the opened segment',
+      'Semantic lanes: Best Plays, Emotion, Fans, BTS',
+      'Producer decisions saved back for the next session',
+    ],
+  },
+]
+
+const overviewFeatures: Array<{
+  title: string
+  body: string
+  icon: string
+  iconBg: string
+  iconColor: string
+}> = [
+  {
+    title: 'Marengo 3.0 — Semantic moment search',
+    body: 'Multimodal embeddings over indexed match footage. Surface celebrations, pressure, crowd energy, and narrative beats the event feed never logged.',
+    icon: 'search-v2',
+    iconBg: 'bg-product-search-light',
+    iconColor: 'text-product-search-dark',
+  },
+  {
+    title: 'Marengo 3.0 — Natural-language Discover',
+    body: 'Search by intent in plain language and open timestamped hits on the source — reactions, fan eruptions, and story moments without manual tagging.',
+    icon: 'generate',
+    iconBg: 'bg-product-embed-light',
+    iconColor: 'text-product-embed-dark',
+  },
+  {
+    title: 'Pegasus 1.5 — Grounded clip analysis',
+    body: 'Reason over the segment you select — tone, action, score context, participants, and boundaries backed by what is visible in that clip, not a transcript guess.',
+    icon: 'analyze',
+    iconBg: 'bg-product-generate-light',
+    iconColor: 'text-product-generate-dark',
+  },
+  {
+    title: 'Dashboard — Feed vs semantic lanes',
+    body: 'Review sparse event-feed clips beside semantic lift on the same source video — one index, two editorial baselines producers can compare side by side.',
+    icon: 'dashboard',
+    iconBg: 'bg-accent-light',
+    iconColor: 'text-brand-charcoal',
+  },
+  {
+    title: 'Jockey — Semantic highlight reels',
+    body: 'Preset prompts return timestamped clips for Best Plays, Emotion, Fans, and BTS — lanes the stat sheet will not rank on stats alone.',
+    icon: 'speech',
+    iconBg: 'bg-mb-orange-light',
+    iconColor: 'text-mb-orange-dark',
+  },
+  {
+    title: 'Jockey — Producer memory on the asset',
+    body: 'Persist clip analysis and chat turns on the indexed match so the next session reloads saved context instead of rebuilding the same judgment.',
+    icon: 'dashboard',
+    iconBg: 'bg-mb-pink-light',
+    iconColor: 'text-mb-pink-dark',
+  },
+]
+
 function OverviewPage({
   onNavigate,
+  game,
+  loading,
 }: {
   onNavigate: (view: ViewKey) => void
   game: Game | null
-  reels?: HighlightReels
   loading: boolean
 }) {
-  const problemPoints = [
-    {
-      icon: 'hourglass',
-      title: 'Highlights move faster than review',
-      body: 'Sports teams need publishable clips quickly, but high-value moments are often hidden between official event tags.',
-    },
-    {
-      icon: 'search-v2',
-      title: 'Editors search by intent',
-      body: 'A producer asks for pressure, rivalry, relief, player reaction, crowd energy, or setup, not only a timestamp.',
-    },
-    {
-      icon: 'document-list',
-      title: 'Every clip needs evidence',
-      body: 'The final choice should show why it belongs in the story, what appears on screen, and where the source footage supports it.',
-    },
-  ]
-  const workflow = [
-    {
-      icon: 'search-v2',
-      label: 'Marengo',
-      title: 'Discover the moment',
-      body: 'Search indexed video by visual and audio meaning, then open the exact result as a selected clip.',
-    },
-    {
-      icon: 'analyze',
-      label: 'Pegasus 1.5',
-      title: 'Explain the clip',
-      body: 'Generate clip-only metadata: tone, key action, score context, people, tags, boundaries, and grounded evidence.',
-    },
-    {
-      icon: 'entity-collection',
-      label: 'Jockey',
-      title: 'Structure the story',
-      body: 'Build semantic lanes, entity relationships, tag reels, and saved workspace memory for repeated editorial work.',
-    },
-  ]
-  const extensionPoints = [
-    {
-      icon: 'usage',
-      baseline: 'Known event',
-      lift: 'Searchable intent',
-      body: 'The event feed keeps the production anchor. Jockey adds search for emotion, pressure, relief, atmosphere, and story beats.',
-    },
-    {
-      icon: 'analyze',
-      baseline: 'Timestamped clip',
-      lift: 'Grounded explanation',
-      body: 'Pegasus turns the selected segment into tone, action, score context, participants, boundaries, and evidence.',
-    },
-    {
-      icon: 'entity-collection',
-      baseline: 'Visible people',
-      lift: 'Entity graph',
-      body: 'Teams, players, officials, fan groups, and interactions become timestamped signals instead of loose observations.',
-    },
-    {
-      icon: 'document-list',
-      baseline: 'One-time package',
-      lift: 'Reusable memory',
-      body: 'Selected clip analysis and Jockey chat turns are saved back to the source video for later reels and review.',
-    },
-  ]
-  const outcomes = [
-    { icon: 'play-boxed', label: 'Selected clip analysis', body: 'Clip playback and Pegasus response appear together, so review happens against the actual source moment.' },
-    { icon: 'list', label: 'Semantic lanes', body: 'Best Plays, Emotion, Fans, and Behind the Scenes become scannable producer paths.' },
-    { icon: 'entity-collection', label: 'Entity tracking', body: 'People, teams, officials, fan groups, and interactions are grounded to timestamps.' },
-    { icon: 'devices', label: 'Tag reels', body: 'The same evidence can become 9:16 reels, recaps, feed cuts, or reaction inserts.' },
-  ]
-
   return (
-    <div className="flex flex-1 bg-background">
-      <div className="mx-auto flex w-full max-w-[1240px] flex-col px-6 py-7">
-        <section className="grid gap-6 border-b border-border pb-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-end">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-sm border border-border bg-surface px-2.5 py-1.5 text-xs font-semibold text-text-secondary">
-              <ModeGlyph mode="twelvelabs_enhanced" icon="vision" className="h-4 w-5 text-brand-charcoal" />
-              TwelveLabs Jockey
-            </div>
-            <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-[1.08] text-text-primary">
-              Explainable sports discovery on top of fast highlight automation.
-            </h2>
-            <p className="mt-4 max-w-3xl text-base leading-7 text-text-secondary">
-              WSC-style workflows are excellent at turning known events into publishable clips. Sports Jockey adds TwelveLabs video understanding so producers can find the emotional, visual, and narrative moments that are not fully described by the event feed.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2 lg:justify-end">
-            <button
-              type="button"
-              onClick={() => onNavigate('discover')}
-              className="inline-flex h-10 items-center gap-2 rounded-md border border-accent bg-accent-light px-4 text-sm font-semibold text-brand-charcoal hover:bg-accent"
-            >
-              <StrandIcon name="search-v2" className="h-4 w-4" />
-              Discover moments
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigate('workspace')}
-              className="inline-flex h-10 items-center gap-2 rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-primary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
-            >
-              <StrandIcon name="dashboard" className="h-4 w-4" />
-              Open dashboard
-            </button>
-          </div>
-        </section>
-
-        <section className="grid gap-8 border-b border-border py-8 lg:grid-cols-[0.82fr_1.18fr]">
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary">The problem</p>
-            <h3 className="mt-2 max-w-md text-2xl font-semibold leading-tight text-text-primary">Event data says what happened. Editors still need why it matters.</h3>
-            <p className="mt-3 max-w-lg text-sm leading-6 text-text-secondary">
-              The baseline can identify the obvious scoring moment. The editorial value often sits around it: the buildup, the reaction, the crowd swing, and the evidence that makes the clip trustworthy.
-            </p>
-          </div>
-          <div className="overflow-hidden rounded-md border border-border bg-surface">
-            {problemPoints.map((item, index) => (
-              <OverviewProblemRow key={item.title} index={index + 1} {...item} />
-            ))}
-          </div>
-        </section>
-
-        <section className="border-b border-border py-8">
-          <div className="max-w-3xl">
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-tertiary">The solution</p>
-            <h3 className="mt-2 text-2xl font-semibold leading-tight text-text-primary">A semantic production loop layered over the baseline.</h3>
-            <p className="mt-3 text-sm leading-6 text-text-secondary">
-              Producers move from discovery to clip explanation to reusable Jockey memory without losing the speed of the original highlight workflow.
-            </p>
-          </div>
-          <div className="mt-5 grid gap-3 lg:grid-cols-3">
-            {workflow.map((item, index) => (
-              <OverviewWorkflowStep key={item.title} index={index + 1} {...item} />
-            ))}
-          </div>
-        </section>
-
-        <section className="grid gap-6 border-b border-border py-8 xl:grid-cols-[minmax(300px,0.72fr)_minmax(0,1.28fr)]">
-          <div className="min-w-0">
-            <div className="mb-4 flex min-w-0 items-center gap-2">
-              <StrandIcon name="scalable" className="h-4 w-4 text-accent" />
-              <h3 className="text-base font-semibold text-text-primary">Where TwelveLabs Jockey extends the baseline</h3>
-            </div>
-            <div className="rounded-md border border-border bg-brand-charcoal px-5 py-5 text-white">
-              <div className="flex items-center gap-2">
-                <ModeGlyph mode="twelvelabs_enhanced" icon="vision" className="h-5 w-6 text-accent" />
-                <h4 className="text-sm font-semibold">Core promise</h4>
+    <div className="flex flex-1 flex-col bg-background">
+      <div className="overview-shell mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-5 lg:px-6">
+        <section className="relative overflow-hidden rounded-2xl border border-border bg-surface shadow-[0_10px_28px_rgba(29,28,27,0.045)]">
+          <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-mb-green via-mb-orange to-mb-pink" aria-hidden="true" />
+          <div className="grid gap-6 px-4 py-6 sm:px-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:px-6 lg:py-7">
+            <div className="min-w-0 pt-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex h-8 items-center gap-2 rounded-full border border-border-light bg-card px-3 text-xs font-semibold uppercase tracking-[0.16em] text-text-secondary">
+                  <ModeGlyph mode="twelvelabs_enhanced" icon="vision" className="h-4 w-5 text-brand-charcoal" />
+                  TwelveLabs Jockey
+                </div>
+                {game ? (
+                  <span className="inline-flex h-8 items-center rounded-full border border-border-light bg-surface px-3 text-xs font-semibold text-text-secondary">
+                    {game.label}
+                  </span>
+                ) : null}
+                {loading ? (
+                  <span className="inline-flex h-8 items-center gap-2 rounded-full border border-border-light bg-surface px-3 text-xs font-semibold text-text-secondary">
+                    <StrandIcon name="spinner" className="h-3.5 w-3.5 animate-spin" />
+                    Syncing workspace
+                  </span>
+                ) : null}
               </div>
-              <p className="mt-4 text-2xl font-semibold leading-tight">Move from “show me the goal” to “show me the story around the goal.”</p>
-              <p className="mt-3 text-sm leading-6 text-white/72">
-                Every answer stays grounded to playable footage, timestamped evidence, and saved metadata, so teams can trust the recommendation.
+              <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-[1.08] text-text-primary lg:text-5xl">
+                Explainable sports discovery on top of fast highlight automation.
+              </h2>
+              <p className="mt-4 max-w-3xl text-base leading-7 text-text-secondary">
+                Marengo finds moments the event feed misses. Pegasus explains the selected clip. Jockey turns grounded evidence into reels, lanes, and reusable workspace memory.
               </p>
             </div>
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            {extensionPoints.map((item, index) => (
-              <OverviewExtensionCard key={item.lift} index={index + 1} {...item} />
-            ))}
+            <OverviewNavButtons onNavigate={onNavigate} variant="hero" />
           </div>
         </section>
 
-        <section className="py-8">
-          <div className="mb-4 flex min-w-0 items-center gap-2">
-            <StrandIcon name="generate" className="h-4 w-4 text-accent" />
-            <h3 className="text-base font-semibold text-text-primary">What the producer gets</h3>
+        <div className="overview-sections mt-14 divide-y-2 divide-border border-t-2 border-border pb-12 lg:mt-16 lg:pb-14">
+          <div className="overview-section">
+            <OverviewNarrativePanel problems={overviewProblemPoints} />
           </div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {outcomes.map((item) => (
-              <OverviewOutcome key={item.label} {...item} />
-            ))}
+
+          <section className="overview-section overview-block">
+            <OverviewSectionHeader
+              kicker="Why it matters"
+              title="Same footage. Two editorial baselines."
+              lead="Sports Jockey does not replace your event feed — it adds searchable, explainable, publishable lift on the indexed match."
+            />
+            <OverviewCompareSection columns={overviewCompareColumns} />
+          </section>
+
+          <div className="overview-section">
+            <OverviewFeaturesSection features={overviewFeatures} />
           </div>
-        </section>
+
+          <section className="overview-section overview-block">
+            <OverviewSectionHeader
+              kicker="Coming soon"
+              title="Architecture & walkthrough"
+              lead="Pipeline diagram and product demo — placeholders for now."
+            />
+            <div className="grid gap-3 lg:grid-cols-2">
+              <OverviewReservedSlot label="Architecture diagram" detail="Drop your pipeline diagram here." />
+              <OverviewReservedSlot label="Product demo" detail="Embed a walkthrough video here." />
+            </div>
+          </section>
+
+          <div className="overview-section">
+            <OverviewClosingPanel onNavigate={onNavigate} />
+          </div>
+        </div>
       </div>
     </div>
   )
 }
 
-function OverviewProblemRow({ icon, title, body, index }: { icon: string; title: string; body: string; index: number }) {
+function OverviewNavButtons({
+  onNavigate,
+  variant,
+}: {
+  onNavigate: (view: ViewKey) => void
+  variant: 'hero' | 'closing'
+}) {
+  const layoutClass = variant === 'hero' ? 'flex flex-wrap gap-2 lg:justify-end' : 'flex flex-wrap gap-2'
   return (
-    <article className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-3 border-t border-border-light px-4 py-4 first:border-t-0">
-      <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-text-secondary">
-        <StrandIcon name={icon} className="h-4 w-4" />
-      </span>
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="font-mono text-[10px] font-semibold text-text-tertiary">{String(index).padStart(2, '0')}</span>
-          <h4 className="text-sm font-semibold text-text-primary">{title}</h4>
-        </div>
-        <p className="mt-1 text-sm leading-6 text-text-secondary">{body}</p>
-      </div>
-    </article>
+    <div className={layoutClass}>
+      <button
+        type="button"
+        onClick={() => onNavigate('discover')}
+        className={[
+          'inline-flex h-10 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
+          variant === 'closing'
+            ? 'border-brand-white/20 bg-brand-white text-brand-charcoal hover:bg-brand-grey'
+            : 'border-brand-charcoal bg-brand-charcoal text-brand-white hover:bg-brand-grey hover:text-brand-charcoal',
+        ].join(' ')}
+      >
+        <StrandIcon name="search-v2" className="h-4 w-4" />
+        Discover
+      </button>
+      <button
+        type="button"
+        onClick={() => onNavigate('workspace')}
+        className={[
+          'inline-flex h-10 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
+          variant === 'closing'
+            ? 'border-brand-white/25 bg-transparent text-brand-white hover:border-brand-white hover:bg-brand-white/10'
+            : 'border-border bg-surface text-text-primary hover:border-accent hover:bg-accent-light',
+        ].join(' ')}
+      >
+        <StrandIcon name="dashboard" className="h-4 w-4" />
+        Dashboard
+      </button>
+      <button
+        type="button"
+        onClick={() => onNavigate('jockey')}
+        className={[
+          'inline-flex h-10 items-center gap-2 rounded-md border px-4 text-sm font-semibold',
+          variant === 'closing'
+            ? 'border-brand-white/25 bg-transparent text-brand-white hover:border-brand-white hover:bg-brand-white/10'
+            : 'border-border bg-surface text-text-primary hover:border-accent hover:bg-accent-light',
+        ].join(' ')}
+      >
+        <StrandIcon name="speech" className="h-4 w-4" />
+        Jockey
+      </button>
+    </div>
   )
 }
 
-function OverviewWorkflowStep({
-  icon,
-  label,
+function OverviewSectionHeader({
+  kicker,
   title,
-  body,
-  index,
+  lead,
 }: {
-  icon: string
-  label: string
+  kicker: string
   title: string
-  body: string
-  index: number
+  lead: string
 }) {
   return (
-    <article className="min-w-0 rounded-md border border-border-light bg-surface px-4 py-4">
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-md border border-accent/30 bg-accent-light text-brand-charcoal">
-          <StrandIcon name={icon} className="h-4 w-4" />
-        </span>
-        <span className="font-mono text-[11px] font-semibold text-text-tertiary">{String(index).padStart(2, '0')}</span>
-      </div>
-      <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-tertiary">{label}</p>
-      <h4 className="mt-1 text-sm font-semibold text-text-primary">{title}</h4>
-      <p className="mt-2 text-sm leading-6 text-text-secondary">{body}</p>
-    </article>
+    <header className="mb-6 lg:mb-8">
+      <p className="overview-kicker">{kicker}</p>
+      <h3 className="overview-heading">{title}</h3>
+      <p className="overview-lead">{lead}</p>
+    </header>
   )
 }
 
-function OverviewExtensionCard({
-  icon,
-  baseline,
-  lift,
-  body,
-  index,
-}: {
-  icon: string
-  baseline: string
-  lift: string
-  body: string
-  index: number
-}) {
+function OverviewCompareSection({ columns }: { columns: typeof overviewCompareColumns }) {
   return (
-    <article className="min-w-0 rounded-md border border-border-light bg-surface px-4 py-4">
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-accent">
-          <StrandIcon name={icon} className="h-4 w-4" />
-        </span>
-        <span className="font-mono text-[10px] font-semibold text-text-tertiary">{String(index).padStart(2, '0')}</span>
-      </div>
-      <div className="mt-4 grid gap-2">
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-text-tertiary">{baseline}</p>
-        <div className="flex items-center gap-2 text-accent">
-          <span className="h-px flex-1 bg-accent/45" />
-          <StrandIcon name="arrow-box-right" className="h-4 w-4" />
-          <span className="h-px flex-1 bg-accent/45" />
+    <div className="grid gap-4 lg:grid-cols-2 lg:gap-5">
+      {columns.map((column) => (
+        <article
+          key={column.title}
+          className={column.kind === 'feed' ? 'overview-compare-feed px-5 py-6 sm:px-6 sm:py-7' : 'overview-compare-lift px-5 py-6 sm:px-6 sm:py-7'}
+        >
+          <p className="overview-kicker">{column.kind === 'feed' ? 'Baseline' : 'Sports Jockey'}</p>
+          <h4 className="mt-2 text-xl font-semibold text-text-primary">{column.title}</h4>
+          <p className="mt-1 text-sm text-text-secondary">{column.subtitle}</p>
+          <ul className="mt-5 space-y-3">
+            {column.items.map((item) => (
+              <li key={item} className="flex gap-3 text-sm leading-6 text-text-secondary">
+                <span
+                  className={[
+                    'mt-2 h-1.5 w-1.5 shrink-0 rounded-full',
+                    column.kind === 'lift' ? 'bg-mb-green' : 'bg-text-tertiary',
+                  ].join(' ')}
+                  aria-hidden="true"
+                />
+                {item}
+              </li>
+            ))}
+          </ul>
+        </article>
+      ))}
+    </div>
+  )
+}
+
+function OverviewNarrativePanel({ problems }: { problems: typeof overviewProblemPoints }) {
+  return (
+    <section className="overview-block overview-panel">
+      <div className="grid lg:grid-cols-2">
+        <div className="border-b border-border px-5 py-7 sm:px-6 lg:border-b-0 lg:border-r lg:px-7 lg:py-8">
+          <p className="overview-kicker">The problem</p>
+          <h3 className="overview-heading mt-2">Clip volume scaled. Editorial lift didn&apos;t.</h3>
+          <ul className="mt-6 space-y-5">
+            {problems.map((point) => (
+              <li key={point.title} className="flex gap-3">
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-text-tertiary" aria-hidden="true" />
+                <div>
+                  <p className="text-sm font-semibold text-text-primary">{point.title}</p>
+                  <p className="mt-1 text-sm leading-6 text-text-secondary">{point.body}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
-        <h4 className="text-base font-semibold text-text-primary">{lift}</h4>
+        <div className="overview-panel-accent px-5 py-7 sm:px-6 lg:px-7 lg:py-8">
+          <p className="overview-kicker">The solution</p>
+          <h3 className="overview-heading mt-2">Semantic lift on the match you already indexed</h3>
+          <p className="mt-4 text-sm leading-6 text-text-secondary">
+            Keep the event feed as your fast baseline. Layer searchable moments, grounded clip analysis, and semantic
+            highlight lanes — then save producer decisions back to the asset.
+          </p>
+          <ul className="mt-6 space-y-3">
+            {[
+              'Find what the stat sheet missed',
+              'Explain with proof on screen',
+              'Ship lanes and remember the call',
+            ].map((item) => (
+              <li key={item} className="flex items-center gap-2.5 text-sm font-medium text-text-primary">
+                <StrandIcon name="checkmark" className="h-4 w-4 shrink-0 text-mb-green-dark" />
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
-      <p className="mt-3 text-sm leading-6 text-text-secondary">{body}</p>
-    </article>
+    </section>
   )
 }
 
-function OverviewOutcome({ icon, label, body }: { icon: string; label: string; body: string }) {
+function OverviewFeaturesSection({ features }: { features: typeof overviewFeatures }) {
   return (
-    <article className="min-w-0 rounded-md border border-border-light bg-surface px-4 py-4">
-      <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-text-secondary">
-        <StrandIcon name={icon} className="h-4 w-4" />
-      </span>
-      <h4 className="mt-3 text-sm font-semibold text-text-primary">{label}</h4>
-      <p className="mt-2 text-sm leading-6 text-text-secondary">{body}</p>
-    </article>
+    <section>
+      <header className="mb-8 text-center lg:mb-10">
+        <span className="overview-features-badge inline-flex h-8 items-center rounded-full px-4 text-xs font-semibold uppercase tracking-[0.14em]">
+          Features
+        </span>
+        <h3 className="overview-features-title mt-4 text-text-primary">
+          Marengo, Pegasus, and Jockey on one indexed match
+        </h3>
+        <p className="overview-features-lead mx-auto mt-3 max-w-2xl text-text-secondary">
+          Search by meaning, explain the clip you open, and ship semantic lanes — layered on your event feed, not in place of it.
+        </p>
+      </header>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {features.map((feature) => (
+          <article key={feature.title} className="overview-feature-card flex flex-col px-5 py-6 sm:px-6 sm:py-7">
+            <span
+              className={[
+                'inline-flex h-11 w-11 items-center justify-center rounded-xl',
+                feature.iconBg,
+                feature.iconColor,
+              ].join(' ')}
+            >
+              <StrandIcon name={feature.icon} className="h-5 w-5" />
+            </span>
+            <h4 className="mt-5 text-base font-semibold leading-snug text-text-primary">{feature.title}</h4>
+            <p className="mt-2 flex-1 text-sm leading-6 text-text-secondary">{feature.body}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function OverviewReservedSlot({ label, detail }: { label: string; detail: string }) {
+  return (
+    <div className="overview-reserved flex min-h-[180px] flex-col justify-end px-5 py-6 sm:min-h-[200px] sm:px-6 sm:py-7">
+      <StrandIcon name="canvas" className="h-7 w-7 text-text-tertiary" />
+      <p className="mt-4 text-sm font-semibold text-text-primary">{label}</p>
+      <p className="mt-1.5 max-w-md text-sm leading-6 text-text-secondary">{detail}</p>
+    </div>
+  )
+}
+
+function OverviewClosingPanel({ onNavigate }: { onNavigate: (view: ViewKey) => void }) {
+  return (
+    <section className="overview-closing overview-block relative overflow-hidden px-5 py-10 sm:px-7 sm:py-12">
+      <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-mb-green via-mb-orange to-mb-pink" aria-hidden="true" />
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-10">
+        <div className="min-w-0">
+          <p className="overview-kicker">Start in the product</p>
+          <h3 className="overview-heading mt-3">Turn the same match footage into highlights you can defend.</h3>
+          <p className="overview-lead mt-3">
+            Search with Marengo in Discover, compare event-feed and semantic lanes on the Dashboard, or run a reel prompt in Jockey — one game, one source, proof on screen.
+          </p>
+        </div>
+        <OverviewNavButtons onNavigate={onNavigate} variant="closing" />
+      </div>
+    </section>
   )
 }
 
