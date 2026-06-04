@@ -2930,6 +2930,19 @@ def twelvelabs_stream_info(tag, video_name, reference=None):
     if not requested_video:
         raise ApiError("video_name is required", 404)
     playback_reference = clean_optional_string(reference) or requested_video
+    request_cache_key = _stream_info_cache_key(tag, requested_video, playback_reference)
+    cached = _get_cached_stream_info(request_cache_key)
+    if cached is not None:
+        return cached
+
+    registered_asset_id = asset_id_for_video_name(game, requested_video)
+    if registered_asset_id:
+        asset_id, asset = resolve_playback_asset(game, requested_video, requested_video)
+        stream_info = _stream_info_from_asset(asset_id, asset)
+        _store_cached_stream_info(_stream_info_cache_key(tag, requested_video, asset_id), stream_info)
+        _store_cached_stream_info(request_cache_key, stream_info)
+        return stream_info
+
     try:
         target = resolve_workspace_video_target(
             game,
@@ -2950,13 +2963,21 @@ def twelvelabs_stream_info(tag, video_name, reference=None):
         if indexed_name:
             resolved_video_name = indexed_name
 
-    cache_key = (tag, resolved_video_name, asset_id)
-    now = time.time()
-    with STREAM_INFO_CACHE_LOCK:
-        cached = STREAM_INFO_CACHE.get(cache_key)
-        if cached and cached.get("expires_at", 0) > now:
-            return dict(cached["stream_info"])
+    cache_key = _stream_info_cache_key(tag, resolved_video_name, asset_id)
+    cached = _get_cached_stream_info(cache_key)
+    if cached is not None:
+        _store_cached_stream_info(request_cache_key, cached)
+        return cached
 
+    stream_info = _stream_info_from_asset(asset_id, asset)
+    _store_cached_stream_info(cache_key, stream_info)
+    _store_cached_stream_info(request_cache_key, stream_info)
+    if requested_video != resolved_video_name:
+        _store_cached_stream_info(_stream_info_cache_key(tag, requested_video, asset_id), stream_info)
+    return stream_info
+
+
+def _stream_info_from_asset(asset_id, asset):
     hls = asset.get("hls") or {}
     manifest_url = hls.get("manifest_url")
     hls_status = hls.get("status")
@@ -2970,7 +2991,7 @@ def twelvelabs_stream_info(tag, video_name, reference=None):
             },
             409,
         )
-    stream_info = {
+    return {
         "provider": "twelvelabs",
         "type": "hls",
         "asset_id": asset_id,
@@ -2978,13 +2999,33 @@ def twelvelabs_stream_info(tag, video_name, reference=None):
         "hls_status": hls_status,
         "manifest_url": manifest_url,
     }
-    if STREAM_INFO_CACHE_TTL_SECONDS > 0:
-        with STREAM_INFO_CACHE_LOCK:
-            STREAM_INFO_CACHE[cache_key] = {
-                "expires_at": now + STREAM_INFO_CACHE_TTL_SECONDS,
-                "stream_info": stream_info,
-            }
-    return stream_info
+
+
+def _stream_info_cache_key(tag, video_name, reference=None):
+    return (tag, clean_optional_string(video_name), clean_optional_string(reference))
+
+
+def _get_cached_stream_info(cache_key):
+    if STREAM_INFO_CACHE_TTL_SECONDS <= 0:
+        return None
+    now = time.time()
+    with STREAM_INFO_CACHE_LOCK:
+        cached = STREAM_INFO_CACHE.get(cache_key)
+        if cached and cached.get("expires_at", 0) > now:
+            return dict(cached["stream_info"])
+        if cached:
+            STREAM_INFO_CACHE.pop(cache_key, None)
+    return None
+
+
+def _store_cached_stream_info(cache_key, stream_info):
+    if STREAM_INFO_CACHE_TTL_SECONDS <= 0 or not isinstance(stream_info, dict):
+        return
+    with STREAM_INFO_CACHE_LOCK:
+        STREAM_INFO_CACHE[cache_key] = {
+            "expires_at": time.time() + STREAM_INFO_CACHE_TTL_SECONDS,
+            "stream_info": dict(stream_info),
+        }
 
 
 def resolve_playback_asset(game, video_name, reference=None):

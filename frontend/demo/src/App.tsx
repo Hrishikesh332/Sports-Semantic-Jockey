@@ -280,9 +280,9 @@ type TwelveLabsStreamInfo = {
 const streamInfoCache = new Map<string, TwelveLabsStreamInfo>()
 const streamInfoRequests = new Map<string, Promise<TwelveLabsStreamInfo>>()
 const warmedManifestOrigins = new Set<string>()
-const HLS_DEFAULT_BUFFER_SECONDS = 36
-const HLS_SEGMENT_BUFFER_PADDING_SECONDS = 8
-const HLS_MAX_BUFFER_BYTES = 48 * 1000 * 1000
+const HLS_DEFAULT_BUFFER_SECONDS = 18
+const HLS_SEGMENT_BUFFER_PADDING_SECONDS = 4
+const HLS_MAX_BUFFER_BYTES = 24 * 1000 * 1000
 const HLS_FATAL_RECOVERY_ATTEMPTS = 2
 
 type MarengoSearchResult = {
@@ -1107,6 +1107,11 @@ function App() {
         }
       })
   }, [entityTrackingByKey, reelsByTag, selectedGame, selectedTag, workspaceIndexVideos])
+
+  useEffect(() => {
+    if (!selectedGame || !activeVideoName) return
+    void prefetchTwelveLabsStream(streamInfoForVideoName(selectedGame, activeVideoName))
+  }, [activeVideoName, selectedGame])
 
   useEffect(() => {
     if (!selectedTag || !activeVideoName) {
@@ -5576,7 +5581,7 @@ function TwelveLabsVideoPlayer({
     const startLoadAt = Math.max(0, startSeconds)
     const segmentEnd = endSeconds && endSeconds > startLoadAt ? endSeconds : startLoadAt + 12
     const segmentBufferLength = hasSegmentRange
-      ? clamp(segmentEnd - startLoadAt + HLS_SEGMENT_BUFFER_PADDING_SECONDS, 12, HLS_DEFAULT_BUFFER_SECONDS)
+      ? clamp(segmentEnd - startLoadAt + HLS_SEGMENT_BUFFER_PADDING_SECONDS, 8, HLS_DEFAULT_BUFFER_SECONDS)
       : HLS_DEFAULT_BUFFER_SECONDS
     const resetVideoElement = () => {
       video.pause()
@@ -5733,11 +5738,15 @@ function TwelveLabsVideoPlayer({
             startLevel: -1,
             enableWorker: true,
             capLevelToPlayerSize: true,
+            capLevelOnFPSDrop: true,
+            testBandwidth: true,
+            progressive: true,
+            startFragPrefetch: true,
             maxBufferLength: segmentBufferLength,
-            maxMaxBufferLength: Math.max(segmentBufferLength, 45),
+            maxMaxBufferLength: Math.max(segmentBufferLength, 24),
             maxBufferSize: HLS_MAX_BUFFER_BYTES,
-            backBufferLength: hasSegmentRange ? 0 : 12,
-            lowLatencyMode: true,
+            backBufferLength: hasSegmentRange ? 0 : 6,
+            lowLatencyMode: false,
           })
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (!data.fatal || disposed) return
@@ -9758,6 +9767,10 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
+function prefetchTwelveLabsStream(streamInfoUrl: string) {
+  void fetchTwelveLabsStreamInfo(streamInfoUrl).catch(() => undefined)
+}
+
 async function fetchTwelveLabsStreamInfo(url: string, signal?: AbortSignal): Promise<TwelveLabsStreamInfo> {
   if (signal?.aborted) {
     throw new DOMException('Request aborted', 'AbortError')
@@ -9767,9 +9780,11 @@ async function fetchTwelveLabsStreamInfo(url: string, signal?: AbortSignal): Pro
 
   let request = streamInfoRequests.get(url)
   if (!request) {
-    request = fetchJson<TwelveLabsStreamInfo>(url)
+    request = fetchJson<TwelveLabsStreamInfo>(url, { cache: 'force-cache' })
       .then((stream) => {
         streamInfoCache.set(url, stream)
+        const manifestUrl = secureHttpsUrl(stream.manifest_url)
+        if (manifestUrl) preconnectManifestOrigin(manifestUrl)
         return stream
       })
       .finally(() => {
