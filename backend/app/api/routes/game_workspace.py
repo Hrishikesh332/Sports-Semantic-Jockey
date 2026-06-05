@@ -23,7 +23,9 @@ def workspace_request_lookup(body=None):
 
 @game_workspace_bp.get("/games/<tag>/videos/<video_name>/jockey-workspace")
 def show_jockey_workspace(tag, video_name):
-    return jsonify(get_jockey_workspace_metadata(tag, video_name, lookup=workspace_request_lookup()))
+    response = jsonify(get_jockey_workspace_metadata(tag, video_name, lookup=workspace_request_lookup()))
+    response.headers["Cache-Control"] = "private, max-age=30, stale-while-revalidate=300"
+    return response
 
 
 @game_workspace_bp.post("/games/<tag>/videos/<video_name>/jockey-workspace/saved-clip-analysis")

@@ -659,14 +659,35 @@ const uploadRequirementLabels = [
 ]
 const JOCKEY_CHAT_CACHE_PREFIX = 'sports-jockey:jockey-chat:'
 const DISCOVER_SESSION_PREFIX = 'sports-jockey:discover-session:'
+const CLIENT_SESSION_KEY = 'sports-jockey:client-session-id-v1'
 const WORKSPACE_UI_SESSION_KEY = 'sports-jockey:workspace-ui-session-v1'
 const GAMES_CACHE_KEY = 'sports-jockey:games-cache-v1'
 const SELECTED_TAG_CACHE_KEY = 'sports-jockey:selected-tag-v1'
 const INDEX_VIDEOS_CACHE_PREFIX = 'sports-jockey:index-videos-v1:'
+const WORKSPACE_METADATA_CACHE_PREFIX = 'sports-jockey:workspace-metadata-v1:'
+const HIGHLIGHT_REELS_CACHE_PREFIX = 'sports-jockey:highlight-reels-v1:'
+const ENTITY_TRACKING_CACHE_PREFIX = 'sports-jockey:entity-tracking-v1:'
 const DEFAULT_GAME_TAG = 'sports'
 const WORKSPACE_METADATA_SAVED_EVENT = 'sports-jockey:workspace-metadata-saved'
 const JOCKEY_TUTORIAL_PROMPT_EVENT = 'sports-jockey:tutorial-jockey-prompt'
 const TUTORIAL_ANALYZE_CLIP_EVENT = 'sports-jockey:tutorial-analyze-clip'
+const DASHBOARD_DATA_CACHE_TTL_MS = 6 * 60 * 60 * 1000
+
+type TimedCacheEntry<T> = {
+  savedAt: number
+  value: T
+}
+
+function clientSessionId() {
+  if (typeof window === 'undefined') return 'server-session'
+  const existing = window.localStorage.getItem(CLIENT_SESSION_KEY)?.trim()
+  if (existing) return existing
+  const generated = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `sj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  window.localStorage.setItem(CLIENT_SESSION_KEY, generated)
+  return generated
+}
 
 function emptyDiscoverSearchSession(): DiscoverSearchSession {
   return {
@@ -790,6 +811,38 @@ function persistIndexVideosCache(tag: string, videos: IndexVideo[]) {
   window.localStorage.setItem(`${INDEX_VIDEOS_CACHE_PREFIX}${tag}`, JSON.stringify(videos))
 }
 
+function loadTimedCacheEntries<T>(prefix: string): Record<string, T> {
+  if (typeof window === 'undefined') return {}
+  const cached: Record<string, T> = {}
+  const now = Date.now()
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index)
+    if (!key || !key.startsWith(prefix)) continue
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(key) || '') as TimedCacheEntry<T>
+      if (!parsed || typeof parsed !== 'object' || now - Number(parsed.savedAt || 0) > DASHBOARD_DATA_CACHE_TTL_MS) {
+        window.localStorage.removeItem(key)
+        continue
+      }
+      cached[key.slice(prefix.length)] = parsed.value
+    } catch {
+      window.localStorage.removeItem(key)
+    }
+  }
+  return cached
+}
+
+function persistTimedCacheEntry<T>(prefix: string, key: string, value: T) {
+  if (typeof window === 'undefined' || !key || !value) return
+  const entry: TimedCacheEntry<T> = { savedAt: Date.now(), value }
+  window.localStorage.setItem(`${prefix}${key}`, JSON.stringify(entry))
+}
+
+function removeTimedCacheEntry(prefix: string, key: string) {
+  if (typeof window === 'undefined' || !key) return
+  window.localStorage.removeItem(`${prefix}${key}`)
+}
+
 const signalColors: Record<MapCategoryKey, { bg: string; border: string; text: string; track: string }> = {
   standard_stats: { bg: '#E8E7E5', border: '#B8B6B3', text: '#4F4F4F', track: '#E8E7E5' },
   best_plays: { bg: '#00DC82', border: '#00B86E', text: '#1D1C1B', track: '#E8F5E9' },
@@ -839,7 +892,7 @@ function App() {
   const [selectedStandardClipIndex, setSelectedStandardClipIndex] = useState(0)
   const [featuredSignalCategory, setFeaturedSignalCategory] = useState<MapCategoryKey>('best_plays')
   const [assemblyMode, setAssemblyMode] = useState<AssemblyModeKey>('twelvelabs_enhanced')
-  const [reelsByTag, setReelsByTag] = useState<Record<string, HighlightReels>>({})
+  const [reelsByTag, setReelsByTag] = useState<Record<string, HighlightReels>>(() => loadTimedCacheEntries<HighlightReels>(HIGHLIGHT_REELS_CACHE_PREFIX))
   const [indexVideosByTag, setIndexVideosByTag] = useState<Record<string, IndexVideo[]>>(() => loadCachedIndexVideosByTag())
   const [gamesError, setGamesError] = useState('')
   const [reelsError, setReelsError] = useState('')
@@ -853,10 +906,10 @@ function App() {
   const [clipAnalysesByKey, setClipAnalysesByKey] = useState<Record<string, SelectedClipAnalysis>>({})
   const [clipAnalysisLoadingKey, setClipAnalysisLoadingKey] = useState('')
   const [clipAnalysisError, setClipAnalysisError] = useState('')
-  const [entityTrackingByKey, setEntityTrackingByKey] = useState<Record<string, EntityTrackingResponse>>({})
+  const [entityTrackingByKey, setEntityTrackingByKey] = useState<Record<string, EntityTrackingResponse>>(() => loadTimedCacheEntries<EntityTrackingResponse>(ENTITY_TRACKING_CACHE_PREFIX))
   const [entityTrackingLoadingKey, setEntityTrackingLoadingKey] = useState('')
   const [entityTrackingError, setEntityTrackingError] = useState('')
-  const [workspaceMetadataByKey, setWorkspaceMetadataByKey] = useState<Record<string, JockeyWorkspaceMetadataResponse>>({})
+  const [workspaceMetadataByKey, setWorkspaceMetadataByKey] = useState<Record<string, JockeyWorkspaceMetadataResponse>>(() => loadTimedCacheEntries<JockeyWorkspaceMetadataResponse>(WORKSPACE_METADATA_CACHE_PREFIX))
   const [workspaceMetadataLoadingKey, setWorkspaceMetadataLoadingKey] = useState('')
   const [workspaceMetadataError, setWorkspaceMetadataError] = useState('')
   const [workspaceMetadataRefreshToken, setWorkspaceMetadataRefreshToken] = useState(0)
@@ -995,6 +1048,7 @@ function App() {
     )
       .then((body) => {
         setWorkspaceMetadataByKey((current) => ({ ...current, [metadataKey]: body }))
+        persistTimedCacheEntry(WORKSPACE_METADATA_CACHE_PREFIX, metadataKey, body)
         return body
       })
       .catch((error: Error) => {
@@ -1043,9 +1097,11 @@ function App() {
         const bundled = isWorkspaceAnalysisResponse(body) ? body : null
         const highlightReels = bundled?.highlight_reels || (body as HighlightReels)
         setReelsByTag((current) => ({ ...current, [cacheKey]: highlightReels }))
+        persistTimedCacheEntry(HIGHLIGHT_REELS_CACHE_PREFIX, cacheKey, highlightReels)
 
         if (bundled?.entity_tracking && entityKey) {
           setEntityTrackingByKey((current) => ({ ...current, [entityKey]: bundled.entity_tracking! }))
+          persistTimedCacheEntry(ENTITY_TRACKING_CACHE_PREFIX, entityKey, bundled.entity_tracking)
         }
 
         if (!videoName || !selectedGame) return
@@ -1128,6 +1184,7 @@ function App() {
       const detail = (event as CustomEvent<{ tag?: string; videoNames?: string[] }>).detail
       if (!detail?.tag || detail.tag !== selectedTag || !activeVideoName) return
       if (detail.videoNames?.length && !detail.videoNames.includes(activeVideoName)) return
+      removeTimedCacheEntry(WORKSPACE_METADATA_CACHE_PREFIX, `${selectedTag}|${activeVideoName}`)
       setWorkspaceMetadataRefreshToken((value) => value + 1)
     }
     window.addEventListener(WORKSPACE_METADATA_SAVED_EVENT, handleSavedMetadata)
@@ -9898,6 +9955,7 @@ function warmHlsManifest(manifestUrl: string) {
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  clientSessionId()
   const response = await fetch(apiUrl(url), init)
   const body = await response.json().catch(() => null)
   if (!response.ok) {

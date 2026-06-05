@@ -14,7 +14,9 @@ game_videos_bp = Blueprint("game_videos", __name__)
 
 @game_videos_bp.get("/games/<tag>/index-videos")
 def show_game_index_videos(tag):
-    return jsonify(list_game_index_videos(tag))
+    response = jsonify(list_game_index_videos(tag))
+    response.headers["Cache-Control"] = "private, max-age=30, stale-while-revalidate=300"
+    return response
 
 
 @game_videos_bp.get("/games/<tag>/discover-videos")
