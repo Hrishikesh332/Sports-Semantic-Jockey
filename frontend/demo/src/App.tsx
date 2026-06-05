@@ -3271,11 +3271,17 @@ function ReelSequencePlayer({
                   src={cachedAssemblyUrl}
                   onLoadedMetadata={() => {
                     setAssemblyStatus('ready')
-                    if (typeof activeAssemblySegment?.offsetStart === 'number' && assemblyVideoRef.current) {
-                      assemblyVideoRef.current.currentTime = activeAssemblySegment.offsetStart
+                    if (assemblyVideoRef.current) {
+                      assemblyVideoRef.current.pause()
+                      if (typeof activeAssemblySegment?.offsetStart === 'number') {
+                        assemblyVideoRef.current.currentTime = activeAssemblySegment.offsetStart
+                      }
                     }
                   }}
-                  onCanPlay={() => setAssemblyStatus('ready')}
+                  onCanPlay={() => {
+                    setAssemblyStatus('ready')
+                    assemblyVideoRef.current?.pause()
+                  }}
                   onTimeUpdate={syncAssemblyPlaybackPosition}
                   onError={() => setAssemblyStatus('error')}
                 />
@@ -5818,12 +5824,12 @@ function TwelveLabsVideoPlayer({
           }
           setBuffering(false)
           setPlaying(true)
-          onPlayingChange?.(true)
+          if (!warmingFirstFrame) onPlayingChange?.(true)
         }
         handlePause = () => {
           if (!disposed) {
             setPlaying(false)
-            if (!rangeCompleted) onPlayingChange?.(false)
+            if (!rangeCompleted && !warmingFirstFrame) onPlayingChange?.(false)
           }
         }
         handleProgress = () => {
