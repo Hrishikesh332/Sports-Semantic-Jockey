@@ -113,6 +113,7 @@ def assembly_reel_params(tag, video_name):
         "segments": request.args.get("segments"),
         "format_name": request.args.get("format", DEFAULT_ASSEMBLY_REEL_FORMAT),
         "assembly_name": request.args.get("name"),
+        "reference": stream_reference(),
     }
 
 

@@ -1764,7 +1764,8 @@ function App() {
                 <button
                   type="button"
                   onClick={startTutorial}
-                  className="app-header-action border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+                  className="app-header-action app-header-action--tutorial border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+                  aria-label="Start guided tutorial"
                   title="Start guided tutorial"
                 >
                   <StrandIcon name="help" className="h-4 w-4 shrink-0" />
@@ -1781,6 +1782,7 @@ function App() {
                       : 'cursor-not-allowed border-border bg-card text-text-tertiary',
                   ].join(' ')}
                   aria-haspopup="dialog"
+                  aria-label="Add video"
                   title="Add Video"
                 >
                   <StrandIcon name="plus" className="h-4 w-4 shrink-0" />
@@ -2430,6 +2432,7 @@ function ProducerCockpit({
                     variant="sidecar"
                     game={selectedGame}
                     reels={reels}
+                    workspaceVideoName={activeVideoName}
                     mode={assemblyMode}
                     categoryKey={selectedCategory}
                     selectedLaneKey={assemblyMode === 'wsc_baseline' ? 'standard_stats' : selectedCategory}
@@ -2909,6 +2912,7 @@ type SequenceClip = {
   shortTitle: string
   detail: string
   sourceName: string
+  videoReference?: string
   startTime: string
   endTime: string
   laneKey: MapCategoryKey
@@ -2919,6 +2923,7 @@ function ReelSequencePlayer({
   variant = 'standard',
   game,
   reels,
+  workspaceVideoName,
   mode,
   categoryKey,
   selectedLaneKey,
@@ -2929,6 +2934,7 @@ function ReelSequencePlayer({
   variant?: 'standard' | 'sidecar'
   game: Game
   reels: HighlightReels
+  workspaceVideoName?: string
   mode: AssemblyModeKey
   categoryKey: CategoryKey
   selectedLaneKey: MapCategoryKey
@@ -2975,6 +2981,7 @@ function ReelSequencePlayer({
             shortTitle: sequenceClipShortTitle(sourceCategory.key),
             detail: clip.description,
             sourceName,
+            videoReference: clip.video_reference,
             startTime: clip.start_time,
             endTime: clip.end_time,
             laneKey: sourceCategory.key,
@@ -3012,20 +3019,25 @@ function ReelSequencePlayer({
     ? sequenceTimeline[sequenceTimeline.length - 1].offsetEnd
     : 0
   const assemblySourceName = assemblyClips[0]?.sourceName
-  const assemblyPosterUrl = assemblySourceName
-    ? thumbnailForVideoName(game, assemblySourceName)
+  const assemblyPlaybackTarget = assemblyClips[0]
+    ? assemblyReelPlaybackTarget(game, workspaceVideoName, assemblyClips[0])
+    : undefined
+  const assemblyPlaybackVideoName = assemblyPlaybackTarget?.videoName
+  const assemblyPosterUrl = assemblyPlaybackVideoName
+    ? thumbnailForVideoName(game, assemblyPlaybackVideoName)
     : undefined
   const canUseAssemblyVideo = Boolean(
-    assemblySourceName && assemblyClips.length > 0 && assemblyClips.every((clip) => clip.sourceName === assemblySourceName),
+    assemblyPlaybackVideoName && assemblyClips.length > 0 && assemblyClips.every((clip) => clip.sourceName === assemblySourceName),
   )
-  const assemblyVideoUrl = canUseAssemblyVideo && assemblySourceName
-    ? assemblyReelUrl(game, assemblySourceName, assemblyClips, mode === 'wsc_baseline' ? 'event-feed-assembly' : 'semantic-assembly')
+  const assemblyReelName = mode === 'wsc_baseline' ? 'event-feed-assembly' : 'semantic-assembly'
+  const assemblyVideoUrl = canUseAssemblyVideo && assemblyPlaybackVideoName
+    ? assemblyReelUrl(game, assemblyPlaybackVideoName, assemblyClips, assemblyReelName, assemblyPlaybackTarget?.reference)
     : ''
-  const assemblyStatusUrl = canUseAssemblyVideo && assemblySourceName
-    ? assemblyReelStatusUrl(game, assemblySourceName, assemblyClips, mode === 'wsc_baseline' ? 'event-feed-assembly' : 'semantic-assembly')
+  const assemblyStatusUrl = canUseAssemblyVideo && assemblyPlaybackVideoName
+    ? assemblyReelStatusUrl(game, assemblyPlaybackVideoName, assemblyClips, assemblyReelName, assemblyPlaybackTarget?.reference)
     : ''
-  const assemblyDownloadUrl = canUseAssemblyVideo && assemblySourceName
-    ? assemblyReelUrl(game, assemblySourceName, assemblyClips, mode === 'wsc_baseline' ? 'event-feed-assembly' : 'semantic-assembly', true)
+  const assemblyDownloadUrl = canUseAssemblyVideo && assemblyPlaybackVideoName
+    ? assemblyReelUrl(game, assemblyPlaybackVideoName, assemblyClips, assemblyReelName, assemblyPlaybackTarget?.reference, true)
     : ''
   const compact = variant === 'sidecar'
   const assemblyVideoReady = assemblyStatus === 'ready'
@@ -3111,9 +3123,9 @@ function ReelSequencePlayer({
     )
   }
 
-  const activePlaybackSourceName = activeClip.sourceName
+  const activePlaybackSourceName = workspaceVideoName || activeClip.sourceName
   const streamInfoUrl = streamInfoForWorkspacePlayback(game, activePlaybackSourceName, {
-    videoReference: activeClip.sourceName,
+    videoReference: activeClip.videoReference || activeClip.sourceName,
   })
   const startSeconds = secondsFromTime(activeClip.startTime)
   const endSeconds = secondsFromTime(activeClip.endTime)
@@ -3205,10 +3217,12 @@ function ReelSequencePlayer({
 
     const clipsToPrefetch = sequenceClips.slice(activeIndex + 1, activeIndex + 3)
     clipsToPrefetch.forEach((clip) => {
-      const url = streamInfoForWorkspacePlayback(game, clip.sourceName, { videoReference: clip.sourceName })
+      const url = streamInfoForWorkspacePlayback(game, workspaceVideoName || clip.sourceName, {
+        videoReference: clip.videoReference || clip.sourceName,
+      })
       prefetchTwelveLabsStream(url)
     })
-  }, [activeAssemblySegment?.offsetStart, activeClip, activeIndex, game, sequenceClips, usingAssemblyVideo])
+  }, [activeAssemblySegment?.offsetStart, activeClip, activeIndex, game, sequenceClips, usingAssemblyVideo, workspaceVideoName])
 
   const syncAssemblyPlaybackPosition = () => {
     const video = assemblyVideoRef.current
@@ -9332,7 +9346,30 @@ function reelPreviewUrl(
   return apiUrl(`/games/${encodeURIComponent(game.tag)}/reel/${encodeURIComponent(videoName)}?${params.toString()}`)
 }
 
-function assemblyReelUrl(game: Game, videoName: string, clips: SequenceClip[], name: string, download = false) {
+function assemblyReelPlaybackTarget(game: Game, workspaceVideoName: string | undefined, clip: SequenceClip) {
+  const playbackVideoName = workspaceVideoName || clip.sourceName
+  const reference = cleanString(clip.videoReference)
+  if ((game.source_videos || []).includes(playbackVideoName) || !isOpaqueVideoReference(playbackVideoName)) {
+    return { videoName: playbackVideoName }
+  }
+  if (!reference) {
+    return { videoName: playbackVideoName }
+  }
+  const mappedName = videoNameForReference(game, reference)
+  if (mappedName && referencesSameVideo(game, mappedName, playbackVideoName)) {
+    return { videoName: playbackVideoName }
+  }
+  return { videoName: playbackVideoName, reference }
+}
+
+function assemblyReelUrl(
+  game: Game,
+  videoName: string,
+  clips: SequenceClip[],
+  name: string,
+  reference?: string,
+  download = false,
+) {
   const segments = clips
     .map((clip) => {
       const start = secondsFromTime(clip.startTime)
@@ -9345,11 +9382,18 @@ function assemblyReelUrl(game: Game, videoName: string, clips: SequenceClip[], n
     format: '16x9',
     name,
   })
+  if (reference) params.set('reference', reference)
   if (download) params.set('download', '1')
   return apiUrl(`/games/${encodeURIComponent(game.tag)}/assembly-reel/${encodeURIComponent(videoName)}?${params.toString()}`)
 }
 
-function assemblyReelStatusUrl(game: Game, videoName: string, clips: SequenceClip[], name: string) {
+function assemblyReelStatusUrl(
+  game: Game,
+  videoName: string,
+  clips: SequenceClip[],
+  name: string,
+  reference?: string,
+) {
   const segments = clips
     .map((clip) => {
       const start = secondsFromTime(clip.startTime)
@@ -9362,6 +9406,7 @@ function assemblyReelStatusUrl(game: Game, videoName: string, clips: SequenceCli
     format: '16x9',
     name,
   })
+  if (reference) params.set('reference', reference)
   return apiUrl(`/games/${encodeURIComponent(game.tag)}/assembly-reel-status/${encodeURIComponent(videoName)}?${params.toString()}`)
 }
 
