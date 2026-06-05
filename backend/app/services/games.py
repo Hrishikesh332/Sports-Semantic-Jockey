@@ -3108,10 +3108,9 @@ def generated_reel_clip(tag, video_name, start, end, format_name, clip_name=None
     return content, download_name
 
 
-def generated_assembly_reel(tag, video_name, segments, format_name, assembly_name=None):
+def assembly_reel_cache_status(tag, video_name, segments, format_name, assembly_name=None):
     get_game(tag)
     stream_info = twelvelabs_stream_info(tag, video_name)
-    source_input = stream_info["manifest_url"]
     segment_ranges = parse_assembly_segments(segments)
     total_duration = sum(end_seconds - start_seconds for start_seconds, end_seconds in segment_ranges)
     if total_duration > 10 * 60:
@@ -3132,9 +3131,21 @@ def generated_assembly_reel(tag, video_name, segments, format_name, assembly_nam
     ).hexdigest()[:16]
     REELS_DIR.mkdir(parents=True, exist_ok=True)
     output_path = REELS_DIR / f"{source_slug}-{safe_label}-assembly-{format_key}-{cache_hash}.mp4"
-    if not output_path.exists():
-        render_assembly_reel_to_path(source_input, output_path, segment_ranges, reel_format)
     download_name = f"{source_slug}-{safe_label}-assembly-{reel_format['label'].replace(':', 'x')}.mp4"
+    return output_path, download_name, segment_ranges, reel_format, stream_info
+
+
+def generated_assembly_reel(tag, video_name, segments, format_name, assembly_name=None):
+    output_path, download_name, segment_ranges, reel_format, stream_info = assembly_reel_cache_status(
+        tag,
+        video_name,
+        segments,
+        format_name,
+        assembly_name,
+    )
+    if not output_path.exists():
+        source_input = stream_info["manifest_url"]
+        render_assembly_reel_to_path(source_input, output_path, segment_ranges, reel_format)
     return output_path, download_name
 
 

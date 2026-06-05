@@ -2884,6 +2884,7 @@ function ReelSequencePlayer({
   const [assemblyStatus, setAssemblyStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [assemblyCurrentSeconds, setAssemblyCurrentSeconds] = useState(0)
   const [playlistAutoPlay, setPlaylistAutoPlay] = useState(false)
+  const [cachedAssemblyUrl, setCachedAssemblyUrl] = useState<string | null>(null)
   const assemblyLeftColumnRef = useRef<HTMLDivElement | null>(null)
   const [assemblyLeftColumnHeight, setAssemblyLeftColumnHeight] = useState(0)
   const clipButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
@@ -2953,21 +2954,20 @@ function ReelSequencePlayer({
     ? sequenceTimeline[sequenceTimeline.length - 1].offsetEnd
     : 0
   const assemblySourceName = assemblyClips[0]?.sourceName
-  const assemblyPosterUrl = assemblySourceName
-    ? thumbnailForVideoName(game, assemblySourceName)
-    : undefined
-  const assemblyVideoReady = assemblyStatus === 'ready'
   const canUseAssemblyVideo = Boolean(
     assemblySourceName && assemblyClips.length > 0 && assemblyClips.every((clip) => clip.sourceName === assemblySourceName),
   )
   const assemblyVideoUrl = canUseAssemblyVideo && assemblySourceName
     ? assemblyReelUrl(game, assemblySourceName, assemblyClips, mode === 'wsc_baseline' ? 'event-feed-assembly' : 'semantic-assembly')
     : ''
+  const assemblyStatusUrl = canUseAssemblyVideo && assemblySourceName
+    ? assemblyReelStatusUrl(game, assemblySourceName, assemblyClips, mode === 'wsc_baseline' ? 'event-feed-assembly' : 'semantic-assembly')
+    : ''
   const assemblyDownloadUrl = canUseAssemblyVideo && assemblySourceName
     ? assemblyReelUrl(game, assemblySourceName, assemblyClips, mode === 'wsc_baseline' ? 'event-feed-assembly' : 'semantic-assembly', true)
     : ''
   const compact = variant === 'sidecar'
-  const usingAssemblyVideo = Boolean(assemblyVideoUrl && assemblyStatus !== 'error')
+  const assemblyVideoReady = Boolean(cachedAssemblyUrl)
 
   useEffect(() => {
     const selectedSequenceClipIndex = sequenceClips.findIndex((clip) =>
@@ -2991,10 +2991,32 @@ function ReelSequencePlayer({
   }, [activeClip])
 
   useEffect(() => {
-    setAssemblyStatus(assemblyVideoUrl ? 'loading' : 'error')
+    let disposed = false
+    setCachedAssemblyUrl(null)
     setAssemblyCurrentSeconds(0)
     setPlaylistAutoPlay(false)
-  }, [assemblyVideoUrl])
+    if (!assemblyStatusUrl) {
+      setAssemblyStatus('error')
+      return undefined
+    }
+    setAssemblyStatus('loading')
+    fetchJson<{ exists: boolean; url?: string | null }>(assemblyStatusUrl)
+      .then((status) => {
+        if (disposed) return
+        if (status.exists && status.url) {
+          setCachedAssemblyUrl(apiUrl(status.url))
+          setAssemblyStatus('ready')
+          return
+        }
+        setAssemblyStatus('error')
+      })
+      .catch(() => {
+        if (!disposed) setAssemblyStatus('error')
+      })
+    return () => {
+      disposed = true
+    }
+  }, [assemblyStatusUrl])
 
   useEffect(() => {
     if (!compact) return undefined
@@ -3018,7 +3040,7 @@ function ReelSequencePlayer({
       resizeObserver?.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [compact, activeClip?.id, assemblyStatus, usingAssemblyVideo])
+  }, [compact, activeClip?.id, assemblyStatus])
 
   if (!activeClip) {
     return (
@@ -3028,15 +3050,13 @@ function ReelSequencePlayer({
     )
   }
 
-  const activePlaybackSourceName = assemblySourceName || activeClip.sourceName
+  const activePlaybackSourceName = activeClip.sourceName
   const streamInfoUrl = streamInfoForWorkspacePlayback(game, activePlaybackSourceName, {
     videoReference: activeClip.sourceName,
   })
   const startSeconds = secondsFromTime(activeClip.startTime)
   const endSeconds = secondsFromTime(activeClip.endTime)
-  const progress = usingAssemblyVideo && assemblyDurationSeconds > 0
-    ? clamp((assemblyCurrentSeconds / assemblyDurationSeconds) * 100, 0, 100)
-    : ((activeIndex + 1) / Math.max(sequenceClips.length, 1)) * 100
+  const usingConstructedAssembly = Boolean(cachedAssemblyUrl && assemblyVideoReady)
   const activeClipColor = signalColors[activeClip.laneKey]
   const assemblyListStyle: CSSProperties | undefined = compact
     ? {
@@ -3073,11 +3093,18 @@ function ReelSequencePlayer({
     })
     return nearestIndex
   }
+  const activeAssemblyIndex = assemblyIndexForClip(activeClip)
+  const activeAssemblySegment = activeAssemblyIndex >= 0 ? sequenceTimeline[activeAssemblyIndex] : undefined
+  const progress = usingConstructedAssembly && assemblyDurationSeconds > 0
+    ? clamp((assemblyCurrentSeconds / assemblyDurationSeconds) * 100, 0, 100)
+    : ((activeIndex + 1) / Math.max(sequenceClips.length, 1)) * 100
   const seekAssemblyToIndex = (index: number) => {
     const offset = sequenceTimeline[index]?.offsetStart
-    if (usingAssemblyVideo && typeof offset === 'number' && assemblyVideoRef.current) {
-      assemblyVideoRef.current.currentTime = offset
+    if (typeof offset === 'number') {
       setAssemblyCurrentSeconds(offset)
+    }
+    if (typeof offset === 'number' && assemblyVideoRef.current) {
+      assemblyVideoRef.current.currentTime = offset
     }
   }
   const selectSequenceClip = (index: number, clip: SequenceClip) => {
@@ -3107,6 +3134,22 @@ function ReelSequencePlayer({
     setPlaylistAutoPlay(true)
     onSelect?.(nextClip.laneKey, nextClip.sourceIndex)
   }
+
+  useEffect(() => {
+    if (!activeClip) return
+    const activeOffset = activeAssemblySegment?.offsetStart
+    setAssemblyCurrentSeconds(typeof activeOffset === 'number' ? activeOffset : activeIndex)
+    if (usingConstructedAssembly && typeof activeOffset === 'number' && assemblyVideoRef.current) {
+      assemblyVideoRef.current.currentTime = activeOffset
+    }
+
+    const clipsToPrefetch = sequenceClips.slice(activeIndex + 1, activeIndex + 3)
+    clipsToPrefetch.forEach((clip) => {
+      const url = streamInfoForWorkspacePlayback(game, clip.sourceName, { videoReference: clip.sourceName })
+      prefetchTwelveLabsStream(url)
+    })
+  }, [activeAssemblySegment?.offsetStart, activeClip, activeIndex, game, sequenceClips, usingConstructedAssembly])
+
   const syncAssemblyPlaybackPosition = () => {
     const video = assemblyVideoRef.current
     if (!video) return
@@ -3148,7 +3191,7 @@ function ReelSequencePlayer({
               <StrandIcon name="play-boxed" className="h-4 w-4 text-accent" />
               <h2 className="text-base font-semibold text-text-primary">Assembly Lane Player</h2>
             </div>
-            <p className="mt-1 text-sm text-text-secondary">All semantic lane segments play together as one stitched preview.</p>
+            <p className="mt-1 text-sm text-text-secondary">Lane segments stream immediately while the assembled export prepares.</p>
           </div>
           {playbackClock}
         </div>
@@ -3159,80 +3202,65 @@ function ReelSequencePlayer({
       <div className={compact ? 'grid min-h-0 w-full min-w-0 items-start [@media(min-width:560px)]:grid-cols-[minmax(0,1fr)_minmax(210px,0.62fr)]' : 'grid w-full min-w-0 items-stretch lg:grid-cols-[minmax(0,1.2fr)_360px]'}>
         <div ref={assemblyLeftColumnRef} className="flex min-w-0 self-start flex-col bg-surface">
           <div className="m-3 aspect-video min-w-0 overflow-hidden rounded-md bg-card">
-            {usingAssemblyVideo ? (
-              <div className="relative h-full w-full overflow-hidden bg-brand-charcoal">
-                {assemblyPosterUrl && (
-                  <img
-                    alt=""
-                    src={assemblyPosterUrl}
-                    className={[
-                      'absolute inset-0 h-full w-full object-contain transition-opacity duration-300',
-                      assemblyVideoReady ? 'opacity-0' : 'opacity-100',
-                    ].join(' ')}
-                  />
-                )}
+            <div className="relative h-full w-full overflow-hidden bg-brand-charcoal">
+              {usingConstructedAssembly && cachedAssemblyUrl ? (
                 <video
-                  key={assemblyVideoUrl}
+                  key={cachedAssemblyUrl}
                   ref={assemblyVideoRef}
-                  className={[
-                    'relative z-[1] h-full w-full bg-transparent object-contain transition-opacity duration-300',
-                    assemblyVideoReady ? 'opacity-100' : 'opacity-0',
-                  ].join(' ')}
+                  className="h-full w-full bg-brand-charcoal object-contain"
                   controls
                   playsInline
                   preload="auto"
-                  src={assemblyVideoUrl}
-                  onLoadStart={() => setAssemblyStatus('loading')}
+                  src={cachedAssemblyUrl}
                   onLoadedMetadata={() => {
-                    setAssemblyCurrentSeconds(0)
+                    setAssemblyStatus('ready')
+                    if (typeof activeAssemblySegment?.offsetStart === 'number' && assemblyVideoRef.current) {
+                      assemblyVideoRef.current.currentTime = activeAssemblySegment.offsetStart
+                    }
                   }}
                   onCanPlay={() => setAssemblyStatus('ready')}
                   onTimeUpdate={syncAssemblyPlaybackPosition}
-                  onEnded={() => {
-                    setAssemblyCurrentSeconds(assemblyDurationSeconds)
-                    setActiveIndex(Math.max(0, sequenceClips.length - 1))
-                  }}
                   onError={() => setAssemblyStatus('error')}
                 />
-                {assemblyDownloadUrl && assemblyVideoReady && (
-                  <a
-                    href={assemblyDownloadUrl}
-                    download
-                    aria-label="Download assembled highlight video"
-                    title="Download assembled highlight video"
-                    className="absolute right-3 top-3 z-[3] inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/24 bg-brand-charcoal/92 text-white shadow-[0_8px_18px_rgba(0,0,0,0.22)] backdrop-blur-sm transition hover:border-accent hover:bg-accent hover:text-brand-charcoal focus:outline-none focus:ring-2 focus:ring-accent/40"
-                  >
-                    <StrandIcon name="download" className="h-4 w-4" />
-                  </a>
-                )}
-                {assemblyStatus === 'loading' && (
-                  <div className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center bg-brand-charcoal/48 backdrop-blur-[1px]">
-                    <div className="inline-flex items-center gap-2 rounded-md border border-white/20 bg-brand-charcoal/84 px-3 py-2 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(0,0,0,0.24)]">
-                      <StrandIcon name="spinner" className="h-4 w-4 animate-spin text-accent" />
-                      Building lane assembly
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <TwelveLabsVideoPlayer
-                key={`${streamInfoUrl}-${activeClip.id}`}
-                streamInfoUrl={streamInfoUrl}
-                startSeconds={startSeconds}
-                endSeconds={endSeconds}
-                posterUrl={thumbnailForVideoName(game, activePlaybackSourceName)}
-                segmentRange={{
-                  startSeconds,
-                  endSeconds,
-                  startLabel: activeClip.startTime,
-                  endLabel: activeClip.endTime,
-                }}
-                autoPlay={playlistAutoPlay}
-                onDuration={() => undefined}
-                onPlayingChange={setPlaylistAutoPlay}
-                onRangeComplete={advanceFallbackPlaylist}
-              />
-            )}
+              ) : (
+                <TwelveLabsVideoPlayer
+                  key={`${streamInfoUrl}-${activeClip.id}`}
+                  streamInfoUrl={streamInfoUrl}
+                  startSeconds={startSeconds}
+                  endSeconds={endSeconds}
+                  posterUrl={thumbnailForVideoName(game, activePlaybackSourceName)}
+                  segmentRange={{
+                    startSeconds,
+                    endSeconds,
+                    startLabel: activeClip.startTime,
+                    endLabel: activeClip.endTime,
+                  }}
+                  autoPlay={playlistAutoPlay}
+                  onDuration={() => undefined}
+                  onPlayingChange={setPlaylistAutoPlay}
+                  onRangeComplete={advanceFallbackPlaylist}
+                />
+              )}
+              {usingConstructedAssembly && (
+                <div className="pointer-events-none absolute left-3 top-3 z-[4] flex max-w-[calc(100%-24px)] items-center gap-2">
+                  <span className="inline-flex h-8 max-w-full items-center gap-2 rounded-md border border-accent/70 bg-accent px-2.5 text-xs font-semibold text-brand-charcoal shadow-[0_8px_18px_rgba(0,0,0,0.18)]">
+                    <StrandIcon name="checkmark" className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">Assembly</span>
+                  </span>
+                  {assemblyDownloadUrl && (
+                    <a
+                      href={assemblyDownloadUrl}
+                      download
+                      aria-label="Download assembled highlight video"
+                      title="Download assembled highlight video"
+                      className="pointer-events-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/24 bg-brand-charcoal/88 text-white shadow-[0_8px_18px_rgba(0,0,0,0.22)] backdrop-blur-sm transition hover:border-accent hover:bg-accent hover:text-brand-charcoal focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    >
+                      <StrandIcon name="download" className="h-3.5 w-3.5" />
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
           <div className="min-w-0 border-t border-border-light px-4 py-3">
             <div className="grid gap-3">
@@ -9234,6 +9262,22 @@ function assemblyReelUrl(game: Game, videoName: string, clips: SequenceClip[], n
   })
   if (download) params.set('download', '1')
   return apiUrl(`/games/${encodeURIComponent(game.tag)}/assembly-reel/${encodeURIComponent(videoName)}?${params.toString()}`)
+}
+
+function assemblyReelStatusUrl(game: Game, videoName: string, clips: SequenceClip[], name: string) {
+  const segments = clips
+    .map((clip) => {
+      const start = secondsFromTime(clip.startTime)
+      const end = Math.max(secondsFromTime(clip.endTime), start + 1)
+      return `${start.toFixed(3)}-${end.toFixed(3)}`
+    })
+    .join(';')
+  const params = new URLSearchParams({
+    segments,
+    format: '16x9',
+    name,
+  })
+  return apiUrl(`/games/${encodeURIComponent(game.tag)}/assembly-reel-status/${encodeURIComponent(videoName)}?${params.toString()}`)
 }
 
 function jockeyReelDownloadUrl(game: Game, videoName: string, clip: Pick<Clip, 'start_time' | 'end_time'>, index: number) {

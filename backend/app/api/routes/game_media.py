@@ -11,6 +11,7 @@ from app.core.errors import ApiError
 from app.services.games import (
     THUMBNAILS_DIR,
     VIDEOS_DIR,
+    assembly_reel_cache_status,
     generated_assembly_reel,
     generated_reel_clip,
     generated_reel_thumbnail,
@@ -61,6 +62,19 @@ def show_game_assembly_reel(tag, video_name):
     )
 
 
+@game_media_bp.get("/games/<tag>/assembly-reel-status/<video_name>")
+def show_game_assembly_reel_status(tag, video_name):
+    path, _download_name, _segment_ranges, _reel_format, _stream_info = assembly_reel_cache_status(
+        **assembly_reel_params(tag, video_name)
+    )
+    exists = path.exists()
+    query = request.query_string.decode("utf-8")
+    url = f"/games/{quote_path_segment(tag)}/assembly-reel/{quote_path_segment(video_name)}"
+    if query:
+        url = f"{url}?{query}"
+    return jsonify({"exists": exists, "url": url if exists else None})
+
+
 @game_media_bp.get("/games/<tag>/reel-thumbnail/<video_name>")
 def show_game_reel_thumbnail(tag, video_name):
     try:
@@ -100,6 +114,12 @@ def assembly_reel_params(tag, video_name):
         "format_name": request.args.get("format", DEFAULT_ASSEMBLY_REEL_FORMAT),
         "assembly_name": request.args.get("name"),
     }
+
+
+def quote_path_segment(value):
+    from urllib.parse import quote
+
+    return quote(value, safe="")
 
 
 def placeholder_thumbnail_response(tag, video_name):
