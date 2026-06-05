@@ -279,6 +279,7 @@ type TwelveLabsStreamInfo = {
 
 const streamInfoCache = new Map<string, TwelveLabsStreamInfo>()
 const streamInfoRequests = new Map<string, Promise<TwelveLabsStreamInfo>>()
+const manifestWarmupRequests = new Map<string, Promise<void>>()
 const warmedManifestOrigins = new Set<string>()
 const HLS_DEFAULT_BUFFER_SECONDS = 18
 const HLS_SEGMENT_BUFFER_PADDING_SECONDS = 4
@@ -5556,6 +5557,8 @@ function TwelveLabsVideoPlayer({
   const [message, setMessage] = useState('Resolving TwelveLabs stream...')
   const [durationSeconds, setDurationSeconds] = useState(0)
   const [currentSeconds, setCurrentSeconds] = useState(startSeconds)
+  const [bufferedSeconds, setBufferedSeconds] = useState(0)
+  const [buffering, setBuffering] = useState(false)
   const [playing, setPlaying] = useState(false)
   const hasSegmentRange = Boolean(segmentRange)
 
@@ -5572,8 +5575,11 @@ function TwelveLabsVideoPlayer({
     let handleMetadata: (() => void) | null = null
     let handleReadyFrame: (() => void) | null = null
     let handleTimeUpdate: (() => void) | null = null
+    let handleProgress: (() => void) | null = null
     let handlePlay: (() => void) | null = null
     let handlePause: (() => void) | null = null
+    let handleWaiting: (() => void) | null = null
+    let handleCanPlay: (() => void) | null = null
     let rangeCompleted = false
     let readyFrame = false
     let warmingFirstFrame = false
@@ -5612,6 +5618,8 @@ function TwelveLabsVideoPlayer({
     setMessage(manifestUrl ? 'Loading TwelveLabs HLS stream...' : 'Resolving TwelveLabs stream...')
     setDurationSeconds(0)
     setCurrentSeconds(startSeconds)
+    setBufferedSeconds(0)
+    setBuffering(false)
     setPlaying(false)
     onDuration?.(0)
     resetVideoElement()
@@ -5636,10 +5644,24 @@ function TwelveLabsVideoPlayer({
       .then((hlsManifestUrl) => {
         if (disposed) return
         preconnectManifestOrigin(hlsManifestUrl)
-        setMessage('Loading TwelveLabs HLS stream...')
+        warmHlsManifest(hlsManifestUrl)
+        setMessage('Loading HLS manifest...')
         const playWhenReady = () => {
           if (!autoPlay || disposed) return
           video.play().catch(() => undefined)
+        }
+        const updateBufferedSeconds = () => {
+          if (disposed || !video.buffered.length) return
+          const target = Math.max(video.currentTime || startLoadAt, startLoadAt)
+          for (let index = 0; index < video.buffered.length; index += 1) {
+            const start = video.buffered.start(index)
+            const end = video.buffered.end(index)
+            if (target >= start - 0.2 && target <= end + 0.2) {
+              setBufferedSeconds(end)
+              return
+            }
+          }
+          setBufferedSeconds(video.buffered.end(video.buffered.length - 1))
         }
         const warmFirstFrame = () => {
           if (autoPlay || disposed || variant === 'minimal') return
@@ -5669,6 +5691,8 @@ function TwelveLabsVideoPlayer({
           readyFrame = true
           setStatus('ready')
           setMessage('')
+          setBuffering(false)
+          updateBufferedSeconds()
           playWhenReady()
           finishWarmup()
         }
@@ -5680,7 +5704,7 @@ function TwelveLabsVideoPlayer({
           onDuration?.(duration)
           const seekedSeconds = seekVideoTo(video, startLoadAt, duration)
           setCurrentSeconds(seekedSeconds)
-          setMessage('Opening TwelveLabs stream...')
+          setMessage('Buffering first frame...')
           if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) markReady()
         }
         handleReadyFrame = () => {
@@ -5689,6 +5713,7 @@ function TwelveLabsVideoPlayer({
         handleTimeUpdate = () => {
           if (disposed) return
           setCurrentSeconds(video.currentTime)
+          updateBufferedSeconds()
           if (!readyFrame && video.currentTime > 0) markReady()
           if (rangeCompleted || !endSeconds || endSeconds <= startSeconds) return
           if (video.currentTime >= endSeconds - 0.15) {
@@ -5706,6 +5731,7 @@ function TwelveLabsVideoPlayer({
           if (video.currentTime < startSeconds - 0.15) {
             setCurrentSeconds(seekVideoTo(video, startSeconds))
           }
+          setBuffering(false)
           setPlaying(true)
           onPlayingChange?.(true)
         }
@@ -5715,12 +5741,32 @@ function TwelveLabsVideoPlayer({
             if (!rangeCompleted) onPlayingChange?.(false)
           }
         }
+        handleProgress = () => {
+          updateBufferedSeconds()
+          if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) setBuffering(false)
+        }
+        handleWaiting = () => {
+          if (disposed) return
+          setBuffering(true)
+          setMessage('Buffering HLS stream...')
+        }
+        handleCanPlay = () => {
+          if (disposed) return
+          setBuffering(false)
+          updateBufferedSeconds()
+          markReady()
+        }
         video.addEventListener('loadedmetadata', handleMetadata)
         video.addEventListener('loadeddata', handleReadyFrame)
         video.addEventListener('canplay', handleReadyFrame)
         video.addEventListener('timeupdate', handleTimeUpdate)
+        video.addEventListener('progress', handleProgress)
         video.addEventListener('play', handlePlay)
         video.addEventListener('pause', handlePause)
+        video.addEventListener('waiting', handleWaiting)
+        video.addEventListener('stalled', handleWaiting)
+        video.addEventListener('canplay', handleCanPlay)
+        video.addEventListener('canplaythrough', handleCanPlay)
         readinessPoll = window.setInterval(() => {
           if (disposed || readyFrame) return
           if (video.readyState >= 2 || video.currentTime > 0) markReady()
@@ -5745,6 +5791,12 @@ function TwelveLabsVideoPlayer({
             testBandwidth: true,
             progressive: true,
             startFragPrefetch: true,
+            maxStarvationDelay: 2,
+            maxLoadingDelay: 2,
+            manifestLoadingMaxRetry: 4,
+            levelLoadingMaxRetry: 4,
+            fragLoadingMaxRetry: 4,
+            abrEwmaDefaultEstimate: 2_000_000,
             maxBufferLength: segmentBufferLength,
             maxMaxBufferLength: Math.max(segmentBufferLength, 24),
             maxBufferSize: HLS_MAX_BUFFER_BYTES,
@@ -5772,9 +5824,13 @@ function TwelveLabsVideoPlayer({
           hls.on(Hls.Events.MEDIA_ATTACHED, () => {
             if (!disposed) hls?.loadSource(hlsManifestUrl)
           })
+          hls.on(Hls.Events.MANIFEST_LOADED, () => {
+            if (!disposed) setMessage('Preparing HLS levels...')
+          })
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
             if (disposed) return
             fatalRecoveryAttempts = 0
+            setMessage('Buffering first frame...')
             hls?.startLoad(startLoadAt)
             warmFirstFrame()
             playWhenReady()
@@ -5801,12 +5857,21 @@ function TwelveLabsVideoPlayer({
         video.removeEventListener('canplay', handleReadyFrame)
       }
       if (handleTimeUpdate) video.removeEventListener('timeupdate', handleTimeUpdate)
+      if (handleProgress) video.removeEventListener('progress', handleProgress)
       if (handlePlay) video.removeEventListener('play', handlePlay)
       if (handlePause) video.removeEventListener('pause', handlePause)
+      if (handleWaiting) {
+        video.removeEventListener('waiting', handleWaiting)
+        video.removeEventListener('stalled', handleWaiting)
+      }
+      if (handleCanPlay) {
+        video.removeEventListener('canplay', handleCanPlay)
+        video.removeEventListener('canplaythrough', handleCanPlay)
+      }
       stopHls()
       resetVideoElement()
     }
-  }, [hasSegmentRange, manifestUrl, streamInfoUrl, startSeconds, endSeconds, onDuration, onPlayingChange, onRangeComplete, variant])
+  }, [autoPlay, hasSegmentRange, manifestUrl, muted, streamInfoUrl, startSeconds, endSeconds, onDuration, onPlayingChange, onRangeComplete, variant])
 
   useEffect(() => {
     const video = videoRef.current
@@ -5857,6 +5922,17 @@ function TwelveLabsVideoPlayer({
     setCurrentSeconds(seekVideoTo(video, seekStart + ratio * Math.max(1, seekEnd - seekStart), seekEnd))
   }, [durationSeconds, endSeconds, segmentRange, startSeconds, status])
 
+  const segmentEndSeconds = segmentRange
+    ? Math.max(segmentRange.endSeconds ?? segmentRange.startSeconds + 1, segmentRange.startSeconds + 1)
+    : Math.max(durationSeconds, endSeconds || startSeconds + 1, 1)
+  const bufferStartSeconds = segmentRange ? segmentRange.startSeconds : 0
+  const bufferedPercent = clamp(
+    ((bufferedSeconds - bufferStartSeconds) / Math.max(1, segmentEndSeconds - bufferStartSeconds)) * 100,
+    0,
+    100,
+  )
+  const showLoaderOverlay = showStatusOverlay && (status !== 'ready' || buffering)
+
   return (
     <div className="relative h-full w-full min-w-0">
       <video
@@ -5880,17 +5956,24 @@ function TwelveLabsVideoPlayer({
           onTogglePlayback={togglePlayback}
         />
       )}
-      {status !== 'ready' && showStatusOverlay && (
+      {showLoaderOverlay && (
         <div
           className={[
             'pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center',
-            variant === 'minimal' ? 'bg-brand-charcoal/74 text-white backdrop-blur-[2px]' : 'bg-surface/96 text-text-primary',
+            status === 'ready' ? 'bg-brand-charcoal/36 text-white backdrop-blur-[1px]' : variant === 'minimal' ? 'bg-brand-charcoal/74 text-white backdrop-blur-[2px]' : 'bg-surface/96 text-text-primary',
           ].join(' ')}
         >
           {statusOverlayStyle === 'loader' ? (
-            <div className="inline-flex items-center gap-2 rounded-md border border-white/20 bg-brand-charcoal/78 px-3 py-2 text-white shadow-[0_8px_20px_rgba(0,0,0,0.24)]">
-              <StrandIcon name={status === 'error' ? 'warning' : 'spinner'} className={['h-4 w-4', status === 'loading' ? 'animate-spin' : ''].join(' ')} />
-              <span className="text-xs font-semibold">{status === 'error' ? message : 'Preparing reel'}</span>
+            <div className="min-w-[170px] rounded-md border border-white/20 bg-brand-charcoal/82 px-3 py-2 text-white shadow-[0_8px_20px_rgba(0,0,0,0.24)]">
+              <div className="flex items-center justify-center gap-2">
+                <StrandIcon name={status === 'error' ? 'warning' : 'spinner'} className={['h-4 w-4', status !== 'error' ? 'animate-spin' : ''].join(' ')} />
+                <span className="text-xs font-semibold">{status === 'error' ? message : buffering ? 'Buffering HLS' : 'Preparing reel'}</span>
+              </div>
+              {status !== 'error' && (
+                <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/18">
+                  <span className="block h-full rounded-full bg-accent transition-all duration-300" style={{ width: `${Math.max(bufferedPercent, status === 'loading' ? 16 : 0)}%` }} />
+                </div>
+              )}
             </div>
           ) : (
             <p className={['max-w-md text-sm font-semibold', variant === 'minimal' ? 'text-white' : 'text-text-primary'].join(' ')}>{message}</p>
@@ -9756,6 +9839,20 @@ function preconnectManifestOrigin(manifestUrl: string) {
   }
 }
 
+function warmHlsManifest(manifestUrl: string) {
+  if (!manifestUrl || manifestWarmupRequests.has(manifestUrl)) return
+  const request = fetch(manifestUrl, {
+    cache: 'force-cache',
+    mode: 'cors',
+  })
+    .then(() => undefined)
+    .catch(() => undefined)
+    .finally(() => {
+      manifestWarmupRequests.delete(manifestUrl)
+    })
+  manifestWarmupRequests.set(manifestUrl, request)
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiUrl(url), init)
   const body = await response.json().catch(() => null)
@@ -9773,7 +9870,12 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 function prefetchTwelveLabsStream(streamInfoUrl: string) {
-  void fetchTwelveLabsStreamInfo(streamInfoUrl).catch(() => undefined)
+  void fetchTwelveLabsStreamInfo(streamInfoUrl)
+    .then((stream) => {
+      const manifestUrl = secureHttpsUrl(stream.manifest_url)
+      if (manifestUrl) warmHlsManifest(manifestUrl)
+    })
+    .catch(() => undefined)
 }
 
 async function fetchTwelveLabsStreamInfo(url: string, signal?: AbortSignal): Promise<TwelveLabsStreamInfo> {
@@ -9789,7 +9891,10 @@ async function fetchTwelveLabsStreamInfo(url: string, signal?: AbortSignal): Pro
       .then((stream) => {
         streamInfoCache.set(url, stream)
         const manifestUrl = secureHttpsUrl(stream.manifest_url)
-        if (manifestUrl) preconnectManifestOrigin(manifestUrl)
+        if (manifestUrl) {
+          preconnectManifestOrigin(manifestUrl)
+          warmHlsManifest(manifestUrl)
+        }
         return stream
       })
       .finally(() => {
