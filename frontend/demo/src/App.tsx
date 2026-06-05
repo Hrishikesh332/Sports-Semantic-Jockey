@@ -3027,7 +3027,10 @@ function ReelSequencePlayer({
     )
   }
 
-  const streamInfoUrl = streamInfoForVideoName(game, activeClip.sourceName)
+  const activePlaybackSourceName = assemblySourceName || activeClip.sourceName
+  const streamInfoUrl = streamInfoForWorkspacePlayback(game, activePlaybackSourceName, {
+    videoReference: activeClip.sourceName,
+  })
   const startSeconds = secondsFromTime(activeClip.startTime)
   const endSeconds = secondsFromTime(activeClip.endTime)
   const progress = usingAssemblyVideo && assemblyDurationSeconds > 0
@@ -3216,7 +3219,7 @@ function ReelSequencePlayer({
                 streamInfoUrl={streamInfoUrl}
                 startSeconds={startSeconds}
                 endSeconds={endSeconds}
-                posterUrl={thumbnailForVideoName(game, activeClip.sourceName)}
+                posterUrl={thumbnailForVideoName(game, activePlaybackSourceName)}
                 segmentRange={{
                   startSeconds,
                   endSeconds,
@@ -9224,7 +9227,7 @@ function streamInfoForWorkspacePlayback(
   options?: { videoReference?: string | null },
 ) {
   const reference = cleanString(options?.videoReference)
-  if ((game.source_videos || []).includes(workspaceVideoName)) {
+  if ((game.source_videos || []).includes(workspaceVideoName) || !isOpaqueVideoReference(workspaceVideoName)) {
     return streamInfoForVideoName(game, workspaceVideoName)
   }
   if (!reference) {
