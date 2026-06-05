@@ -9224,6 +9224,9 @@ function streamInfoForWorkspacePlayback(
   options?: { videoReference?: string | null },
 ) {
   const reference = cleanString(options?.videoReference)
+  if ((game.source_videos || []).includes(workspaceVideoName)) {
+    return streamInfoForVideoName(game, workspaceVideoName)
+  }
   if (!reference) {
     return streamInfoForVideoName(game, workspaceVideoName)
   }
@@ -9231,7 +9234,6 @@ function streamInfoForWorkspacePlayback(
   if (
     mappedName
     && referencesSameVideo(game, mappedName, workspaceVideoName)
-    && !isOpaqueVideoReference(reference)
   ) {
     return streamInfoForVideoName(game, workspaceVideoName)
   }

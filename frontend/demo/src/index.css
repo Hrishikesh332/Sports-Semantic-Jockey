@@ -524,13 +524,6 @@ body {
   width: 11.5rem;
 }
 
-.jockey-chat-clips-track .jockey-chat-clip-card:only-child {
-  grid-column: 1 / -1;
-  width: 100%;
-  max-width: 13rem;
-  margin-inline: auto;
-}
-
 .jockey-chat-clip-meta-row {
   row-gap: 0.375rem;
 }
