@@ -70,6 +70,7 @@ type AssemblyModeKey = 'wsc_baseline' | 'twelvelabs_enhanced'
 type ViewKey = 'discover' | 'workspace' | 'jockey' | 'overview'
 type ReelFormatKey = '9x16' | '16x9' | '1x1' | '4x5'
 type HighlightReelRequestOptions = { silent?: boolean }
+type EntityTrackingRequestOptions = { silent?: boolean }
 type TutorialStep = {
   id: string
   view: ViewKey
@@ -281,10 +282,11 @@ const streamInfoCache = new Map<string, TwelveLabsStreamInfo>()
 const streamInfoRequests = new Map<string, Promise<TwelveLabsStreamInfo>>()
 const manifestWarmupRequests = new Map<string, Promise<void>>()
 const warmedManifestOrigins = new Set<string>()
-const HLS_DEFAULT_BUFFER_SECONDS = 18
-const HLS_SEGMENT_BUFFER_PADDING_SECONDS = 4
-const HLS_MAX_BUFFER_BYTES = 24 * 1000 * 1000
+const HLS_DEFAULT_BUFFER_SECONDS = 12
+const HLS_SEGMENT_BUFFER_PADDING_SECONDS = 2
+const HLS_MAX_BUFFER_BYTES = 12 * 1000 * 1000
 const HLS_FATAL_RECOVERY_ATTEMPTS = 2
+const REEL_PREVIEW_HOVER_DELAY_MS = 260
 
 type MarengoSearchResult = {
   id: string
@@ -347,6 +349,7 @@ type UploadPreviewItem = {
 type SearchMoment = {
   videoName: string
   videoReference: string
+  dashboardVideoName?: string
   query?: string
   sourceAssetId?: string | null
   title: string
@@ -651,11 +654,13 @@ const tutorialSteps: TutorialStep[] = [
   },
 ]
 
+const MAX_UPLOAD_VIDEO_BYTES = 400 * 1000 * 1000
+const MAX_UPLOAD_VIDEO_LABEL = '400 MB'
 const uploadRequirementLabels = [
   'Duration 4sec-4hr',
   'Resolution 360p-4k',
   'Ratio 1:1-1:2.4',
-  'File size ≤4GB per video',
+  `File size <= ${MAX_UPLOAD_VIDEO_LABEL} per video`,
 ]
 const JOCKEY_CHAT_CACHE_PREFIX = 'sports-jockey:jockey-chat:'
 const DISCOVER_SESSION_PREFIX = 'sports-jockey:discover-session:'
@@ -875,7 +880,7 @@ function pathForView(view: ViewKey) {
 
 function navButtonClass(currentView: ViewKey, itemView: ViewKey) {
   return currentView === itemView
-    ? 'border-accent bg-accent-light text-brand-charcoal'
+    ? 'border-brand-charcoal bg-brand-charcoal text-white shadow-[0_1px_4px_rgba(29,28,27,0.18)]'
     : 'border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal'
 }
 
@@ -903,6 +908,7 @@ function App() {
   const [selectedSourceVideoName, setSelectedSourceVideoName] = useState<string | null>(null)
   const [pendingWorkspaceVideoName, setPendingWorkspaceVideoName] = useState<string | null>(null)
   const [selectedSearchMoment, setSelectedSearchMoment] = useState<SearchMoment | null>(null)
+  const [discoverClipAnalysisOpen, setDiscoverClipAnalysisOpen] = useState(false)
   const [clipAnalysesByKey, setClipAnalysesByKey] = useState<Record<string, SelectedClipAnalysis>>({})
   const [clipAnalysisLoadingKey, setClipAnalysisLoadingKey] = useState('')
   const [clipAnalysisError, setClipAnalysisError] = useState('')
@@ -920,6 +926,7 @@ function App() {
   const [workspaceUiHydrated, setWorkspaceUiHydrated] = useState(false)
   const [tutorialStepIndex, setTutorialStepIndex] = useState<number | null>(null)
   const inFlightReelsRef = useRef<Set<string>>(new Set())
+  const inFlightEntityTrackingRef = useRef<Set<string>>(new Set())
   const workspaceMetadataByKeyRef = useRef<Record<string, JockeyWorkspaceMetadataResponse>>({})
   const workspaceMetadataRequestRef = useRef<Record<string, Promise<JockeyWorkspaceMetadataResponse>>>({})
   const suppressNextVideoReset = useRef(false)
@@ -1015,10 +1022,15 @@ function App() {
 
   const handleDiscoverClearSearch = useCallback(() => {
     if (selectedTag) clearDiscoverSearch(selectedTag)
+    setSelectedSearchMoment(null)
+    setDiscoverClipAnalysisOpen(false)
+    setClipAnalysisError('')
+    setClipAnalysisLoadingKey('')
   }, [clearDiscoverSearch, selectedTag])
 
   const clearSelectedClipSession = useCallback(() => {
     setSelectedSearchMoment(null)
+    setDiscoverClipAnalysisOpen(false)
     setClipAnalysisError('')
     setClipAnalysisLoadingKey('')
   }, [])
@@ -1067,25 +1079,17 @@ function App() {
   const requestHighlightReels = useCallback((videoName?: string, options: HighlightReelRequestOptions = {}) => {
     if (!selectedTag) return Promise.resolve()
     const cacheKey = reelCacheKey(selectedTag, videoName)
-    const entityKey = videoName ? `${selectedTag}|${videoName}` : ''
-    if (reelsByTag[cacheKey] && (!videoName || entityTrackingByKey[entityKey])) return Promise.resolve()
+    if (reelsByTag[cacheKey]) return Promise.resolve()
     if (inFlightReelsRef.current.has(cacheKey)) return Promise.resolve()
 
     inFlightReelsRef.current.add(cacheKey)
     if (!options.silent) {
       setLoadingTag(cacheKey)
       setReelsError('')
-      if (entityKey) {
-        setEntityTrackingLoadingKey(entityKey)
-        setEntityTrackingError('')
-      }
     }
 
     const requestPayload = videoName
-      ? {
-          ...indexVideoRequestPayload(selectedGame, workspaceIndexVideos, videoName),
-          include_entity_tracking: true,
-        }
+      ? indexVideoRequestPayload(selectedGame, workspaceIndexVideos, videoName)
       : {}
 
     return fetchJson<HighlightReels | WorkspaceAnalysisResponse>(`/games/${encodeURIComponent(selectedTag)}/highlight-reels`, {
@@ -1099,6 +1103,7 @@ function App() {
         setReelsByTag((current) => ({ ...current, [cacheKey]: highlightReels }))
         persistTimedCacheEntry(HIGHLIGHT_REELS_CACHE_PREFIX, cacheKey, highlightReels)
 
+        const entityKey = videoName ? `${selectedTag}|${videoName}` : ''
         if (bundled?.entity_tracking && entityKey) {
           setEntityTrackingByKey((current) => ({ ...current, [entityKey]: bundled.entity_tracking! }))
           persistTimedCacheEntry(ENTITY_TRACKING_CACHE_PREFIX, entityKey, bundled.entity_tracking)
@@ -1154,16 +1159,71 @@ function App() {
       })
       .catch((error: Error) => {
         if (!options.silent) setReelsError(error.message)
-        if (entityKey) setEntityTrackingError(error.message)
       })
       .finally(() => {
         inFlightReelsRef.current.delete(cacheKey)
         if (!options.silent) {
           setLoadingTag((current) => (current === cacheKey ? '' : current))
-          if (entityKey) setEntityTrackingLoadingKey((current) => (current === entityKey ? '' : current))
         }
       })
-  }, [entityTrackingByKey, reelsByTag, selectedGame, selectedTag, workspaceIndexVideos])
+  }, [reelsByTag, selectedGame, selectedTag, workspaceIndexVideos])
+
+  const requestEntityTracking = useCallback((videoName: string, options: EntityTrackingRequestOptions = {}) => {
+    if (!selectedTag || !videoName) return Promise.resolve()
+    const entityKey = `${selectedTag}|${videoName}`
+    if (entityTrackingByKey[entityKey]) return Promise.resolve()
+    if (inFlightEntityTrackingRef.current.has(entityKey)) return Promise.resolve()
+
+    inFlightEntityTrackingRef.current.add(entityKey)
+    if (!options.silent) {
+      setEntityTrackingLoadingKey(entityKey)
+      setEntityTrackingError('')
+    }
+
+    const requestPayload = indexVideoRequestPayload(selectedGame, workspaceIndexVideos, videoName)
+    return fetchJson<EntityTrackingResponse>(`/games/${encodeURIComponent(selectedTag)}/entity-tracking`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestPayload),
+    })
+      .then((body) => {
+        setEntityTrackingByKey((current) => ({ ...current, [entityKey]: body }))
+        persistTimedCacheEntry(ENTITY_TRACKING_CACHE_PREFIX, entityKey, body)
+
+        const entityProvenance = body._jockey_metadata
+        if (
+          selectedGame
+          && entityProvenance
+          && (entityProvenance.from_user_metadata || entityProvenance.source === 'generated_and_stored_to_user_metadata')
+        ) {
+          setIndexVideosByTag((current) => {
+            const videos = current[selectedTag]
+            if (!videos) return current
+            return {
+              ...current,
+              [selectedTag]: videos.map((video) => {
+                if (indexVideoWorkspaceName(selectedGame, video) !== videoName) return video
+                return {
+                  ...video,
+                  has_jockey_entity_tracking_metadata: true,
+                  jockey_entity_tracking_generated_at: entityProvenance.generated_at || video.jockey_entity_tracking_generated_at || null,
+                  jockey_entity_tracking_entity_count: entityProvenance.entity_count ?? video.jockey_entity_tracking_entity_count ?? null,
+                }
+              }),
+            }
+          })
+        }
+      })
+      .catch((error: Error) => {
+        if (!options.silent) setEntityTrackingError(error.message)
+      })
+      .finally(() => {
+        inFlightEntityTrackingRef.current.delete(entityKey)
+        if (!options.silent) {
+          setEntityTrackingLoadingKey((current) => (current === entityKey ? '' : current))
+        }
+      })
+  }, [entityTrackingByKey, selectedGame, selectedTag, workspaceIndexVideos])
 
   useEffect(() => {
     if (!selectedGame || !activeVideoName) return
@@ -1266,6 +1326,12 @@ function App() {
   }, [activeSearchMoment, activeVideoName, requestHighlightReels, view])
 
   useEffect(() => {
+    if (view !== 'workspace' || !activeVideoName || activeSearchMoment) return
+    if (!selectedReelsKey || !reelsByTag[selectedReelsKey]) return
+    void requestEntityTracking(activeVideoName)
+  }, [activeSearchMoment, activeVideoName, reelsByTag, requestEntityTracking, selectedReelsKey, view])
+
+  useEffect(() => {
     if (!selectedReelsKey) return
     if (reelsByTag[selectedReelsKey]) {
       setLoadingTag((current) => (current === selectedReelsKey ? '' : current))
@@ -1293,7 +1359,8 @@ function App() {
   ])
 
   useEffect(() => {
-    if (view !== 'workspace' || !selectedTag || !activeSearchMoment?.startTime || !selectedClipAnalysisKey) return
+    if (view !== 'workspace' && !discoverClipAnalysisOpen) return
+    if (!selectedTag || !activeSearchMoment?.startTime || !selectedClipAnalysisKey) return
     if (clipAnalysesByKey[selectedClipAnalysisKey]) {
       setClipAnalysisError('')
       return
@@ -1373,6 +1440,7 @@ function App() {
     activeSearchMoment?.videoName,
     activeSearchMoment?.videoReference,
     clipAnalysesByKey,
+    discoverClipAnalysisOpen,
     requestWorkspaceMetadata,
     selectedClipAnalysisKey,
     selectedTag,
@@ -1413,14 +1481,12 @@ function App() {
       setSelectedStandardClipIndex(index)
       setFeaturedSignalCategory('standard_stats')
       setAssemblyMode('wsc_baseline')
-      scrollAssemblyHighlightsIntoView()
       return
     }
     setSelectedCategory(categoryKey)
     setSelectedEnhancedClipIndex(index)
     setFeaturedSignalCategory(categoryKey)
     if (assemblyMode === 'wsc_baseline') setAssemblyMode('twelvelabs_enhanced')
-    scrollAssemblyHighlightsIntoView()
   }
   const selectCategoryTab = (categoryKey: CategoryKey) => {
     setSelectedSearchMoment(null)
@@ -1479,7 +1545,22 @@ function App() {
   const openSourceInWorkspace = (item: DiscoverItem) => {
     openVideoInWorkspace(item.videoName, item.openTarget, item.searchMoment)
   }
+  const analyzeClipInDiscover = (item: DiscoverItem) => {
+    if (!item.searchMoment) return
+    const resolvedVideoName = selectedGame
+      ? resolveWorkspaceVideoName(selectedGame, workspaceVideoNames, item.videoName, item.searchMoment)
+      : null
+    const videoName = resolvedVideoName || item.videoName
+    setSelectedSourceVideoName(videoName)
+    setSelectedSearchMoment({
+      ...item.searchMoment,
+      videoName,
+      dashboardVideoName: videoName,
+    })
+    setDiscoverClipAnalysisOpen(true)
+  }
   const openVideoInWorkspace = (videoName: string, target?: DiscoverItem['openTarget'], searchMoment?: SearchMoment) => {
+    setDiscoverClipAnalysisOpen(false)
     const resolvedVideoName = selectedGame
       ? resolveWorkspaceVideoName(selectedGame, workspaceVideoNames, videoName, searchMoment)
       : null
@@ -1548,7 +1629,7 @@ function App() {
       ? searchResultItems(selectedGame, activeDiscoverSession.searchResponse).find((result) => result.resultType === 'search' && result.videoName)
       : null
     if (item) {
-      openSourceInWorkspace(item)
+      analyzeClipInDiscover(item)
       setTutorialStepIndex(2)
       return
     }
@@ -1827,6 +1908,7 @@ function App() {
           onSessionChange={handleDiscoverSessionChange}
           onClearSearch={handleDiscoverClearSearch}
           onOpenInWorkspace={openSourceInWorkspace}
+          onAnalyzeClip={analyzeClipInDiscover}
         />
         ) : view === 'jockey' ? (
           <JockeyPage
@@ -1885,20 +1967,33 @@ function App() {
               setSelectedEnhancedClipIndex(index)
               setFeaturedSignalCategory(categoryKey)
               if (assemblyMode === 'wsc_baseline') setAssemblyMode('twelvelabs_enhanced')
-              scrollWorkspaceDetailsIntoView()
             }}
             onSelectStandardClip={(index) => {
               setSelectedSearchMoment(null)
               setSelectedStandardClipIndex(index)
               setFeaturedSignalCategory('standard_stats')
-              scrollWorkspaceDetailsIntoView()
             }}
             onSelectEnhancedClip={(index) => {
               setSelectedSearchMoment(null)
               setSelectedEnhancedClipIndex(index)
               setFeaturedSignalCategory(selectedCategory)
-              scrollWorkspaceDetailsIntoView()
             }}
+          />
+        )}
+
+        {view === 'discover' && discoverClipAnalysisOpen && selectedGame && selectedSearchMoment && (
+          <DiscoverClipAnalysisModal
+            game={selectedGame}
+            searchMoment={selectedSearchMoment}
+            analysis={selectedClipAnalysis}
+            loading={selectedClipAnalysisLoading}
+            error={selectedClipAnalysisError}
+            hasCachedMetadata={hasCachedClipAnalysisMetadata}
+            workspaceMetadata={activeWorkspaceMetadata}
+            workspaceMetadataLoading={workspaceMetadataLoading}
+            workspaceMetadataError={activeWorkspaceMetadataError}
+            onClose={clearSelectedClipSession}
+            onOpenDashboard={() => openVideoInWorkspace(selectedSearchMoment.dashboardVideoName || selectedSearchMoment.videoName)}
           />
         )}
         {activeTutorialStep && tutorialStepIndex != null && (
@@ -2544,10 +2639,13 @@ function WorkspaceModeBar({
             key={option.key}
             type="button"
             onClick={() => onModeChange(option.key)}
+            data-semantic-layer-option={option.key === 'twelvelabs_enhanced' ? 'true' : undefined}
             className={[
               'inline-flex h-9 min-w-0 items-center justify-center gap-1.5 rounded-md border px-2.5 text-center text-[11px] font-semibold leading-tight transition-colors sm:w-[156px] sm:text-xs',
               mode === option.key
-                ? 'border-accent bg-accent-light text-brand-charcoal shadow-[0_1px_4px_rgba(0,220,130,0.14)]'
+                ? option.key === 'twelvelabs_enhanced'
+                  ? 'border-accent bg-accent-light text-brand-charcoal shadow-[0_1px_4px_rgba(0,220,130,0.14)]'
+                  : 'border-brand-charcoal bg-brand-charcoal text-white shadow-[0_1px_4px_rgba(29,28,27,0.18)]'
                 : 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
             ].join(' ')}
             title={`${option.label} · ${option.detail}`}
@@ -2626,6 +2724,7 @@ function WorkspaceLaneBar({
                 key={category.key}
                 type="button"
                 onClick={() => onSelect(category.key)}
+                data-semantic-layer-option="true"
                 className={[
                   'inline-flex h-8 min-w-0 items-center justify-center gap-1.5 rounded-md border px-2 text-center text-xs font-semibold leading-tight transition-colors lg:w-[150px]',
                   active
@@ -2952,6 +3051,7 @@ function ReelSequencePlayer({
   const assemblyLeftColumnRef = useRef<HTMLDivElement | null>(null)
   const [assemblyLeftColumnHeight, setAssemblyLeftColumnHeight] = useState(0)
   const clipButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const assemblyClipListRef = useRef<HTMLDivElement | null>(null)
   const pointerSelectHandledRef = useRef(false)
   const sequenceClips = useMemo(() => {
     const sequenceCategories = mode === 'wsc_baseline'
@@ -3059,11 +3159,6 @@ function ReelSequencePlayer({
     const firstCategoryClipIndex = sequenceClips.findIndex((clip) => clip.laneKey === categoryKey)
     setActiveIndex(firstCategoryClipIndex >= 0 ? firstCategoryClipIndex : 0)
   }, [categoryKey, mode, selectedClipIndex, selectedLaneKey, sequenceClips])
-
-  useEffect(() => {
-    if (!activeClip) return
-    clipButtonRefs.current[activeClip.id]?.scrollIntoView({ block: 'nearest' })
-  }, [activeClip])
 
   useEffect(() => {
     let disposed = false
@@ -3179,10 +3274,23 @@ function ReelSequencePlayer({
       assemblyVideoRef.current.currentTime = offset
     }
   }
+  const scrollAssemblyClipButtonIntoList = (clipId: string) => {
+    const button = clipButtonRefs.current[clipId]
+    const container = assemblyClipListRef.current
+    if (!button || !container) return
+    const buttonRect = button.getBoundingClientRect()
+    const containerRect = container.getBoundingClientRect()
+    if (buttonRect.top < containerRect.top) {
+      container.scrollTop -= containerRect.top - buttonRect.top
+    } else if (buttonRect.bottom > containerRect.bottom) {
+      container.scrollTop += buttonRect.bottom - containerRect.bottom
+    }
+  }
   const selectSequenceClip = (index: number, clip: SequenceClip) => {
     setActiveIndex(index)
     const assemblyIndex = assemblyIndexForClip(clip)
     if (assemblyIndex >= 0) seekAssemblyToIndex(assemblyIndex)
+    scrollAssemblyClipButtonIntoList(clip.id)
     onSelect?.(clip.laneKey, clip.sourceIndex)
   }
   const selectAssemblySegment = (index: number) => {
@@ -3238,8 +3346,10 @@ function ReelSequencePlayer({
       const displayIndex = sequenceClips.findIndex((clip) =>
         clip.laneKey === segment.laneKey && clip.sourceIndex === segment.sourceIndex,
       )
-      if (displayIndex === activeIndex) return
+      const matchesParentSelection = segment.laneKey === selectedLaneKey && segment.sourceIndex === selectedClipIndex
+      if (displayIndex === activeIndex && matchesParentSelection) return
       if (displayIndex >= 0) setActiveIndex(displayIndex)
+      if (matchesParentSelection) return
       onSelect?.(segment.laneKey, segment.sourceIndex)
     }
   }
@@ -3436,6 +3546,7 @@ function ReelSequencePlayer({
           </div>
         </div>
         <div
+          ref={assemblyClipListRef}
           className={compact ? 'relative grid min-h-0 min-w-0 self-start content-start gap-2 overflow-y-auto border-t border-border-light px-4 py-3 [@media(min-width:560px)]:border-l [@media(min-width:560px)]:border-t-0 [@media(min-width:560px)]:px-2' : 'relative flex min-w-0 flex-col gap-2 border-t border-border-light px-3 py-4 lg:border-l lg:border-t-0'}
           style={assemblyListStyle}
         >
@@ -3474,7 +3585,7 @@ function ReelSequencePlayer({
                 className={[
                   'relative z-10 grid min-w-0 grid-cols-[40px_minmax(0,1fr)_42px] items-center gap-2 rounded-md border px-2 py-2.5 text-left transition-colors',
                   active
-                    ? 'border-accent bg-accent-light text-brand-charcoal shadow-[0_8px_22px_rgba(0,220,130,0.12)]'
+                    ? 'border-accent bg-accent-light shadow-[0_8px_22px_rgba(0,220,130,0.12)]'
                     : selectedLane
                       ? 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light'
                       : 'border-border-light bg-surface text-text-tertiary hover:border-border hover:bg-card',
@@ -3488,9 +3599,9 @@ function ReelSequencePlayer({
                       muted ? 'opacity-50' : '',
                     ].join(' ')}
                     style={{
-                      backgroundColor: active ? color.bg : color.track,
-                      borderColor: color.border,
-                      color: active ? color.text : color.border,
+                      backgroundColor: active ? '#00DC82' : color.track,
+                      borderColor: active ? '#00B86E' : color.border,
+                      color: active ? '#FFFFFF' : color.border,
                     }}
                   >
                     {index + 1}
@@ -3505,9 +3616,9 @@ function ReelSequencePlayer({
                 <span
                   className={['relative z-10 inline-flex h-8 w-8 items-center justify-center justify-self-end rounded-md border', muted ? 'opacity-50' : ''].join(' ')}
                   style={{
-                    backgroundColor: color.track,
-                    borderColor: color.border,
-                    color: color.text,
+                    backgroundColor: active ? '#E8F5E9' : color.track,
+                    borderColor: active ? '#00B86E' : color.border,
+                    color: active ? '#00B86E' : color.text,
                   }}
                   title={clip.title}
                   aria-label={clip.title}
@@ -3687,7 +3798,7 @@ function ProducerChatPanel({
             className={[
               'jockey-chat-send inline-flex shrink-0 items-center gap-2 rounded-md border text-sm font-semibold',
               canSubmit
-                ? 'border-accent bg-accent-light text-brand-charcoal hover:bg-accent'
+                ? 'border-brand-charcoal bg-brand-charcoal text-white hover:border-brand-charcoal hover:bg-brand-charcoal'
                 : 'cursor-not-allowed border-border bg-card text-text-tertiary',
             ].join(' ')}
           >
@@ -4161,7 +4272,7 @@ function WorkspaceVideoCarousel({
         onClick={() => onSelect(videoName)}
         className={[
           'group relative h-[118px] w-[210px] shrink-0 snap-start overflow-hidden rounded-md border bg-card text-left shadow-[0_8px_24px_rgba(29,28,27,0.08)]',
-          active ? 'border-accent ring-2 ring-accent/35' : 'border-border-light hover:border-accent/80',
+          active ? 'border-brand-charcoal ring-2 ring-brand-charcoal/25' : 'border-border-light hover:border-accent/80',
         ].join(' ')}
         aria-label={`Open ${videoName}`}
         aria-current={active ? 'true' : undefined}
@@ -4185,7 +4296,7 @@ function WorkspaceVideoCarousel({
             className={[
               'block min-w-0 rounded-md border px-2.5 py-2 text-sm font-semibold leading-4 text-white shadow-[0_6px_14px_rgba(0,0,0,0.2)] backdrop-blur-sm',
               active
-                ? 'border-accent/80 bg-brand-charcoal/90'
+                ? 'border-brand-charcoal bg-brand-charcoal/95'
                 : 'border-white/24 bg-brand-charcoal/88',
             ].join(' ')}
           >
@@ -4788,9 +4899,15 @@ function UploadVideosModal({
 
   const addFiles = useCallback((fileList?: FileList | null) => {
     if (!fileList) return
-    const nextFiles = Array.from(fileList).filter(isVideoFile)
+    const files = Array.from(fileList)
+    const oversizedFiles = files.filter((file) => isVideoFile(file) && file.size > MAX_UPLOAD_VIDEO_BYTES)
+    const nextFiles = files.filter((file) => isVideoFile(file) && file.size <= MAX_UPLOAD_VIDEO_BYTES)
+    setUploadError(
+      oversizedFiles.length
+        ? `${oversizedFiles.length === 1 ? oversizedFiles[0].name : `${oversizedFiles.length} videos`} exceed the ${MAX_UPLOAD_VIDEO_LABEL} upload limit.`
+        : '',
+    )
     if (!nextFiles.length) return
-    setUploadError('')
     setSelectedFiles((current) => {
       const existingKeys = new Set(current.map((item) => uploadFileKey(item.file)))
       const additions = nextFiles
@@ -5048,6 +5165,7 @@ function DiscoverPage({
   onSessionChange,
   onClearSearch,
   onOpenInWorkspace,
+  onAnalyzeClip,
 }: {
   game: Game | null
   indexVideos: IndexVideo[]
@@ -5058,6 +5176,7 @@ function DiscoverPage({
   onSessionChange: (patch: Partial<DiscoverSearchSession>) => void
   onClearSearch: () => void
   onOpenInWorkspace: (item: DiscoverItem) => void
+  onAnalyzeClip: (item: DiscoverItem) => void
 }) {
   const searchRequestRef = useRef(0)
   const [searchLoading, setSearchLoading] = useState(false)
@@ -5276,6 +5395,7 @@ function DiscoverPage({
                   key={item.id}
                   item={item}
                   onOpenInWorkspace={onOpenInWorkspace}
+                  onAnalyzeClip={onAnalyzeClip}
                   isPreviewActive={activePreviewId === item.id}
                   onTogglePreview={() => {
                     onSessionChange({
@@ -5357,7 +5477,7 @@ function DiscoverSearchPanel({
               className={[
                 'discover-search-submit inline-flex items-center justify-center gap-2 rounded-md border font-semibold',
                 canSearch
-                  ? 'border-accent bg-accent-light text-brand-charcoal hover:bg-accent'
+                  ? 'border-brand-charcoal bg-brand-charcoal text-white hover:border-brand-charcoal hover:bg-brand-charcoal'
                   : 'cursor-not-allowed border-border bg-card text-text-tertiary',
               ].join(' ')}
             >
@@ -5410,11 +5530,13 @@ function DiscoverMetric({ label, value }: { label: string; value: string }) {
 function DiscoverResultCard({
   item,
   onOpenInWorkspace,
+  onAnalyzeClip,
   isPreviewActive,
   onTogglePreview,
 }: {
   item: DiscoverItem
   onOpenInWorkspace: (item: DiscoverItem) => void
+  onAnalyzeClip: (item: DiscoverItem) => void
   isPreviewActive: boolean
   onTogglePreview: () => void
 }) {
@@ -5455,6 +5577,8 @@ function DiscoverResultCard({
               posterUrl={item.poster}
               segmentRange={segmentRange}
               variant="minimal"
+              autoPlay
+              muted
             />
           </div>
         ) : (
@@ -5528,7 +5652,7 @@ function DiscoverResultCard({
               type="button"
               data-tour-id="analyze-clip"
               onClick={() => {
-                onOpenInWorkspace(item)
+                onAnalyzeClip(item)
                 window.dispatchEvent(new CustomEvent(TUTORIAL_ANALYZE_CLIP_EVENT))
               }}
               disabled={!canOpen}
@@ -5707,6 +5831,7 @@ function TwelveLabsVideoPlayer({
     let handlePause: (() => void) | null = null
     let handleWaiting: (() => void) | null = null
     let handleCanPlay: (() => void) | null = null
+    let readyFallbackTimer: number | null = null
     let rangeCompleted = false
     let readyFrame = false
     let warmingFirstFrame = false
@@ -5716,8 +5841,9 @@ function TwelveLabsVideoPlayer({
     const controller = new AbortController()
     const startLoadAt = Math.max(0, startSeconds)
     const segmentEnd = endSeconds && endSeconds > startLoadAt ? endSeconds : startLoadAt + 12
+    const lightPlayback = variant === 'minimal'
     const segmentBufferLength = hasSegmentRange
-      ? clamp(segmentEnd - startLoadAt + HLS_SEGMENT_BUFFER_PADDING_SECONDS, 8, HLS_DEFAULT_BUFFER_SECONDS)
+      ? clamp(segmentEnd - startLoadAt + HLS_SEGMENT_BUFFER_PADDING_SECONDS, lightPlayback ? 5 : 7, lightPlayback ? 8 : HLS_DEFAULT_BUFFER_SECONDS)
       : HLS_DEFAULT_BUFFER_SECONDS
     const resetVideoElement = () => {
       video.pause()
@@ -5816,6 +5942,10 @@ function TwelveLabsVideoPlayer({
         const markReady = () => {
           if (disposed || readyFrame) return
           readyFrame = true
+          if (readyFallbackTimer !== null) {
+            window.clearTimeout(readyFallbackTimer)
+            readyFallbackTimer = null
+          }
           setStatus('ready')
           setMessage('')
           setBuffering(false)
@@ -5874,6 +6004,7 @@ function TwelveLabsVideoPlayer({
         }
         handleWaiting = () => {
           if (disposed) return
+          if (readyFrame && !video.paused && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return
           setBuffering(true)
           setMessage('Buffering HLS stream...')
         }
@@ -5917,17 +6048,17 @@ function TwelveLabsVideoPlayer({
             capLevelOnFPSDrop: true,
             testBandwidth: true,
             progressive: true,
-            startFragPrefetch: true,
-            maxStarvationDelay: 2,
-            maxLoadingDelay: 2,
+            startFragPrefetch: !lightPlayback,
+            maxStarvationDelay: lightPlayback ? 1 : 2,
+            maxLoadingDelay: lightPlayback ? 1 : 2,
             manifestLoadingMaxRetry: 4,
             levelLoadingMaxRetry: 4,
             fragLoadingMaxRetry: 4,
-            abrEwmaDefaultEstimate: 2_000_000,
+            abrEwmaDefaultEstimate: lightPlayback ? 900_000 : 1_600_000,
             maxBufferLength: segmentBufferLength,
-            maxMaxBufferLength: Math.max(segmentBufferLength, 24),
-            maxBufferSize: HLS_MAX_BUFFER_BYTES,
-            backBufferLength: hasSegmentRange ? 0 : 6,
+            maxMaxBufferLength: Math.max(segmentBufferLength, lightPlayback ? 10 : 18),
+            maxBufferSize: lightPlayback ? Math.min(HLS_MAX_BUFFER_BYTES, 8 * 1000 * 1000) : HLS_MAX_BUFFER_BYTES,
+            backBufferLength: hasSegmentRange || lightPlayback ? 0 : 6,
             lowLatencyMode: false,
           })
           hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -5961,6 +6092,16 @@ function TwelveLabsVideoPlayer({
             hls?.startLoad(startLoadAt)
             warmFirstFrame()
             playWhenReady()
+            if (variant === 'minimal') {
+              readyFallbackTimer = window.setTimeout(() => {
+                if (!disposed && !readyFrame && video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+                  markReady()
+                }
+              }, 1800)
+            }
+          })
+          hls.on(Hls.Events.FRAG_BUFFERED, () => {
+            if (!disposed) markReady()
           })
           hls.attachMedia(video)
           return
@@ -5978,6 +6119,7 @@ function TwelveLabsVideoPlayer({
       disposed = true
       controller.abort()
       if (readinessPoll !== null) window.clearInterval(readinessPoll)
+      if (readyFallbackTimer !== null) window.clearTimeout(readyFallbackTimer)
       if (handleMetadata) video.removeEventListener('loadedmetadata', handleMetadata)
       if (handleReadyFrame) {
         video.removeEventListener('loadeddata', handleReadyFrame)
@@ -6436,6 +6578,98 @@ function WorkspaceFact({ icon, label, value }: { icon: string; label: string; va
       <span className="min-w-0 truncate text-[10px] font-semibold uppercase tracking-[0.08em] leading-4 text-text-tertiary">
         {label}
       </span>
+    </div>
+  )
+}
+
+function DiscoverClipAnalysisModal({
+  game,
+  searchMoment,
+  analysis,
+  loading,
+  error,
+  hasCachedMetadata,
+  workspaceMetadata,
+  workspaceMetadataLoading,
+  workspaceMetadataError,
+  onClose,
+  onOpenDashboard,
+}: {
+  game: Game
+  searchMoment: SearchMoment
+  analysis?: SelectedClipAnalysis
+  loading: boolean
+  error: string
+  hasCachedMetadata: boolean
+  workspaceMetadata?: JockeyWorkspaceMetadataResponse
+  workspaceMetadataLoading: boolean
+  workspaceMetadataError: string
+  onClose: () => void
+  onOpenDashboard: () => void
+}) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 px-3 py-4 backdrop-blur-sm sm:px-5"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="discover-clip-analysis-title"
+    >
+      <div className="flex max-h-[calc(100vh-32px)] w-full max-w-[1180px] flex-col overflow-hidden rounded-md border border-border bg-white shadow-[0_24px_70px_rgba(0,0,0,0.28)]">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-border-light bg-white px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-accent/40 bg-accent-light text-brand-charcoal">
+              <StrandIcon name="analyze" className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-text-tertiary">Discover clip analysis</p>
+              <h2 id="discover-clip-analysis-title" className="truncate text-base font-semibold text-text-primary">
+                {searchMoment.title || searchMoment.videoName}
+              </h2>
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onOpenDashboard}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-brand-charcoal bg-brand-charcoal px-3 text-sm font-semibold text-white shadow-[0_8px_18px_rgba(29,28,27,0.22)] transition hover:-translate-y-0.5 hover:bg-black hover:shadow-[0_12px_24px_rgba(29,28,27,0.28)] focus:outline-none focus:ring-2 focus:ring-brand-charcoal/30"
+            >
+              <StrandIcon name="arrow-diagonal" className="h-4 w-4" />
+              Open Dashboard
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+              aria-label="Close clip analysis"
+              title="Close"
+            >
+              <StrandIcon name="close" className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 overflow-y-auto bg-background p-3 sm:p-4">
+          <SelectedClipAnalysisSection
+            game={game}
+            searchMoment={searchMoment}
+            analysis={analysis}
+            loading={loading}
+            error={error}
+            hasCachedMetadata={hasCachedMetadata}
+            workspaceMetadata={workspaceMetadata}
+            workspaceMetadataLoading={workspaceMetadataLoading}
+            workspaceMetadataError={workspaceMetadataError}
+            onBackToSearch={onClose}
+          />
+        </div>
+      </div>
     </div>
   )
 }
@@ -7213,7 +7447,7 @@ function SelectedClipAnalysisSaveButton({
         className={[
           'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold shadow-[0_1px_2px_rgba(31,41,33,0.035)]',
           saved
-            ? 'border-accent/40 bg-accent-light text-brand-charcoal'
+            ? 'border-brand-charcoal bg-brand-charcoal text-white'
             : 'border-border-light bg-surface text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
           !canSave || saving ? 'cursor-not-allowed opacity-60' : '',
         ].join(' ')}
@@ -7905,7 +8139,7 @@ function EntityTrackCard({
               className={[
                 'inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-semibold transition',
                 expanded
-                  ? 'border-accent bg-accent text-brand-charcoal shadow-[0_0_0_3px_rgba(0,220,130,0.16),0_8px_18px_rgba(0,220,130,0.16)]'
+                  ? 'border-brand-charcoal bg-brand-charcoal text-white shadow-[0_0_0_3px_rgba(29,28,27,0.12),0_8px_18px_rgba(29,28,27,0.16)]'
                   : 'border-border text-text-secondary hover:border-accent hover:bg-accent-light hover:text-brand-charcoal',
               ].join(' ')}
               aria-expanded={expanded}
@@ -8070,31 +8304,38 @@ function EntityMomentThumbnailButton({
   return (
     <button
       type="button"
+      data-media-thumbnail-button="true"
       disabled={!canPreview}
       onClick={onOpen}
       className={[
-        'group grid w-full min-w-0 gap-1.5 text-left',
-        canPreview ? 'cursor-pointer' : 'cursor-not-allowed opacity-65',
+        'group relative isolate block w-full min-w-0 overflow-hidden rounded-md border border-border-light bg-surface text-left transition-colors',
+        'aspect-video',
+        canPreview
+          ? 'cursor-pointer hover:border-accent'
+          : 'cursor-not-allowed opacity-65',
       ].join(' ')}
       aria-label={canPreview ? `Open ${title} at ${range.displayLabel}` : `${title} at ${range.displayLabel}`}
       title={canPreview ? `Open at ${range.displayLabel}` : range.displayLabel}
     >
-      <span className={['relative block overflow-hidden rounded-md border border-border-light bg-card shadow-[0_1px_2px_rgba(29,28,27,0.04)] transition group-hover:border-accent', compact ? 'aspect-[16/10]' : 'aspect-video'].join(' ')}>
-        {posterUrl ? (
-          <img src={posterUrl} alt="" className="h-full w-full object-cover transition-transform group-hover:scale-[1.03]" loading="lazy" />
-        ) : (
-          <span className="flex h-full w-full items-center justify-center text-text-tertiary">
-            <StrandIcon name="vision" className="h-4 w-4 text-accent" />
-          </span>
-        )}
-        <span className="absolute inset-0 flex items-center justify-center bg-black/10 opacity-0 transition-opacity group-hover:opacity-100">
-          <span className="flex h-7 w-7 items-center justify-center rounded-full border border-white/70 bg-black/45 text-white">
-            <StrandIcon name="play" className="h-3.5 w-3.5" />
-          </span>
+      {posterUrl ? (
+        <img
+          src={posterUrl}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover object-center"
+          loading="lazy"
+        />
+      ) : (
+        <span className="absolute inset-0 flex items-center justify-center text-text-tertiary">
+          <StrandIcon name="vision" className="h-4 w-4 text-accent" />
         </span>
-        <span className="absolute bottom-1.5 left-1.5 rounded-sm bg-brand-charcoal/82 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white shadow-[0_2px_6px_rgba(0,0,0,0.25)]">
-          {range.displayLabel}
+      )}
+      {canPreview && (
+        <span className="pointer-events-none absolute left-1/2 top-1/2 z-[1] flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-accent bg-accent text-brand-charcoal opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+          <StrandIcon name="play" className="h-3.5 w-3.5" />
         </span>
+      )}
+      <span className="pointer-events-none absolute bottom-1.5 left-1.5 z-[2] rounded-sm border border-border-light bg-surface/95 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-text-primary backdrop-blur-[2px]">
+        {range.displayLabel}
       </span>
     </button>
   )
@@ -8640,7 +8881,7 @@ function ReelBuilder({
                 className={[
                   'h-8 min-w-0 rounded-sm px-2 text-center text-xs font-semibold transition-colors',
                   format === option.key
-                    ? 'bg-accent-light text-brand-charcoal ring-1 ring-accent'
+                    ? 'bg-brand-charcoal text-white'
                     : 'text-text-secondary hover:bg-surface hover:text-brand-charcoal',
                 ].join(' ')}
                 title={`${option.label} · ${option.detail}`}
@@ -8699,6 +8940,7 @@ function ReelCard({
   const [hoverPreviewing, setHoverPreviewing] = useState(false)
   const [previewLocked, setPreviewLocked] = useState(false)
   const [playerStatus, setPlayerStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const hoverPreviewTimerRef = useRef<number | null>(null)
   const paddedRange = paddedRangeForClip(clip)
   const streamInfoUrl = streamInfoForWorkspacePlayback(game, videoName, { videoReference: clip.video_reference })
   const cardPosterUrl = clipPosterUrl(game, videoName, clip, format, indexVideos)
@@ -8713,9 +8955,31 @@ function ReelCard({
   }), [paddedRange.end, paddedRange.start])
   const previewing = hoverPreviewing || previewLocked
 
+  const clearHoverPreviewTimer = useCallback(() => {
+    if (hoverPreviewTimerRef.current !== null) {
+      window.clearTimeout(hoverPreviewTimerRef.current)
+      hoverPreviewTimerRef.current = null
+    }
+  }, [])
+
+  const queueHoverPreview = useCallback(() => {
+    if (previewLocked || hoverPreviewTimerRef.current !== null) return
+    hoverPreviewTimerRef.current = window.setTimeout(() => {
+      hoverPreviewTimerRef.current = null
+      setHoverPreviewing(true)
+    }, REEL_PREVIEW_HOVER_DELAY_MS)
+  }, [previewLocked])
+
+  const stopHoverPreview = useCallback(() => {
+    clearHoverPreviewTimer()
+    setHoverPreviewing(false)
+  }, [clearHoverPreviewTimer])
+
   useEffect(() => {
     setPlayerStatus('loading')
   }, [format, segmentRange.endSeconds, segmentRange.startSeconds, streamInfoUrl])
+
+  useEffect(() => clearHoverPreviewTimer, [clearHoverPreviewTimer])
 
   return (
     <article
@@ -8724,18 +8988,18 @@ function ReelCard({
       aria-busy={playerStatus === 'loading'}
       className="group w-[224px] shrink-0 snap-start cursor-pointer overflow-hidden rounded-md border border-border-light bg-surface shadow-[0_1px_2px_rgba(31,41,33,0.035)] outline-none transition duration-200 hover:-translate-y-1 hover:border-accent hover:bg-accent-light focus:border-accent focus:bg-accent-light focus:ring-2 focus:ring-accent/25 focus-within:border-accent"
       onClick={() => {
-        setHoverPreviewing(true)
+        clearHoverPreviewTimer()
         setPreviewLocked(true)
       }}
-      onFocus={() => setHoverPreviewing(true)}
-      onPointerEnter={() => setHoverPreviewing(true)}
-      onPointerLeave={() => setHoverPreviewing(false)}
-      onMouseEnter={() => setHoverPreviewing(true)}
-      onMouseLeave={() => setHoverPreviewing(false)}
-      onFocusCapture={() => setHoverPreviewing(true)}
+      onFocus={queueHoverPreview}
+      onPointerEnter={queueHoverPreview}
+      onPointerLeave={stopHoverPreview}
+      onMouseEnter={queueHoverPreview}
+      onMouseLeave={stopHoverPreview}
+      onFocusCapture={queueHoverPreview}
       onBlurCapture={(event) => {
         const nextTarget = event.relatedTarget as Node | null
-        if (!nextTarget || !event.currentTarget.contains(nextTarget)) setHoverPreviewing(false)
+        if (!nextTarget || !event.currentTarget.contains(nextTarget)) stopHoverPreview()
       }}
     >
       <div className="relative overflow-hidden bg-card" style={{ aspectRatio: formatSpec.aspect }}>
@@ -8779,7 +9043,7 @@ function ReelCard({
             <StrandIcon name="download" className="h-4 w-4" />
           </a>
         </div>
-        {!previewing && playerStatus === 'ready' && (
+        {!previewing && (
           <div className="absolute left-1/2 top-1/2 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-surface/90 text-text-primary opacity-95 backdrop-blur-sm transition group-hover:scale-105 group-hover:border-accent group-hover:bg-accent">
             <StrandIcon name="play" className="h-4 w-4" />
           </div>

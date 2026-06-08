@@ -78,8 +78,9 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 GAMES_DIR = ROOT_DIR / "data" / "games"
 VIDEOS_DIR = ROOT_DIR / "data" / "videos"
 THUMBNAILS_DIR = ROOT_DIR / "data" / "thumbnails"
-REELS_DIR = ROOT_DIR / "data" / "reels"
+REELS_DIR = Path(os.environ.get("SPORTS_REELS_DIR", str(Path(tempfile.gettempdir()) / "sports-jockey-reels")))
 LOGGER = logging.getLogger(__name__)
+MAX_UPLOAD_VIDEO_BYTES = int(os.environ.get("SPORTS_MAX_UPLOAD_VIDEO_BYTES", str(400 * 1000 * 1000)))
 FFMPEG_PRESET = os.environ.get("SPORTS_FFMPEG_PRESET", "ultrafast")
 REEL_CRF = int(os.environ.get("SPORTS_REEL_CRF", "23"))
 ASSEMBLY_CRF = int(os.environ.get("SPORTS_ASSEMBLY_CRF", "24"))
@@ -737,38 +738,40 @@ def upload_game_video(tag, uploaded_file):
     )
     local_path = save_uploaded_game_video(uploaded_file, video_name)
 
-    uploaded_asset = upload_asset_path(local_path)
-    asset_id = response_id(uploaded_asset)
-    if not asset_id:
-        raise ApiError("TwelveLabs upload response did not include an asset id", 502)
+    try:
+        uploaded_asset = upload_asset_path(local_path)
+        asset_id = response_id(uploaded_asset)
+        if not asset_id:
+            raise ApiError("TwelveLabs upload response did not include an asset id", 502)
 
-    updated_game = update_uploaded_game_metadata(
-        tag=tag,
-        video_name=video_name,
-        asset_id=asset_id,
-        search_index_id=search_index_id,
-        upload_aliases=upload_aliases,
-    )
-    remove_local_video_file(video_name)
-    queue_uploaded_video_indexing(
-        tag=tag,
-        video_name=video_name,
-        asset_id=asset_id,
-        uploaded_asset=uploaded_asset,
-        search_index_id=search_index_id,
-        upload_aliases=upload_aliases,
-    )
-    return {
-        "status": "indexing",
-        "video_name": video_name,
-        "asset_id": asset_id,
-        "asset": uploaded_asset,
-        "knowledge_store_id": configured_knowledge_store_id(game),
-        "index_configured": True,
-        "created_search_index": bool(created_index),
-        "message": "Upload accepted. The index and knowledge-base item will be ready in a few minutes.",
-        "game": public_game(updated_game),
-    }
+        updated_game = update_uploaded_game_metadata(
+            tag=tag,
+            video_name=video_name,
+            asset_id=asset_id,
+            search_index_id=search_index_id,
+            upload_aliases=upload_aliases,
+        )
+        queue_uploaded_video_indexing(
+            tag=tag,
+            video_name=video_name,
+            asset_id=asset_id,
+            uploaded_asset=uploaded_asset,
+            search_index_id=search_index_id,
+            upload_aliases=upload_aliases,
+        )
+        return {
+            "status": "indexing",
+            "video_name": video_name,
+            "asset_id": asset_id,
+            "asset": uploaded_asset,
+            "knowledge_store_id": configured_knowledge_store_id(game),
+            "index_configured": True,
+            "created_search_index": bool(created_index),
+            "message": "Upload accepted. The index and knowledge-base item will be ready in a few minutes.",
+            "game": public_game(updated_game),
+        }
+    finally:
+        remove_local_video_file(video_name)
 
 
 def queue_uploaded_video_indexing(tag, video_name, asset_id, uploaded_asset, search_index_id, upload_aliases=None):
@@ -805,9 +808,10 @@ def finish_uploaded_video_indexing(tag, video_name, asset_id, uploaded_asset, se
             upload_aliases=upload_aliases,
         )
         cache_indexed_video_thumbnail(video_name, indexed_asset, search_index_id)
-        remove_local_video_file(video_name)
     except Exception:
         LOGGER.exception("Failed to finish upload indexing for %s (%s)", video_name, asset_id)
+    finally:
+        remove_local_video_file(video_name)
 
 
 def update_uploaded_game_metadata(
@@ -869,7 +873,16 @@ def save_uploaded_game_video(uploaded_file, video_name):
     uploaded_file.save(destination)
     if not destination.exists() or destination.stat().st_size <= 0:
         raise ApiError("uploaded file is empty", 400)
+    if destination.stat().st_size > MAX_UPLOAD_VIDEO_BYTES:
+        remove_local_video_file(video_name)
+        raise ApiError(f"video exceeds the {format_upload_size(MAX_UPLOAD_VIDEO_BYTES)} upload limit", 413)
     return destination
+
+
+def format_upload_size(size_bytes):
+    if size_bytes >= 1000 * 1000 * 1000:
+        return f"{size_bytes / (1000 * 1000 * 1000):g} GB"
+    return f"{size_bytes / (1000 * 1000):g} MB"
 
 
 def remove_local_video_file(video_name):
@@ -1632,6 +1645,9 @@ def indexed_assets_for_video_metadata(game, index_id, asset_id, video_name=None)
             add_candidate(twelvelabs_get_indexed_asset(index_id, indexed_asset_id))
         except ApiError:
             pass
+
+    if candidates:
+        return candidates
 
     for indexed_asset in list_indexed_assets(index_id):
         if indexed_asset_matches_video(game, indexed_asset, asset_id, video_name):
@@ -2951,8 +2967,24 @@ def twelvelabs_stream_info(tag, video_name, reference=None):
             status_code=404,
         )
         resolved_video_name = target["video_name"]
+        resolved_asset_id = target["asset_id"]
     except ApiError:
         resolved_video_name = requested_video
+        resolved_asset_id = None
+
+    if resolved_asset_id:
+        cache_key = _stream_info_cache_key(tag, resolved_video_name, resolved_asset_id)
+        cached = _get_cached_stream_info(cache_key)
+        if cached is not None:
+            _store_cached_stream_info(request_cache_key, cached)
+            return cached
+        asset = twelvelabs_get_asset(resolved_asset_id)
+        stream_info = _stream_info_from_asset(resolved_asset_id, asset)
+        _store_cached_stream_info(cache_key, stream_info)
+        _store_cached_stream_info(request_cache_key, stream_info)
+        if requested_video != resolved_video_name:
+            _store_cached_stream_info(_stream_info_cache_key(tag, requested_video, resolved_asset_id), stream_info)
+        return stream_info
 
     asset_id, asset = resolve_playback_asset(game, resolved_video_name, playback_reference)
     if resolved_video_name == requested_video:

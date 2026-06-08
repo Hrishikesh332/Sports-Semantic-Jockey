@@ -27,6 +27,7 @@ from app.services.games import (
 DEFAULT_ASSEMBLY_REEL_FORMAT = "16x9"
 DEFAULT_REEL_FORMAT = "9x16"
 THUMBNAIL_CACHE_SECONDS = 86400
+STREAM_INFO_CACHE_SECONDS = 600
 
 game_media_bp = Blueprint("game_media", __name__)
 
@@ -39,7 +40,11 @@ def show_game_media(tag, video_name):
 
 @game_media_bp.get("/games/<tag>/stream/<video_name>")
 def show_game_stream(tag, video_name):
-    return jsonify(twelvelabs_stream_info(tag, video_name, reference=stream_reference()))
+    response = jsonify(twelvelabs_stream_info(tag, video_name, reference=stream_reference()))
+    response.cache_control.private = True
+    response.cache_control.max_age = STREAM_INFO_CACHE_SECONDS
+    response.headers["Vary"] = "Origin"
+    return response
 
 
 @game_media_bp.get("/games/<tag>/reel/<video_name>")
