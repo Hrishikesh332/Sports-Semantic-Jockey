@@ -679,6 +679,8 @@ const WORKSPACE_METADATA_SAVED_EVENT = 'sports-jockey:workspace-metadata-saved'
 const JOCKEY_TUTORIAL_PROMPT_EVENT = 'sports-jockey:tutorial-jockey-prompt'
 const TUTORIAL_ANALYZE_CLIP_EVENT = 'sports-jockey:tutorial-analyze-clip'
 const DASHBOARD_DATA_CACHE_TTL_MS = 6 * 60 * 60 * 1000
+const API_BOOTSTRAP_TIMEOUT_MS = 8000
+const API_BOOTSTRAP_RETRY_DELAY_MS = 3000
 
 type TimedCacheEntry<T> = {
   savedAt: number
@@ -1279,12 +1281,22 @@ function App() {
 
     const bootstrapApi = async () => {
       try {
-        const health = await fetchJson<{ status?: string }>('/health')
-        if (health.status !== 'ok') {
-          throw new Error('API health check failed')
+        let body: { games: Game[] } | null = null
+
+        while (active && !body) {
+          try {
+            const health = await fetchJsonWithTimeout<{ status?: string }>('/health', undefined, API_BOOTSTRAP_TIMEOUT_MS)
+            if (health.status !== 'ok') {
+              throw new Error('Backend health check failed')
+            }
+            body = await fetchJsonWithTimeout<{ games: Game[] }>('/games', undefined, API_BOOTSTRAP_TIMEOUT_MS)
+          } catch {
+            await delay(API_BOOTSTRAP_RETRY_DELAY_MS)
+          }
         }
-        const body = await fetchJson<{ games: Game[] }>('/games')
+
         if (!active) return
+
         setGames(body.games)
         persistGamesCache(body.games)
         setSelectedTag((current) => {
@@ -1295,7 +1307,7 @@ function App() {
         setApiBootstrapStatus('ready')
       } catch (error: unknown) {
         if (!active) return
-        const message = error instanceof Error ? error.message : 'Unable to reach the Sports Jockey API'
+        const message = error instanceof Error ? error.message : 'Backend is still waking up'
         setGamesError(message)
         setApiBootstrapStatus('error')
       } finally {
@@ -1823,7 +1835,6 @@ function App() {
     return (
       <AppStartupScreen
         status={apiBootstrapStatus}
-        error={gamesError}
         onRetry={() => setBootstrapRetryToken((value) => value + 1)}
       />
     )
@@ -4356,11 +4367,9 @@ function WorkspaceVideoCarousel({
 
 function AppStartupScreen({
   status,
-  error,
   onRetry,
 }: {
   status: 'loading' | 'error'
-  error: string
   onRetry: () => void
 }) {
   return (
@@ -4375,14 +4384,14 @@ function AppStartupScreen({
           <>
             <StrandIcon name="spinner" className="mt-8 h-7 w-7 animate-spin text-accent" />
             <p className="mt-4 text-sm font-semibold text-text-secondary">Connecting to Sports Jockey...</p>
-            <p className="mt-2 text-xs font-medium text-text-tertiary">Checking API and loading workspace data</p>
+            <p className="mt-2 text-xs font-medium text-text-tertiary">Waiting for the backend and loading workspace data</p>
           </>
         ) : (
           <div className="mt-8 w-full text-left">
             <Notice
-              tone="error"
-              icon="warning"
-              text={error || 'Unable to reach the Sports Jockey API. Make sure the backend is running.'}
+              tone="neutral"
+              icon="hourglass"
+              text="The backend is still waking up. Try again in a moment."
             />
             <button
               type="button"
@@ -10409,6 +10418,30 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(message)
   }
   return body as T
+}
+
+async function fetchJsonWithTimeout<T>(url: string, init: RequestInit | undefined, timeoutMs: number): Promise<T> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetchJson<T>(url, {
+      ...init,
+      signal: init?.signal || controller.signal,
+    })
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error('Backend is still waking up')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+  }
+}
+
+function delay(durationMs: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, durationMs)
+  })
 }
 
 function prefetchTwelveLabsStream(streamInfoUrl: string) {
