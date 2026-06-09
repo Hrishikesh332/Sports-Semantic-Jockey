@@ -84,8 +84,10 @@ MAX_UPLOAD_VIDEO_BYTES = int(os.environ.get("SPORTS_MAX_UPLOAD_VIDEO_BYTES", str
 FFMPEG_PRESET = os.environ.get("SPORTS_FFMPEG_PRESET", "ultrafast")
 REEL_CRF = int(os.environ.get("SPORTS_REEL_CRF", "23"))
 ASSEMBLY_CRF = int(os.environ.get("SPORTS_ASSEMBLY_CRF", "24"))
-ASSEMBLY_SEGMENT_WORKERS = max(1, int(os.environ.get("SPORTS_ASSEMBLY_SEGMENT_WORKERS", "4")))
+ASSEMBLY_SEGMENT_WORKERS = 1
 ASSEMBLY_PARALLEL_MIN_SEGMENTS = max(2, int(os.environ.get("SPORTS_ASSEMBLY_PARALLEL_MIN_SEGMENTS", "3")))
+REEL_CACHE_MAX_BYTES = 500 * 1000 * 1000
+REEL_CACHE_MAX_AGE_SECONDS = 12 * 60 * 60
 FFMPEG_HLS_INPUT_ARGS = [
     "-protocol_whitelist",
     "file,http,https,tcp,tls,crypto",
@@ -140,6 +142,7 @@ INDEX_VIDEOS_CACHE_TTL_SECONDS = int(os.environ.get("SPORTS_INDEX_VIDEOS_CACHE_T
 INDEX_VIDEOS_CACHE = {}
 INDEX_VIDEOS_CACHE_LOCK = Lock()
 INDEX_VIDEOS_BUILD_LOCKS = defaultdict(Lock)
+REEL_CACHE_LOCK = Lock()
 PEGASUS_METADATA_CACHE_SCHEMA_VERSION = 4
 PEGASUS_METADATA_VERIFY_ATTEMPTS = int(os.environ.get("PEGASUS_METADATA_VERIFY_ATTEMPTS", "3"))
 PEGASUS_METADATA_VERIFY_INTERVAL_SECONDS = float(os.environ.get("PEGASUS_METADATA_VERIFY_INTERVAL_SECONDS", "1"))
@@ -3177,9 +3180,89 @@ def generated_assembly_reel(tag, video_name, segments, format_name, assembly_nam
         reference,
     )
     if not output_path.exists():
+        purge_reel_cache(protected_paths={output_path})
         source_input = stream_info["manifest_url"]
         render_assembly_reel_to_path(source_input, output_path, segment_ranges, reel_format)
+        enforce_generated_reel_budget(output_path)
+    else:
+        touch_cache_file(output_path)
+    purge_reel_cache(protected_paths={output_path})
     return output_path, download_name
+
+
+def enforce_generated_reel_budget(output_path):
+    if REEL_CACHE_MAX_BYTES <= 0:
+        return
+    try:
+        output_size = output_path.stat().st_size
+    except OSError:
+        return
+    if output_size <= REEL_CACHE_MAX_BYTES:
+        return
+    try:
+        output_path.unlink(missing_ok=True)
+    except OSError as exc:
+        LOGGER.warning("failed to remove oversized assembly reel %s: %s", output_path, exc)
+    raise ApiError(
+        f"assembly reel is {format_upload_size(output_size)}, above the "
+        f"{format_upload_size(REEL_CACHE_MAX_BYTES)} local storage budget",
+        413,
+    )
+
+
+def touch_cache_file(path):
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+
+
+def purge_reel_cache(protected_paths=None):
+    if REEL_CACHE_MAX_BYTES <= 0 and REEL_CACHE_MAX_AGE_SECONDS <= 0:
+        return
+    with REEL_CACHE_LOCK:
+        purge_reel_cache_unlocked(protected_paths or set())
+
+
+def purge_reel_cache_unlocked(protected_paths):
+    if not REELS_DIR.exists():
+        return
+    protected = {str(Path(path).resolve()) for path in protected_paths}
+    files = []
+    now = time.time()
+    total_size = 0
+    for path in REELS_DIR.glob("*.mp4"):
+        try:
+            resolved = str(path.resolve())
+            stat = path.stat()
+        except OSError:
+            continue
+        if resolved in protected:
+            total_size += stat.st_size
+            continue
+        if REEL_CACHE_MAX_AGE_SECONDS > 0 and now - stat.st_mtime > REEL_CACHE_MAX_AGE_SECONDS:
+            if unlink_cache_file(path):
+                continue
+        total_size += stat.st_size
+        files.append((stat.st_mtime, stat.st_size, path))
+
+    if REEL_CACHE_MAX_BYTES <= 0 or total_size <= REEL_CACHE_MAX_BYTES:
+        return
+
+    for _mtime, size, path in sorted(files, key=lambda item: item[0]):
+        if total_size <= REEL_CACHE_MAX_BYTES:
+            break
+        if unlink_cache_file(path):
+            total_size -= size
+
+
+def unlink_cache_file(path):
+    try:
+        path.unlink(missing_ok=True)
+        return True
+    except OSError as exc:
+        LOGGER.warning("failed to remove cached reel %s: %s", path, exc)
+    return False
 
 
 def generated_reel_thumbnail(tag, video_name, time, format_name):

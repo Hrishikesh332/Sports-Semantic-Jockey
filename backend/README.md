@@ -64,6 +64,12 @@ Useful optional runtime knobs include `TWELVELABS_REQUEST_TIMEOUT_SECONDS`,
 `SPORTS_UPLOAD_ASSET_POLL_ATTEMPTS`, `SPORTS_UPLOAD_ASSET_POLL_INTERVAL_SECONDS`,
 and `SPORTS_UPLOAD_BACKGROUND_WORKERS`.
 
+Assembly reels are generated from TwelveLabs HLS streams and cached locally only
+for reuse/download. The backend has a built-in 500 MB reel cache budget, removes
+old cached `.mp4` reels before and after generation, rejects a single generated
+reel if it is larger than the reel cache budget, and renders assembly segments
+with one worker to reduce temporary disk pressure on small app disks.
+
 `DEFAULT_GAME_REGISTRATIONS_JSON` can provide one game object or an array of game
 objects when ignored local `data/games/*.json` files are not present in a
 deployed environment. The frontend needs `tag`, `label`, `sport`,
