@@ -656,6 +656,8 @@ const tutorialSteps: TutorialStep[] = [
 
 const MAX_UPLOAD_VIDEO_BYTES = 400 * 1000 * 1000
 const MAX_UPLOAD_VIDEO_LABEL = '400 MB'
+const uploadSizeLimitMessage = (name?: string) =>
+  `${name ? `${name} is too large. ` : ''}Videos must be ${MAX_UPLOAD_VIDEO_LABEL} or less. Remove the oversized video before uploading.`
 const uploadRequirementLabels = [
   'Duration 4sec-4hr',
   'Resolution 360p-4k',
@@ -4904,7 +4906,7 @@ function UploadVideosModal({
     const nextFiles = files.filter((file) => isVideoFile(file) && file.size <= MAX_UPLOAD_VIDEO_BYTES)
     setUploadError(
       oversizedFiles.length
-        ? `${oversizedFiles.length === 1 ? oversizedFiles[0].name : `${oversizedFiles.length} videos`} exceed the ${MAX_UPLOAD_VIDEO_LABEL} upload limit.`
+        ? uploadSizeLimitMessage(oversizedFiles.length === 1 ? oversizedFiles[0].name : `${oversizedFiles.length} videos`)
         : '',
     )
     if (!nextFiles.length) return
@@ -4965,6 +4967,11 @@ function UploadVideosModal({
 
   const uploadSelectedVideos = useCallback(async () => {
     if (!game || !selectedFiles.length || uploading) return
+    const oversizedFile = selectedFiles.find((item) => item.file.size > MAX_UPLOAD_VIDEO_BYTES)
+    if (oversizedFile) {
+      setUploadError(uploadSizeLimitMessage(oversizedFile.file.name))
+      return
+    }
     setUploading(true)
     setUploadError('')
     const uploadedNames: string[] = []
