@@ -3141,6 +3141,9 @@ function ReelSequencePlayer({
   const assemblyDownloadUrl = canUseAssemblyVideo && assemblyPlaybackVideoName
     ? assemblyReelUrl(game, assemblyPlaybackVideoName, assemblyClips, assemblyReelName, assemblyPlaybackTarget?.reference, true)
     : ''
+  const assemblyStreamInfoUrl = canUseAssemblyVideo && assemblyPlaybackVideoName
+    ? streamInfoForWorkspacePlayback(game, assemblyPlaybackVideoName, { videoReference: assemblyPlaybackTarget?.reference })
+    : ''
   const compact = variant === 'sidecar'
   const assemblyVideoReady = assemblyStatus === 'ready'
   const usingAssemblyVideo = Boolean(assemblyVideoUrl && assemblyStatus !== 'error')
@@ -3445,6 +3448,7 @@ function ReelSequencePlayer({
                         download
                         aria-label="Download assembled highlight video"
                         title="Download assembled highlight video"
+                        onClick={(event) => startDownloadAfterHlsWarmup(event, assemblyStreamInfoUrl, assemblyDownloadUrl)}
                         className="pointer-events-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/24 bg-brand-charcoal/88 text-white shadow-[0_8px_18px_rgba(0,0,0,0.22)] backdrop-blur-sm transition hover:border-accent hover:bg-accent hover:text-brand-charcoal focus:outline-none focus:ring-2 focus:ring-accent/40"
                       >
                         <StrandIcon name="download" className="h-3.5 w-3.5" />
@@ -3527,6 +3531,7 @@ function ReelSequencePlayer({
                   <button
                     key={`${segment.id}-assembly-strip`}
                     type="button"
+                    data-preserve-hover="true"
                     onClick={() => selectAssemblySegment(index)}
                     className={[
                       'absolute top-1/2 h-5 -translate-y-1/2 rounded-sm border transition-transform hover:scale-y-125',
@@ -3566,6 +3571,7 @@ function ReelSequencePlayer({
                   clipButtonRefs.current[clip.id] = node
                 }}
                 type="button"
+                data-preserve-hover="true"
                 onPointerDown={(event) => {
                   event.preventDefault()
                   pointerSelectHandledRef.current = true
@@ -4031,6 +4037,7 @@ function JockeyClipShowcase({
                   className="absolute right-2 top-2 z-10 inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/28 bg-brand-charcoal/78 text-white shadow-[0_8px_18px_rgba(0,0,0,0.2)] backdrop-blur-sm hover:border-accent hover:bg-accent hover:text-brand-charcoal"
                   aria-label={`Download ${clip.start_time} reel`}
                   title="Download reel"
+                  onClick={(event) => startDownloadAfterHlsWarmup(event, streamInfoUrl, downloadUrl)}
                 >
                   <StrandIcon name="download" className="h-4 w-4" />
                 </a>
@@ -8311,7 +8318,7 @@ function EntityMomentThumbnailButton({
   return (
     <button
       type="button"
-      data-media-thumbnail-button="true"
+      data-preserve-hover="true"
       disabled={!canPreview}
       onClick={onOpen}
       className={[
@@ -8996,6 +9003,7 @@ function ReelCard({
       className="group w-[224px] shrink-0 snap-start cursor-pointer overflow-hidden rounded-md border border-border-light bg-surface shadow-[0_1px_2px_rgba(31,41,33,0.035)] outline-none transition duration-200 hover:-translate-y-1 hover:border-accent hover:bg-accent-light focus:border-accent focus:bg-accent-light focus:ring-2 focus:ring-accent/25 focus-within:border-accent"
       onClick={() => {
         clearHoverPreviewTimer()
+        prefetchTwelveLabsStream(streamInfoUrl)
         setPreviewLocked(true)
       }}
       onFocus={queueHoverPreview}
@@ -9044,7 +9052,7 @@ function ReelCard({
             download
             aria-label={`Download ${categoryLabel} reel clip ${index + 1}`}
             title="Download reel"
-            onClick={(event) => event.stopPropagation()}
+            onClick={(event) => startDownloadAfterHlsWarmup(event, streamInfoUrl, downloadUrl)}
             className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/24 bg-brand-charcoal/92 text-white shadow-[0_8px_18px_rgba(0,0,0,0.2)] backdrop-blur-sm transition hover:border-accent hover:bg-accent hover:text-brand-charcoal focus:outline-none focus:ring-2 focus:ring-accent/40"
           >
             <StrandIcon name="download" className="h-4 w-4" />
@@ -10285,7 +10293,9 @@ function preconnectManifestOrigin(manifestUrl: string) {
 }
 
 function warmHlsManifest(manifestUrl: string) {
-  if (!manifestUrl || manifestWarmupRequests.has(manifestUrl)) return
+  if (!manifestUrl) return Promise.resolve()
+  const existingRequest = manifestWarmupRequests.get(manifestUrl)
+  if (existingRequest) return existingRequest
   const request = fetch(manifestUrl, {
     cache: 'force-cache',
     mode: 'cors',
@@ -10296,6 +10306,45 @@ function warmHlsManifest(manifestUrl: string) {
       manifestWarmupRequests.delete(manifestUrl)
     })
   manifestWarmupRequests.set(manifestUrl, request)
+  return request
+}
+
+function startDownloadAfterHlsWarmup(
+  event: MouseEvent<HTMLAnchorElement>,
+  streamInfoUrl: string | null | undefined,
+  downloadUrl: string,
+) {
+  event.preventDefault()
+  event.stopPropagation()
+
+  void warmTwelveLabsStreamForExport(streamInfoUrl)
+    .catch(() => undefined)
+    .finally(() => {
+      triggerBrowserDownload(downloadUrl)
+    })
+}
+
+async function warmTwelveLabsStreamForExport(streamInfoUrl: string | null | undefined) {
+  if (!streamInfoUrl) return
+  const stream = await fetchTwelveLabsStreamInfo(streamInfoUrl)
+  const manifestUrl = secureHttpsUrl(stream.manifest_url)
+  if (!manifestUrl) return
+  preconnectManifestOrigin(manifestUrl)
+  await warmHlsManifest(manifestUrl)
+}
+
+function triggerBrowserDownload(downloadUrl: string) {
+  if (typeof document === 'undefined') {
+    window.location.href = downloadUrl
+    return
+  }
+  const anchor = document.createElement('a')
+  anchor.href = downloadUrl
+  anchor.download = ''
+  anchor.rel = 'noopener'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {

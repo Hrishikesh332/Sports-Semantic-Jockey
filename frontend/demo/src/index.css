@@ -1587,7 +1587,7 @@ body {
   }
 }
 
-button:not(:disabled):not([data-semantic-layer-option='true']):not([data-media-thumbnail-button='true']):hover,
+button:not(:disabled):not([data-semantic-layer-option='true']):not([data-preserve-hover='true']):hover,
 a.overview-nav-button:hover,
 a[download]:hover {
   border-color: #000 !important;
@@ -1595,26 +1595,26 @@ a[download]:hover {
   color: #fff !important;
 }
 
-button:not(:disabled):not([data-semantic-layer-option='true']):not([data-media-thumbnail-button='true']):hover :where(.strand-icon, span),
+button:not(:disabled):not([data-semantic-layer-option='true']):not([data-preserve-hover='true']):hover :where(.strand-icon, span),
 a.overview-nav-button:hover :where(.strand-icon, span),
 a[download]:hover :where(.strand-icon, span) {
   color: inherit !important;
 }
 
-button[aria-current='page']:not([data-semantic-layer-option='true']):not([data-media-thumbnail-button='true']),
-button[aria-current='true']:not([data-semantic-layer-option='true']):not([data-media-thumbnail-button='true']),
-button[aria-pressed='true']:not([data-semantic-layer-option='true']):not([data-media-thumbnail-button='true']),
-button[data-state='active']:not([data-semantic-layer-option='true']):not([data-media-thumbnail-button='true']),
+button[aria-current='page']:not([data-semantic-layer-option='true']):not([data-preserve-hover='true']),
+button[aria-current='true']:not([data-semantic-layer-option='true']):not([data-preserve-hover='true']),
+button[aria-pressed='true']:not([data-semantic-layer-option='true']):not([data-preserve-hover='true']),
+button[data-state='active']:not([data-semantic-layer-option='true']):not([data-preserve-hover='true']),
 a.overview-nav-button[aria-current='page'] {
   border-color: #000 !important;
   background-color: #000 !important;
   color: #fff !important;
 }
 
-button[aria-current='page']:not([data-semantic-layer-option='true']):not([data-media-thumbnail-button='true']) :where(.strand-icon, span),
-button[aria-current='true']:not([data-semantic-layer-option='true']):not([data-media-thumbnail-button='true']) :where(.strand-icon, span),
-button[aria-pressed='true']:not([data-semantic-layer-option='true']):not([data-media-thumbnail-button='true']) :where(.strand-icon, span),
-button[data-state='active']:not([data-semantic-layer-option='true']):not([data-media-thumbnail-button='true']) :where(.strand-icon, span),
+button[aria-current='page']:not([data-semantic-layer-option='true']):not([data-preserve-hover='true']) :where(.strand-icon, span),
+button[aria-current='true']:not([data-semantic-layer-option='true']):not([data-preserve-hover='true']) :where(.strand-icon, span),
+button[aria-pressed='true']:not([data-semantic-layer-option='true']):not([data-preserve-hover='true']) :where(.strand-icon, span),
+button[data-state='active']:not([data-semantic-layer-option='true']):not([data-preserve-hover='true']) :where(.strand-icon, span),
 a.overview-nav-button[aria-current='page'] :where(.strand-icon, span) {
   color: inherit !important;
 }
