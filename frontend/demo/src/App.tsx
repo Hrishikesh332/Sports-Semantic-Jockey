@@ -904,7 +904,9 @@ function App() {
   const [gamesError, setGamesError] = useState('')
   const [reelsError, setReelsError] = useState('')
   const [indexVideosError, setIndexVideosError] = useState('')
-  const [loadingGames, setLoadingGames] = useState(() => loadCachedGames().length === 0)
+  const [apiBootstrapStatus, setApiBootstrapStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [bootstrapRetryToken, setBootstrapRetryToken] = useState(0)
+  const [loadingGames, setLoadingGames] = useState(true)
   const [loadingTag, setLoadingTag] = useState('')
   const [loadingIndexVideosTag, setLoadingIndexVideosTag] = useState('')
   const [selectedSourceVideoName, setSelectedSourceVideoName] = useState<string | null>(null)
@@ -1271,8 +1273,17 @@ function App() {
 
   useEffect(() => {
     let active = true
-    fetchJson<{ games: Game[] }>('/games')
-      .then((body) => {
+    setApiBootstrapStatus('loading')
+    setGamesError('')
+    setLoadingGames(true)
+
+    const bootstrapApi = async () => {
+      try {
+        const health = await fetchJson<{ status?: string }>('/health')
+        if (health.status !== 'ok') {
+          throw new Error('API health check failed')
+        }
+        const body = await fetchJson<{ games: Game[] }>('/games')
         if (!active) return
         setGames(body.games)
         persistGamesCache(body.games)
@@ -1281,17 +1292,22 @@ function App() {
           persistSelectedTagCache(nextTag)
           return nextTag
         })
-      })
-      .catch((error: Error) => {
-        if (active) setGamesError(error.message)
-      })
-      .finally(() => {
+        setApiBootstrapStatus('ready')
+      } catch (error: unknown) {
+        if (!active) return
+        const message = error instanceof Error ? error.message : 'Unable to reach the Sports Jockey API'
+        setGamesError(message)
+        setApiBootstrapStatus('error')
+      } finally {
         if (active) setLoadingGames(false)
-      })
+      }
+    }
+
+    void bootstrapApi()
     return () => {
       active = false
     }
-  }, [])
+  }, [bootstrapRetryToken])
 
   useEffect(() => {
     if (!selectedTag) return
@@ -1803,6 +1819,16 @@ function App() {
     '--sj-explainability-top': `${headerHeight + laneBarHeight + 16}px`,
   } as CSSProperties
 
+  if (apiBootstrapStatus !== 'ready') {
+    return (
+      <AppStartupScreen
+        status={apiBootstrapStatus}
+        error={gamesError}
+        onRetry={() => setBootstrapRetryToken((value) => value + 1)}
+      />
+    )
+  }
+
   return (
     <main className="min-h-screen bg-background text-text-primary" style={stickyOffsetStyle}>
       <div className="flex min-h-screen flex-col">
@@ -1822,9 +1848,6 @@ function App() {
               />
               <div className="app-header-divider bg-border" aria-hidden="true" />
               <h1 className="app-header-title text-text-primary">Sports Jockey Intelligence</h1>
-              <div className="app-header-status">
-                <LiveApiBadge loading={loadingGames} error={Boolean(gamesError)} />
-              </div>
             </div>
 
             <nav className="app-header-nav" aria-label="Main navigation">
@@ -4331,23 +4354,47 @@ function WorkspaceVideoCarousel({
   )
 }
 
-function LiveApiBadge({ loading, error }: { loading: boolean; error: boolean }) {
-  if (!loading && !error) return null
-  const label = error ? 'API issue' : 'Connecting API'
+function AppStartupScreen({
+  status,
+  error,
+  onRetry,
+}: {
+  status: 'loading' | 'error'
+  error: string
+  onRetry: () => void
+}) {
   return (
-    <div
-      className={[
-        'app-header-api-badge inline-flex items-center gap-2 rounded-md border font-semibold',
-        error
-          ? 'border-error bg-error-light text-error-dark'
-          : loading
-            ? 'border-border bg-card text-text-secondary'
-            : 'border-accent bg-accent-light text-brand-charcoal',
-      ].join(' ')}
-    >
-      <span className={['h-2 w-2 rounded-full', error ? 'bg-error' : loading ? 'bg-text-tertiary' : 'bg-accent'].join(' ')} />
-      <span className="app-header-api-badge-label">{label}</span>
-    </div>
+    <main className="app-startup-screen min-h-screen bg-background text-text-primary">
+      <div className="app-startup-screen-inner mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center px-6 py-12 text-center">
+        <div
+          className="app-startup-screen-logo logo-svg text-brand-charcoal"
+          aria-hidden="true"
+          dangerouslySetInnerHTML={{ __html: logoFull }}
+        />
+        {status === 'loading' ? (
+          <>
+            <StrandIcon name="spinner" className="mt-8 h-7 w-7 animate-spin text-accent" />
+            <p className="mt-4 text-sm font-semibold text-text-secondary">Connecting to Sports Jockey...</p>
+            <p className="mt-2 text-xs font-medium text-text-tertiary">Checking API and loading workspace data</p>
+          </>
+        ) : (
+          <div className="mt-8 w-full text-left">
+            <Notice
+              tone="error"
+              icon="warning"
+              text={error || 'Unable to reach the Sports Jockey API. Make sure the backend is running.'}
+            />
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-md border border-border bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:border-accent hover:bg-accent-light hover:text-brand-charcoal"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+      </div>
+    </main>
   )
 }
 
