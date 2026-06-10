@@ -4595,11 +4595,7 @@ function OverviewPage({
               title="See it in action"
               lead="One match, one workflow. Search in Discover, review and explain on the Dashboard, then build reels with Jockey Assistant."
             />
-            <OverviewReservedSlot
-              label="Product demo"
-              detail="Screen recording or interactive preview of the full producer path on live match footage."
-              minHeightClass="min-h-[240px] sm:min-h-[300px]"
-            />
+            <OverviewDemoVideo videoId={OVERVIEW_DEMO_VIDEO_ID} />
           </section>
 
           <div className="overview-section">
@@ -4626,6 +4622,8 @@ function OverviewHeroVisual() {
     </div>
   )
 }
+
+const OVERVIEW_DEMO_VIDEO_ID = '_rXt7w9Djqg'
 
 const overviewExternalLinks = [
   {
@@ -4879,6 +4877,22 @@ function OverviewReservedSlot({
       <StrandIcon name="canvas" className="h-7 w-7 text-text-tertiary" />
       <p className="mt-4 text-sm font-semibold text-text-primary">{label}</p>
       <p className="mt-1.5 max-w-md text-sm leading-6 text-text-secondary">{detail}</p>
+    </div>
+  )
+}
+
+function OverviewDemoVideo({ videoId }: { videoId: string }) {
+  return (
+    <div className="overview-demo-video">
+      <div className="aspect-video overflow-hidden rounded-2xl border border-border bg-brand-charcoal shadow-[0_10px_28px_rgba(29,28,27,0.045)]">
+        <iframe
+          src={`https://www.youtube.com/embed/${videoId}`}
+          title="Sports Jockey product demo"
+          className="h-full w-full"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowFullScreen
+        />
+      </div>
     </div>
   )
 }
@@ -10130,7 +10144,7 @@ function discoverItemFromSearchResult(
   const startTime = result.start_time || result.timestamp
   const endTime = result.end_time
   const title = result.title || result.description
-  const subtitle = `${videoName}${startTime ? ` · ${startTime}${endTime ? `-${endTime}` : ''}` : ''}`
+  const subtitle = startTime ? `${startTime}${endTime ? `-${endTime}` : ''}` : ''
   const searchMoment: SearchMoment = {
     videoName,
     videoReference: result.video_reference,

@@ -1069,6 +1069,12 @@ body {
   background: var(--strand-card);
 }
 
+.overview-page .overview-demo-video {
+  width: 100%;
+  max-width: 960px;
+  margin-inline: auto;
+}
+
 .overview-page .overview-closing-grid {
   display: grid;
   gap: 1.5rem;
